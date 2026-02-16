@@ -2,6 +2,7 @@ import { Box, Button } from "@mui/material";
 import SelectActionCard from "../Components/Shared/SelectActionCard";
 import WeeklyScheduleCard from "../Components/Shared/WeeklyScheduleCard";
 import { useNavigate } from "react-router";
+import { getToken } from "../auth/tokens";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -9,6 +10,15 @@ export default function Dashboard() {
   const handleRedirect = () => {
     navigate("/tournaments/new");
   };
+
+  function parseJwt(token: string) {
+    return JSON.parse(atob(token.split(".")[1]));
+  }
+  const token = getToken();
+  const user = token ? parseJwt(token) : null;
+
+  console.log("Logged user:", user);
+
   return (
     <Box
       component="main"

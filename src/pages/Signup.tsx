@@ -1,4 +1,3 @@
-// src/pages/Signup.tsx
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -17,27 +16,36 @@ import {
   Stack,
   TextField,
   Typography,
+  Alert,
 } from "@mui/material";
+import { setToken } from "../auth/tokens";
 
 type AccountType = "participant" | "coach" | "organization";
 
 type SignupForm = {
-  fullName: string;
+  name: string;
   email: string;
   phone: string;
   accountType: AccountType;
-  organizationName: string; // only required if accountType === "organization"
+  organizationName: string;
   password: string;
   confirmPassword: string;
 };
 
 type FormErrors = Partial<Record<keyof SignupForm, string>>;
 
+// --- Backend mapping (minimal / no backend changes)
+const ACCOUNT_TYPE_TO_ROLE_ID: Record<AccountType, number> = {
+  participant: 1, // Player
+  coach: 3, // Coach
+  organization: 4, // School (or change to 5 if you want Club)
+};
+
 export default function Signup() {
   const navigate = useNavigate();
 
   const [form, setForm] = React.useState<SignupForm>({
-    fullName: "",
+    name: "",
     email: "",
     phone: "",
     accountType: "participant",
@@ -48,6 +56,8 @@ export default function Signup() {
 
   const [errors, setErrors] = React.useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [apiError, setApiError] = React.useState<string | null>(null);
+  const [apiSuccess, setApiSuccess] = React.useState<string | null>(null);
 
   const showOrgName = form.accountType === "organization";
 
@@ -88,15 +98,13 @@ export default function Signup() {
   const validate = (data: SignupForm): FormErrors => {
     const next: FormErrors = {};
 
-    if (!data.fullName.trim()) next.fullName = "Full name is required.";
+    if (!data.name.trim()) next.name = "First Name is required.";
 
     if (!data.email.trim()) next.email = "Email is required.";
     else if (!/^\S+@\S+\.\S+$/.test(data.email))
       next.email = "Please enter a valid email.";
 
     if (!data.phone.trim()) next.phone = "Phone is required.";
-    // (Optional) add basic phone rule for MVP:
-    // else if (data.phone.replace(/\D/g, "").length < 8) next.phone = "Phone number looks too short.";
 
     if (data.accountType === "organization" && !data.organizationName.trim()) {
       next.organizationName = "School / Club name is required.";
@@ -117,6 +125,9 @@ export default function Signup() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    setApiError(null);
+    setApiSuccess(null);
+
     const nextErrors = validate(form);
     setErrors(nextErrors);
 
@@ -124,35 +135,50 @@ export default function Signup() {
 
     setIsSubmitting(true);
     try {
-      // Build payload for API
+      // Build payload for YOUR backend (/login/signup)
       const payload = {
-        fullName: form.fullName.trim(),
         email: form.email.trim().toLowerCase(),
+        fullName: form.name.trim(), // backend expects fullName
         phone: form.phone.trim(),
-        accountType: form.accountType,
-        organizationName:
-          form.accountType === "organization"
-            ? form.organizationName.trim()
-            : null,
+        roleId: ACCOUNT_TYPE_TO_ROLE_ID[form.accountType],
         password: form.password,
+        billingInfo: form.accountType === "organization", // optional - adjust if needed
       };
 
-      console.log("Signup payload:", payload);
+      const res = await fetch(`/login/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-      // TODO: replace with your API endpoint
-      // const res = await fetch("/api/signup", {
-      //   method: "POST",
-      //   headers: { "Content-Type": "application/json" },
-      //   body: JSON.stringify(payload),
-      // });
-      // if (!res.ok) throw new Error("Signup failed");
+      const data = await res.json().catch(() => null);
+      console.log("Response status:", res.status);
+      console.log("Response data:", data);
+      if (!res.ok) {
+        // backend returns: { message: ["Role not found"], ... }
+        const msg =
+          data?.message?.[0] ||
+          data?.error ||
+          data?.detail ||
+          "Signup failed. Please try again.";
+        setApiError(msg);
+        return;
+      }
 
-      // MVP: navigate after "success"
+      // backend returns: { token: "..." }
+      if (!data?.token) {
+        setApiError("Signup succeeded but no token was returned.");
+        return;
+      }
+
+      setToken(data.token);
+      setApiSuccess("Account created! Token saved.");
+
+      // Navigate after success
       navigate("/dashboard");
     } catch (err) {
       console.error(err);
-      // Example: show a generic error
-      // setErrors((prev) => ({ ...prev, email: "Signup failed. Please try again." }));
+      setApiError("Signup failed. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -178,6 +204,18 @@ export default function Signup() {
               </Typography>
             </Box>
 
+            {/* API Alerts */}
+            {apiError ? (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                {apiError}
+              </Alert>
+            ) : null}
+            {apiSuccess ? (
+              <Alert severity="success" sx={{ mb: 2 }}>
+                {apiSuccess}
+              </Alert>
+            ) : null}
+
             <Box
               component="form"
               noValidate
@@ -186,11 +224,11 @@ export default function Signup() {
             >
               <TextField
                 required
-                label="Full name"
-                value={form.fullName}
-                onChange={setField("fullName")}
-                error={!!errors.fullName}
-                helperText={errors.fullName || " "}
+                label="First Name"
+                value={form.name}
+                onChange={setField("name")}
+                error={!!errors.name}
+                helperText={errors.name || " "}
                 autoComplete="name"
               />
 
