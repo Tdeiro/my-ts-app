@@ -607,7 +607,7 @@ export default function LandingPage() {
           }}
         >
           <Typography variant="body2">
-            © {new Date().getFullYear()} MatchFlow. All rights reserved.
+            © {new Date().getFullYear()} Onora. All rights reserved.
           </Typography>
 
           <Stack direction="row" spacing={3}>

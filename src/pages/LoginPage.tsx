@@ -81,21 +81,7 @@ export default function LoginPage() {
                 Sign In
               </Button>
 
-              <Divider sx={{ my: 2 }}>or</Divider>
-
-              <Button
-                variant="outlined"
-                fullWidth
-                startIcon={
-                  <img
-                    src="/google.svg"
-                    alt="Google"
-                    style={{ width: 18, height: 18 }}
-                  />
-                }
-              >
-                Sign in with Google
-              </Button>
+              <Divider sx={{ my: 2 }}></Divider>
             </Box>
 
             {/* Footer */}
