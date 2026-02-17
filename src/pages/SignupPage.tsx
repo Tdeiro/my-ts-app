@@ -17,31 +17,23 @@ import {
   TextField,
   Typography,
   Alert,
+  InputAdornment,
+  IconButton,
 } from "@mui/material";
 import { setToken } from "../auth/tokens";
+import Visibility from "@mui/icons-material/Visibility";
+import VisibilityOff from "@mui/icons-material/VisibilityOff";
+import type { AccountType, FormErrors, SignupForm } from "../Utils/FormTypes";
+import { validateInput } from "../Utils/FormValidationUtil";
+import Logo from "../assets/onora.png";
 
-type AccountType = "participant" | "coach" | "organization";
-
-type SignupForm = {
-  name: string;
-  email: string;
-  phone: string;
-  accountType: AccountType;
-  organizationName: string;
-  password: string;
-  confirmPassword: string;
-};
-
-type FormErrors = Partial<Record<keyof SignupForm, string>>;
-
-// --- Backend mapping (minimal / no backend changes)
 const ACCOUNT_TYPE_TO_ROLE_ID: Record<AccountType, number> = {
-  participant: 1, // Player
-  coach: 3, // Coach
-  organization: 4, // School (or change to 5 if you want Club)
+  participant: 1,
+  coach: 3,
+  organization: 4,
 };
 
-export default function Signup() {
+export default function SignupPage() {
   const navigate = useNavigate();
 
   const [form, setForm] = React.useState<SignupForm>({
@@ -58,6 +50,8 @@ export default function Signup() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [apiError, setApiError] = React.useState<string | null>(null);
   const [apiSuccess, setApiSuccess] = React.useState<string | null>(null);
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
 
   const showOrgName = form.accountType === "organization";
 
@@ -67,7 +61,6 @@ export default function Signup() {
 
       setForm((prev) => ({ ...prev, [field]: value }));
 
-      // Clear error as user fixes the field
       setErrors((prev) => {
         if (!prev[field]) return prev;
         const next = { ...prev };
@@ -80,11 +73,10 @@ export default function Signup() {
     setForm((prev) => ({
       ...prev,
       accountType: value,
-      // Reset org name if switching away
+
       organizationName: value === "organization" ? prev.organizationName : "",
     }));
 
-    // Clear org error if switching away
     if (value !== "organization") {
       setErrors((prev) => {
         if (!prev.organizationName) return prev;
@@ -95,47 +87,21 @@ export default function Signup() {
     }
   };
 
-  const validate = (data: SignupForm): FormErrors => {
-    const next: FormErrors = {};
-
-    if (!data.name.trim()) next.name = "First Name is required.";
-
-    if (!data.email.trim()) next.email = "Email is required.";
-    else if (!/^\S+@\S+\.\S+$/.test(data.email))
-      next.email = "Please enter a valid email.";
-
-    if (!data.phone.trim()) next.phone = "Phone is required.";
-
-    if (data.accountType === "organization" && !data.organizationName.trim()) {
-      next.organizationName = "School / Club name is required.";
-    }
-
-    if (!data.password) next.password = "Password is required.";
-    else if (data.password.length < 8)
-      next.password = "Password must be at least 8 characters.";
-
-    if (!data.confirmPassword)
-      next.confirmPassword = "Please confirm your password.";
-    else if (data.confirmPassword !== data.password)
-      next.confirmPassword = "Passwords do not match.";
-
-    return next;
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     setApiError(null);
     setApiSuccess(null);
 
-    const nextErrors = validate(form);
+    const nextErrors = validateInput(form);
     setErrors(nextErrors);
 
     if (Object.keys(nextErrors).length > 0) return;
 
     setIsSubmitting(true);
+    // const normaliseName = `${form.name.trim()} ${form.lastName.trim()}`;
+
     try {
-      // Build payload for YOUR backend (/login/signup)
       const payload = {
         email: form.email.trim().toLowerCase(),
         fullName: form.name.trim(), // backend expects fullName
@@ -155,7 +121,6 @@ export default function Signup() {
       console.log("Response status:", res.status);
       console.log("Response data:", data);
       if (!res.ok) {
-        // backend returns: { message: ["Role not found"], ... }
         const msg =
           data?.message?.[0] ||
           data?.error ||
@@ -198,9 +163,22 @@ export default function Signup() {
         <Card sx={{ borderRadius: 3 }}>
           <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
             <Box sx={{ textAlign: "center", mb: 3 }}>
-              <Typography variant="h1">MatchFlow</Typography>
+              <Box
+                component="img"
+                src={Logo}
+                alt="Onora logo"
+                sx={{
+                  height: 60,
+                  display: "block",
+                  mx: "auto",
+                  mb: 1,
+                }}
+              />
+              <Typography variant="h5" fontWeight={600}>
+                Create an account
+              </Typography>
               <Typography color="text.secondary">
-                Create an account to continue.
+                Get started with Onora
               </Typography>
             </Box>
 
@@ -231,7 +209,15 @@ export default function Signup() {
                 helperText={errors.name || " "}
                 autoComplete="name"
               />
-
+              {/* <TextField
+                required
+                label="Last Name"
+                value={form.lastName}
+                onChange={setField("lastName")}
+                error={!!errors.lastName}
+                helperText={errors.lastName || " "}
+                autoComplete="lastName"
+              /> */}
               <TextField
                 required
                 label="Email address"
@@ -300,23 +286,51 @@ export default function Signup() {
               <TextField
                 required
                 label="Password"
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={form.password}
                 onChange={setField("password")}
                 error={!!errors.password}
                 helperText={errors.password || " "}
                 autoComplete="new-password"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        edge="end"
+                      >
+                        {showPassword ? <VisibilityOff /> : <Visibility />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
               />
 
               <TextField
                 required
                 label="Confirm password"
-                type="password"
+                type={showConfirmPassword ? "text" : "password"}
                 value={form.confirmPassword}
                 onChange={setField("confirmPassword")}
                 error={!!errors.confirmPassword}
                 helperText={errors.confirmPassword || " "}
                 autoComplete="new-password"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        onClick={() => setShowConfirmPassword((prev) => !prev)}
+                        edge="end"
+                      >
+                        {showConfirmPassword ? (
+                          <VisibilityOff />
+                        ) : (
+                          <Visibility />
+                        )}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
               />
 
               <Button
@@ -335,7 +349,7 @@ export default function Signup() {
             {/* Footer */}
             <Stack spacing={1} sx={{ mt: 3, textAlign: "center" }}>
               <Typography variant="body2" color="text.secondary">
-                Already have an account?{" "}
+                Already have an account?{""}
                 <Button
                   variant="text"
                   size="small"

@@ -139,16 +139,31 @@ const DAYS: ClassItem["day"][] = [
   "Sunday",
 ];
 
-function levelDotColor(level: ClassLevel): string {
-  if (level === "Beginner") return "#22C55E";
-  if (level === "Intermediate") return "#F59E0B";
-  return "#3B82F6";
+// Keep level identity, but align to Onora vibe (purple first-class, orange subtle)
+function levelDotSx(level: ClassLevel) {
+  switch (level) {
+    case "Beginner":
+      return { bgcolor: "rgba(255, 107, 92, 0.95)" }; // subtle Onora orange
+    case "Intermediate":
+      return { bgcolor: "rgba(139, 92, 246, 0.75)" }; // purple
+    case "Advanced":
+      return { bgcolor: "rgba(139, 92, 246, 1)" }; // stronger purple
+    default:
+      return { bgcolor: "primary.main" };
+  }
 }
 
 function pct(n: number, d: number): number {
   if (d <= 0) return 0;
   const v = (n / d) * 100;
   return Math.max(0, Math.min(100, v));
+}
+
+function formatUtilLabel(students: number, capacity: number) {
+  if (capacity <= 0) return "—";
+  if (students >= capacity) return "Full";
+  if (students === 0) return "Empty";
+  return `${students}/${capacity}`;
 }
 
 export default function ClassesPage() {
@@ -176,8 +191,6 @@ export default function ClassesPage() {
     for (const d of DAYS) map.set(d, []);
     for (const item of filtered) map.get(item.day)?.push(item);
 
-    // Sort by time-ish (string sort works for AM/PM poorly; for MVP ok).
-    // If you want accurate sorting, store 24h time and sort by that.
     for (const d of DAYS) {
       map.get(d)!.sort((a, b) => `${a.start}`.localeCompare(`${b.start}`));
     }
@@ -199,51 +212,49 @@ export default function ClassesPage() {
       }}
     >
       <Box sx={{ width: "100%", maxWidth: 1100 }}>
-        {/* Header row */}
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: { xs: "flex-start", sm: "center" },
-            justifyContent: "space-between",
-            gap: 2,
-            mb: 2,
-            flexWrap: "wrap",
-          }}
-        >
-          <Box>
-            <Typography
-              variant="h2"
-              sx={{ fontSize: { xs: "1.4rem", sm: "1.6rem" } }}
-            >
-              Classes
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Manage weekly training sessions.
-            </Typography>
-          </Box>
-
-          <Button
-            variant="contained"
-            size="large"
-            startIcon={<AddIcon />}
-            onClick={() => {
-              // Hook into your router later: navigate("/classes/new")
-              alert("TODO: Navigate to Add Class");
-            }}
-            sx={{ minWidth: 160 }}
-          >
-            Add Class
-          </Button>
-        </Box>
-
-        {/* Filters */}
+        {/* Header (soft gradient wash like Tournaments page) */}
         <Paper
           sx={{
-            p: 2,
-            mb: 3,
-            borderRadius: 3,
+            mb: 2,
+            p: { xs: 2, sm: 2.5 },
+            borderRadius: 2,
+            background:
+              "linear-gradient(180deg, rgba(139,92,246,0.10) 0%, rgba(255,255,255,0) 70%)",
           }}
         >
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
+            alignItems={{ xs: "stretch", sm: "center" }}
+            justifyContent="space-between"
+          >
+            <Box>
+              <Typography variant="h2" sx={{ mb: 0.5, fontWeight: 900 }}>
+                Classes
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Manage weekly training sessions.
+              </Typography>
+            </Box>
+
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<AddIcon />}
+              onClick={() => alert("TODO: Navigate to Add Class")}
+              sx={{
+                alignSelf: { xs: "flex-start", sm: "auto" },
+                borderRadius: 999,
+                px: 2,
+              }}
+            >
+              Add Class
+            </Button>
+          </Stack>
+        </Paper>
+
+        {/* Filters */}
+        <CardShell>
           <Stack
             direction={{ xs: "column", md: "row" }}
             spacing={2}
@@ -259,9 +270,14 @@ export default function ClassesPage() {
                 startAdornment={
                   <CalendarMonthIcon
                     fontSize="small"
-                    style={{ marginRight: 8 }}
+                    style={{ marginRight: 8, opacity: 0.8 }}
                   />
                 }
+                sx={{
+                  "&:focus-within": {
+                    boxShadow: "0 0 0 3px rgba(255,107,92,0.10)", // subtle orange
+                  },
+                }}
               >
                 <MenuItem value={DEMO_WEEK_LABEL}>{DEMO_WEEK_LABEL}</MenuItem>
                 <MenuItem value={"Apr 29 – May 5"}>Apr 29 – May 5</MenuItem>
@@ -279,7 +295,7 @@ export default function ClassesPage() {
                 startAdornment={
                   <PersonOutlineIcon
                     fontSize="small"
-                    style={{ marginRight: 8 }}
+                    style={{ marginRight: 8, opacity: 0.8 }}
                   />
                 }
               >
@@ -301,7 +317,7 @@ export default function ClassesPage() {
                 startAdornment={
                   <SignalCellularAltIcon
                     fontSize="small"
-                    style={{ marginRight: 8 }}
+                    style={{ marginRight: 8, opacity: 0.8 }}
                   />
                 }
               >
@@ -325,12 +341,15 @@ export default function ClassesPage() {
               sx={{ userSelect: "none" }}
             />
           </Stack>
-        </Paper>
+        </CardShell>
 
         {/* Content */}
         <Paper sx={{ p: { xs: 2, sm: 3 }, borderRadius: 3 }}>
           <Box sx={{ mb: 1 }}>
-            <Typography variant="h3" sx={{ fontSize: "1.1rem" }}>
+            <Typography
+              variant="h3"
+              sx={{ fontSize: "1.1rem", fontWeight: 900 }}
+            >
               Week Schedule
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -342,7 +361,10 @@ export default function ClassesPage() {
 
           {emptyState ? (
             <Box sx={{ py: 6, textAlign: "center" }}>
-              <Typography variant="h3" sx={{ fontSize: "1.1rem", mb: 1 }}>
+              <Typography
+                variant="h3"
+                sx={{ fontSize: "1.1rem", mb: 1, fontWeight: 900 }}
+              >
                 No classes match your filters
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -354,6 +376,16 @@ export default function ClassesPage() {
                   setCoach("All");
                   setLevel("All");
                   setActiveOnly(true);
+                }}
+                sx={{
+                  borderRadius: 999,
+                  borderColor: "rgba(139,92,246,0.35)",
+                  color: "primary.main",
+                  "&:hover": {
+                    borderColor: "primary.main",
+                    backgroundColor: "rgba(139,92,246,0.08)",
+                    boxShadow: "0 0 0 3px rgba(255,107,92,0.10)",
+                  },
                 }}
               >
                 Reset filters
@@ -369,16 +401,12 @@ export default function ClassesPage() {
                   <Box key={day}>
                     <Typography
                       variant="subtitle1"
-                      sx={{
-                        fontWeight: 700,
-                        mb: 1,
-                        color: "text.primary",
-                      }}
+                      sx={{ fontWeight: 900, mb: 1, color: "text.primary" }}
                     >
                       {day}
                     </Typography>
 
-                    <Stack spacing={1.5}>
+                    <Stack spacing={1.25}>
                       {items.map((c) => (
                         <ClassRow key={c.id} item={c} />
                       ))}
@@ -396,22 +424,66 @@ export default function ClassesPage() {
   );
 }
 
+// Small wrapper to keep the filters looking like Onora “clean card”
+function CardShell({ children }: { children: React.ReactNode }) {
+  return (
+    <Paper
+      sx={{
+        p: 2,
+        mb: 3,
+        borderRadius: 3,
+        border: "1px solid rgba(15, 23, 42, 0.08)",
+        boxShadow: "none",
+        bgcolor: "background.paper",
+      }}
+    >
+      {children}
+    </Paper>
+  );
+}
+
 // ---------- Row component ----------
 function ClassRow({ item }: { item: ClassItem }) {
   const isFull = item.students >= item.capacity;
   const utilization = pct(item.students, item.capacity);
 
+  const accent =
+    item.status !== "Active"
+      ? "rgba(15,23,42,0.10)"
+      : isFull
+        ? "rgba(255,107,92,0.55)" // orange for full
+        : "rgba(139,92,246,0.35)"; // purple for active
+
   return (
-    <Paper
-      variant="outlined"
+    <Box
       sx={{
         p: 2,
-        borderRadius: 3,
+        borderRadius: 2,
+        border: "1px solid rgba(15, 23, 42, 0.08)",
         bgcolor: "background.paper",
         display: "flex",
         alignItems: "flex-start",
         justifyContent: "space-between",
         gap: 2,
+        flexWrap: "wrap",
+        position: "relative",
+        transition:
+          "transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
+        "&:hover": {
+          transform: "translateY(-1px)",
+          borderColor: "rgba(139,92,246,0.22)",
+          boxShadow: "0 10px 22px rgba(15, 23, 42, 0.06)",
+        },
+        "&::before": {
+          content: '""',
+          position: "absolute",
+          left: 0,
+          top: 10,
+          bottom: 10,
+          width: 4,
+          borderRadius: 999,
+          bgcolor: accent,
+        },
       }}
     >
       <Box sx={{ display: "flex", gap: 2, minWidth: 0, flex: 1 }}>
@@ -423,7 +495,7 @@ function ClassRow({ item }: { item: ClassItem }) {
             height: 10,
             borderRadius: "50%",
             flex: "0 0 auto",
-            bgcolor: levelDotColor(item.level),
+            ...levelDotSx(item.level),
           }}
         />
 
@@ -431,7 +503,7 @@ function ClassRow({ item }: { item: ClassItem }) {
           <Typography
             variant="subtitle1"
             sx={{
-              fontWeight: 700,
+              fontWeight: 900,
               lineHeight: 1.2,
               mb: 0.5,
               whiteSpace: "nowrap",
@@ -467,31 +539,46 @@ function ClassRow({ item }: { item: ClassItem }) {
               size="small"
               label={item.level}
               variant="outlined"
-              sx={{ borderRadius: 999 }}
+              sx={{
+                borderRadius: 999,
+                borderColor: "rgba(139,92,246,0.18)",
+                bgcolor: "rgba(139,92,246,0.05)",
+              }}
             />
             {item.status !== "Active" ? (
               <Chip
                 size="small"
                 label="Cancelled"
-                color="default"
                 variant="outlined"
-                sx={{ borderRadius: 999 }}
+                sx={{
+                  borderRadius: 999,
+                  borderColor: "rgba(15,23,42,0.14)",
+                  color: "text.secondary",
+                }}
               />
             ) : isFull ? (
               <Chip
                 size="small"
                 label="Full"
-                color="default"
                 variant="outlined"
-                sx={{ borderRadius: 999 }}
+                sx={{
+                  borderRadius: 999,
+                  borderColor: "rgba(255,107,92,0.35)",
+                  color: "rgba(255,107,92,0.95)",
+                  bgcolor: "rgba(255,107,92,0.06)",
+                }}
               />
             ) : (
               <Chip
                 size="small"
                 label="Active"
-                color="default"
                 variant="outlined"
-                sx={{ borderRadius: 999 }}
+                sx={{
+                  borderRadius: 999,
+                  borderColor: "rgba(139,92,246,0.22)",
+                  color: "primary.main",
+                  bgcolor: "rgba(139,92,246,0.06)",
+                }}
               />
             )}
           </Stack>
@@ -499,7 +586,7 @@ function ClassRow({ item }: { item: ClassItem }) {
       </Box>
 
       {/* right column */}
-      <Box sx={{ width: 220, flex: "0 0 auto" }}>
+      <Box sx={{ width: 240, flex: "0 0 auto" }}>
         <Typography
           variant="body2"
           color="text.secondary"
@@ -507,9 +594,7 @@ function ClassRow({ item }: { item: ClassItem }) {
         >
           <span>Students</span>
           <span>
-            <b style={{ color: "inherit" }}>
-              {item.students}/{item.capacity}
-            </b>
+            <b>{formatUtilLabel(item.students, item.capacity)}</b>
           </span>
         </Typography>
 
@@ -522,6 +607,7 @@ function ClassRow({ item }: { item: ClassItem }) {
             bgcolor: "rgba(15, 23, 42, 0.06)",
             "& .MuiLinearProgress-bar": {
               borderRadius: 999,
+              // keep bar neutral; theme can control actual color
             },
           }}
         />
@@ -535,19 +621,31 @@ function ClassRow({ item }: { item: ClassItem }) {
             size="small"
             variant="outlined"
             onClick={() => alert(`TODO: View class ${item.id}`)}
+            sx={{
+              borderRadius: 999,
+              borderColor: "rgba(139,92,246,0.35)",
+              color: "primary.main",
+              "&:hover": {
+                borderColor: "primary.main",
+                backgroundColor: "rgba(139,92,246,0.08)",
+                boxShadow: "0 0 0 3px rgba(255,107,92,0.10)",
+              },
+            }}
           >
             View
           </Button>
+
           <Button
             size="small"
             variant="contained"
             onClick={() => alert(`TODO: Edit class ${item.id}`)}
             disabled={item.status !== "Active"}
+            sx={{ borderRadius: 999 }}
           >
             Edit
           </Button>
         </Stack>
       </Box>
-    </Paper>
+    </Box>
   );
 }

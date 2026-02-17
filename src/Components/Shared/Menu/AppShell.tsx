@@ -4,7 +4,6 @@ import {
   CssBaseline,
   AppBar,
   Toolbar,
-  Typography,
   IconButton,
   Drawer,
   Divider,
@@ -13,15 +12,19 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Tooltip,
 } from "@mui/material";
 
 import MenuIcon from "@mui/icons-material/Menu";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
-import InboxIcon from "@mui/icons-material/MoveToInbox";
-import MailIcon from "@mui/icons-material/Mail";
+import DashboardIcon from "@mui/icons-material/DashboardRounded";
+import EmojiEventsIcon from "@mui/icons-material/EmojiEventsRounded";
+import CalendarMonthIcon from "@mui/icons-material/CalendarMonthRounded";
+import SettingsIcon from "@mui/icons-material/SettingsRounded";
 import { useLocation, useNavigate } from "react-router-dom";
+import Logo from "../../../assets/onora.png";
 
-const drawerWidth = 260;
+const drawerWidth = 272;
 
 type NavItem = {
   label: string;
@@ -34,19 +37,19 @@ const navItems: NavItem[] = [
   {
     label: "Dashboard",
     to: "/dashboard",
-    icon: <InboxIcon />,
+    icon: <DashboardIcon />,
     match: "exact",
   },
   {
     label: "Tournaments",
     to: "/tournaments",
-    icon: <InboxIcon />,
+    icon: <EmojiEventsIcon />,
     match: "prefix",
   },
   {
     label: "Classes",
     to: "/classes",
-    icon: <InboxIcon />,
+    icon: <CalendarMonthIcon />,
     match: "prefix",
   },
 ];
@@ -65,89 +68,150 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
+    <Box
+      sx={{
+        minHeight: "100vh",
+        // subtle brand wash (premium SaaS vibe)
+        background:
+          "linear-gradient(180deg, #FAF7FF 0%, #F7F7FB 55%, #F7F7FB 100%)",
+      }}
+    >
       <CssBaseline />
-      <Box sx={{ p: { xs: 2, md: 3 } }}>
+
+      <Box sx={{ p: { xs: 1.5, md: 2.5 } }}>
         <Box
           sx={{
             mx: "auto",
-            maxWidth: 1400,
-            minHeight: "calc(100vh - 48px)",
+            maxWidth: 1440,
+            minHeight: "calc(100vh - 40px)",
             bgcolor: "background.paper",
             border: "1px solid",
             borderColor: "divider",
-            borderRadius: 1,
+            borderRadius: 2,
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
           }}
         >
+          {/* Top App Bar */}
           <AppBar
             position="static"
             color="inherit"
             elevation={0}
             sx={{
-              bgcolor: "background.paper",
+              bgcolor: "#FAF7FF",
+              borderBottom: "1px solid rgba(139, 92, 246, 0.12)",
               color: "text.primary",
-              borderBottom: "1px solid",
-              borderColor: "divider",
             }}
           >
-            <Toolbar sx={{ gap: 1 }}>
-              <IconButton onClick={() => setOpen((v) => !v)} edge="start">
-                <MenuIcon />
-              </IconButton>
+            <Toolbar
+              disableGutters
+              sx={{
+                px: 2,
+                gap: 1,
+                minHeight: 64,
+                "@media (min-width:600px)": { minHeight: 64 },
+                alignItems: "center",
+              }}
+            >
+              <Tooltip title={open ? "Collapse menu" : "Expand menu"} arrow>
+                <IconButton
+                  onClick={() => setOpen((v) => !v)}
+                  edge="start"
+                  sx={{
+                    mr: 0.5,
+                    borderRadius: 2,
+                    "&:hover": { bgcolor: "rgba(139, 92, 246, 0.08)" },
+                  }}
+                >
+                  <MenuIcon />
+                </IconButton>
+              </Tooltip>
 
-              <Typography variant="h3" sx={{ flexGrow: 1 }}>
-                <a onClick={() => navigate("./dashboard")}>Dashboard</a>
-              </Typography>
+              <Box
+                onClick={() => navigate("/dashboard")}
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  cursor: "pointer",
+                  userSelect: "none",
+                  // keep logo left-aligned and clean
+                }}
+              >
+                <Box
+                  component="img"
+                  src={Logo}
+                  alt="Onora logo"
+                  sx={{ height: 36, width: "auto", display: "block" }}
+                />
+              </Box>
+
+              <Box sx={{ flexGrow: 1 }} />
+
+              {/* Optional: tiny coral "status dot" (ties to logo dot) */}
+              <Box
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  bgcolor: "secondary.main",
+                  opacity: 0.9,
+                }}
+              />
             </Toolbar>
           </AppBar>
 
-          {/* ✅ Body row: Drawer + Main */}
+          {/* Body row */}
           <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
-            {/* ✅ Drawer stays inside shell */}
+            {/* Sidebar */}
             <Drawer
               variant="persistent"
               open={open}
               sx={{
                 width: open ? drawerWidth : 0,
                 flexShrink: 0,
-
                 "& .MuiDrawer-paper": {
                   width: drawerWidth,
                   boxSizing: "border-box",
-
-                  // ✅ KEY: keep it in-flow (not fixed to viewport)
                   position: "relative",
                   height: "100%",
-
-                  bgcolor: "background.paper",
-                  borderRight: "1px solid",
-                  borderColor: "divider",
-                  borderRadius: 0, // important inside rounded shell
+                  bgcolor: "#FFFFFF",
+                  borderRight: "1px solid rgba(139, 92, 246, 0.10)",
                 },
               }}
             >
-              {/* Drawer header area */}
+              {/* Sidebar header (tight + aligned) */}
               <Box
                 sx={{
                   display: "flex",
                   alignItems: "center",
-                  justifyContent: "flex-end",
-                  px: 1,
-                  py: 1,
+                  justifyContent: "space-between",
+                  px: 1.25,
+                  py: 1.25,
+                  bgcolor: "#FFFFFF",
                 }}
               >
-                <IconButton onClick={() => setOpen(false)}>
-                  <ChevronLeftIcon />
-                </IconButton>
+                <Box sx={{ fontSize: 12, color: "text.secondary", pl: 1 }}>
+                  Menu
+                </Box>
+
+                <Tooltip title="Collapse" arrow>
+                  <IconButton
+                    onClick={() => setOpen(false)}
+                    sx={{
+                      borderRadius: 2,
+                      "&:hover": { bgcolor: "rgba(139, 92, 246, 0.08)" },
+                    }}
+                  >
+                    <ChevronLeftIcon />
+                  </IconButton>
+                </Tooltip>
               </Box>
 
               <Divider />
 
-              {/* Main nav */}
-              <List sx={{ px: 1 }}>
+              {/* Nav */}
+              <List sx={{ px: 1, py: 1 }}>
                 {navItems.map((item) => {
                   const active = isActive(item);
 
@@ -158,13 +222,36 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                         onClick={() => navigate(item.to)}
                         sx={{
                           borderRadius: 2,
-                          px: 1.5,
+                          px: 1.25,
+                          py: 1.05,
+                          position: "relative",
+                          gap: 0.75,
+
+                          "&:hover": {
+                            bgcolor: "rgba(139, 92, 246, 0.06)",
+                          },
+
                           "&.Mui-selected": {
-                            backgroundColor: "rgba(34, 197, 94, 0.12)",
-                            color: "primary.main",
+                            bgcolor: "rgba(139, 92, 246, 0.08)",
+                            "&:hover": { bgcolor: "rgba(139, 92, 246, 0.10)" },
+
+                            // strong identity: left rail
+                            "&::before": {
+                              content: '""',
+                              position: "absolute",
+                              left: 6,
+                              top: 8,
+                              bottom: 8,
+                              width: 3,
+                              borderRadius: 999,
+                              background:
+                                "linear-gradient(180deg, #8B5CF6 0%, #A855F7 100%)",
+                            },
+
                             "& .MuiListItemIcon-root": {
                               color: "primary.main",
                             },
+                            "& .MuiListItemText-primary": { fontWeight: 700 },
                           },
                         }}
                       >
@@ -176,7 +263,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                         >
                           {item.icon}
                         </ListItemIcon>
-                        <ListItemText primary={item.label} />
+                        <ListItemText
+                          primary={item.label}
+                          primaryTypographyProps={{
+                            fontSize: 14,
+                            fontWeight: active ? 700 : 600,
+                          }}
+                        />
                       </ListItemButton>
                     </ListItem>
                   );
@@ -187,21 +280,46 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
               <Divider />
 
-              {/* Footer nav */}
+              {/* Footer */}
               <List sx={{ px: 1, py: 1 }}>
                 <ListItem disablePadding>
-                  <ListItemButton sx={{ borderRadius: 2, px: 1.5, py: 1 }}>
+                  <ListItemButton
+                    onClick={() => navigate("/settings")}
+                    sx={{
+                      borderRadius: 2,
+                      px: 1.25,
+                      py: 1.05,
+                      "&:hover": { bgcolor: "rgba(139, 92, 246, 0.06)" },
+                    }}
+                  >
                     <ListItemIcon
-                      sx={{ minWidth: 36, color: "text.secondary" }}
+                      sx={{ minWidth: 38, color: "text.secondary" }}
                     >
-                      <MailIcon />
+                      <SettingsIcon />
                     </ListItemIcon>
-                    <ListItemText primary="Settings" />
+                    <ListItemText
+                      primary="Settings"
+                      primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }}
+                    />
                   </ListItemButton>
                 </ListItem>
               </List>
             </Drawer>
-            {children}
+
+            {/* Main content */}
+            <Box
+              component="main"
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+                bgcolor: "transparent",
+                // consistent page padding
+                p: { xs: 2, md: 3 },
+              }}
+            >
+              {children}
+            </Box>
           </Box>
         </Box>
       </Box>

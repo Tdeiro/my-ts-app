@@ -1,4 +1,3 @@
-// src/pages/AddTournamentPage.tsx
 import * as React from "react";
 import {
   Box,
@@ -16,6 +15,7 @@ import {
   TextField,
   Typography,
   Chip,
+  Paper,
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
@@ -64,6 +64,60 @@ const initialForm: TournamentForm = {
   requireApproval: false,
 };
 
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography
+      variant="body1"
+      sx={{ fontWeight: 900, fontSize: "0.95rem", mb: 1 }}
+    >
+      {children}
+    </Typography>
+  );
+}
+
+function SoftCard({ children }: { children: React.ReactNode }) {
+  return (
+    <Card
+      sx={{
+        borderRadius: 3,
+        boxShadow: "none",
+        border: "1px solid rgba(15, 23, 42, 0.08)",
+        overflow: "hidden",
+      }}
+    >
+      {children}
+    </Card>
+  );
+}
+
+function pillChipSx(kind: "primary" | "muted" | "orange" = "muted") {
+  if (kind === "primary") {
+    return {
+      borderRadius: 999,
+      borderColor: "rgba(139,92,246,0.22)",
+      bgcolor: "rgba(139,92,246,0.06)",
+      color: "primary.main",
+      fontWeight: 650,
+    };
+  }
+  if (kind === "orange") {
+    return {
+      borderRadius: 999,
+      borderColor: "rgba(255,107,92,0.35)",
+      bgcolor: "rgba(255,107,92,0.06)",
+      color: "rgba(255,107,92,0.95)",
+      fontWeight: 650,
+    };
+  }
+  return {
+    borderRadius: 999,
+    borderColor: "rgba(15,23,42,0.12)",
+    bgcolor: "rgba(15,23,42,0.03)",
+    color: "text.secondary",
+    fontWeight: 650,
+  };
+}
+
 export default function AddTournamentPage() {
   const navigate = useNavigate();
   const [form, setForm] = React.useState<TournamentForm>(initialForm);
@@ -96,12 +150,17 @@ export default function AddTournamentPage() {
       // MVP stub — replace with your API call later
       await new Promise((r) => setTimeout(r, 600));
       console.log("Create tournament payload:", form);
-
-      navigate("/dashboard");
+      navigate("/tournaments"); // nicer flow than dashboard
     } finally {
       setSaving(false);
     }
   };
+
+  const whenText = `${form.startDate || "—"} → ${form.endDate || "—"} • ${
+    form.startTime || "—"
+  }–${form.endTime || "—"}`;
+
+  const feeText = `${Number(form.entryFee || 0)} ${form.currency}`;
 
   return (
     <Box
@@ -116,37 +175,61 @@ export default function AddTournamentPage() {
       }}
     >
       <Box sx={{ width: "100%", maxWidth: 1100 }}>
-        {/* Header */}
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={2}
-          alignItems={{ xs: "stretch", sm: "center" }}
-          justifyContent="space-between"
-          sx={{ mb: 3 }}
+        {/* Header wash */}
+        <Paper
+          sx={{
+            mb: 2,
+            p: { xs: 2, sm: 2.5 },
+            borderRadius: 2,
+            background:
+              "linear-gradient(180deg, rgba(139,92,246,0.10) 0%, rgba(255,255,255,0) 70%)",
+          }}
         >
-          <Box>
-            <Typography variant="h2" sx={{ mb: 0.5 }}>
-              Add Tournament
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Set up key details now — you can refine brackets, seeding and
-              scheduling later.
-            </Typography>
-          </Box>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
+            alignItems={{ xs: "stretch", sm: "center" }}
+            justifyContent="space-between"
+          >
+            <Box>
+              <Typography variant="h2" sx={{ mb: 0.5, fontWeight: 900 }}>
+                Add Tournament
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Set the essentials now — you can refine brackets, seeding and
+                scheduling later.
+              </Typography>
+            </Box>
 
-          <Stack direction="row" spacing={1.25} justifyContent="flex-end">
-            <Button variant="outlined" onClick={handleCancel}>
-              Cancel
-            </Button>
-            <Button
-              variant="contained"
-              onClick={handleSubmit}
-              disabled={saving || !form.name.trim()}
-            >
-              {saving ? "Saving…" : "Create Tournament"}
-            </Button>
+            <Stack direction="row" spacing={1.25} justifyContent="flex-end">
+              <Button
+                variant="outlined"
+                onClick={handleCancel}
+                sx={{
+                  borderRadius: 999,
+                  borderColor: "rgba(139,92,246,0.25)",
+                  color: "primary.main",
+                  "&:hover": {
+                    borderColor: "primary.main",
+                    backgroundColor: "rgba(139,92,246,0.08)",
+                    boxShadow: "0 0 0 3px rgba(255,107,92,0.10)",
+                  },
+                }}
+              >
+                Cancel
+              </Button>
+
+              <Button
+                variant="contained"
+                onClick={handleSubmit}
+                disabled={saving || !form.name.trim()}
+                sx={{ borderRadius: 999 }}
+              >
+                {saving ? "Saving…" : "Create Tournament"}
+              </Button>
+            </Stack>
           </Stack>
-        </Stack>
+        </Paper>
 
         {/* Content layout: form + right column */}
         <Stack
@@ -155,12 +238,10 @@ export default function AddTournamentPage() {
           alignItems="flex-start"
         >
           {/* LEFT: Form */}
-          <Card sx={{ flex: 1, width: "100%" }}>
-            <CardContent sx={{ p: 3 }}>
+          <SoftCard>
+            <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
               {/* Basics */}
-              <Typography variant="body1" sx={{ fontWeight: 700, mb: 1 }}>
-                Basics
-              </Typography>
+              <SectionTitle>Basics</SectionTitle>
               <Divider sx={{ mb: 2 }} />
 
               <Stack spacing={2}>
@@ -237,12 +318,7 @@ export default function AddTournamentPage() {
               </Stack>
 
               {/* Location */}
-              <Typography
-                variant="body1"
-                sx={{ fontWeight: 700, mt: 4, mb: 1 }}
-              >
-                Location
-              </Typography>
+              <SectionTitle>Location</SectionTitle>
               <Divider sx={{ mb: 2 }} />
 
               <Stack spacing={2}>
@@ -261,12 +337,7 @@ export default function AddTournamentPage() {
               </Stack>
 
               {/* Date & time */}
-              <Typography
-                variant="body1"
-                sx={{ fontWeight: 700, mt: 4, mb: 1 }}
-              >
-                Date & Time
-              </Typography>
+              <SectionTitle>Date & Time</SectionTitle>
               <Divider sx={{ mb: 2 }} />
 
               <Stack spacing={2}>
@@ -319,12 +390,7 @@ export default function AddTournamentPage() {
               </Stack>
 
               {/* Capacity & fees */}
-              <Typography
-                variant="body1"
-                sx={{ fontWeight: 700, mt: 4, mb: 1 }}
-              >
-                Capacity & Fees
-              </Typography>
+              <SectionTitle>Capacity & Fees</SectionTitle>
               <Divider sx={{ mb: 2 }} />
 
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
@@ -368,12 +434,7 @@ export default function AddTournamentPage() {
               </Stack>
 
               {/* Description */}
-              <Typography
-                variant="body1"
-                sx={{ fontWeight: 700, mt: 4, mb: 1 }}
-              >
-                Description
-              </Typography>
+              <SectionTitle>Description</SectionTitle>
               <Divider sx={{ mb: 2 }} />
 
               <TextField
@@ -385,7 +446,7 @@ export default function AddTournamentPage() {
                 fullWidth
               />
             </CardContent>
-          </Card>
+          </SoftCard>
 
           {/* RIGHT COLUMN: Preview + Settings */}
           <Stack
@@ -393,14 +454,12 @@ export default function AddTournamentPage() {
             sx={{ width: "100%", maxWidth: 360, flexShrink: 0 }}
           >
             {/* Preview */}
-            <Card sx={{ width: "100%" }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="body1" sx={{ fontWeight: 700, mb: 1 }}>
-                  Preview
-                </Typography>
+            <SoftCard>
+              <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
+                <SectionTitle>Preview</SectionTitle>
                 <Divider sx={{ mb: 2 }} />
 
-                <Typography variant="h3" sx={{ mb: 1 }}>
+                <Typography variant="h3" sx={{ mb: 1, fontWeight: 900 }}>
                   {form.name || "Untitled Tournament"}
                 </Typography>
 
@@ -409,94 +468,106 @@ export default function AddTournamentPage() {
                   spacing={1}
                   sx={{ mb: 2 }}
                   flexWrap="wrap"
+                  rowGap={1}
                 >
-                  <Chip size="small" label={form.sport} />
-                  <Chip size="small" label={form.format} />
-                  <Chip size="small" label={form.level} />
+                  <Chip
+                    size="small"
+                    label={form.sport}
+                    variant="outlined"
+                    sx={pillChipSx("primary")}
+                  />
+                  <Chip
+                    size="small"
+                    label={form.format}
+                    variant="outlined"
+                    sx={pillChipSx("muted")}
+                  />
+                  <Chip
+                    size="small"
+                    label={form.level}
+                    variant="outlined"
+                    sx={pillChipSx("muted")}
+                  />
                   <Chip
                     size="small"
                     label={form.isPublic ? "Public" : "Private"}
                     variant="outlined"
+                    sx={
+                      form.isPublic
+                        ? pillChipSx("primary")
+                        : pillChipSx("orange")
+                    }
                   />
                 </Stack>
 
                 <Typography
                   variant="body2"
                   color="text.secondary"
-                  sx={{ mb: 1 }}
+                  sx={{ mb: 0.5 }}
                 >
-                  {form.locationName}
+                  {form.locationName || "Venue not set"}
                 </Typography>
                 <Typography
                   variant="body2"
                   color="text.secondary"
                   sx={{ mb: 2 }}
                 >
-                  {form.address}
+                  {form.address || "Address not set"}
                 </Typography>
 
                 <Divider sx={{ mb: 2 }} />
 
-                <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                  When
-                </Typography>
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{ mb: 1.5 }}
-                >
-                  {form.startDate} → {form.endDate} • {form.startTime}–
-                  {form.endTime}
-                </Typography>
+                <Stack spacing={1.25}>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                      When
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {whenText}
+                    </Typography>
+                  </Box>
 
-                <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                  Registration
-                </Typography>
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{ mb: 1.5 }}
-                >
-                  Deadline: {form.registrationDeadline}
-                </Typography>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                      Registration
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Deadline: {form.registrationDeadline || "—"}
+                    </Typography>
+                  </Box>
 
-                <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                  Capacity
-                </Typography>
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{ mb: 1.5 }}
-                >
-                  {form.capacity} players • Waitlist{" "}
-                  {form.allowWaitlist ? "enabled" : "disabled"}
-                </Typography>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                      Capacity
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {form.capacity} players • Waitlist{" "}
+                      {form.allowWaitlist ? "enabled" : "disabled"}
+                    </Typography>
+                  </Box>
 
-                <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                  Entry Fee
-                </Typography>
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{ mb: 2 }}
-                >
-                  {form.entryFee} {form.currency}
-                </Typography>
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                      Entry Fee
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {feeText}
+                    </Typography>
+                  </Box>
+                </Stack>
 
-                <Divider sx={{ mb: 2 }} />
+                <Divider sx={{ my: 2 }} />
 
                 <Typography variant="body2" color="text.secondary">
-                  {form.description}
+                  {form.description || "Add a short description for players…"}
                 </Typography>
               </CardContent>
-            </Card>
+            </SoftCard>
 
             {/* Settings */}
-            <Card sx={{ width: "100%" }}>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="body1" sx={{ fontWeight: 700, mb: 1 }}>
-                  Settings
-                </Typography>
+            <SoftCard>
+              <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
+                <SectionTitle>Settings</SectionTitle>
                 <Divider sx={{ mb: 2 }} />
 
                 <Stack spacing={1}>
@@ -528,8 +599,29 @@ export default function AddTournamentPage() {
                     label="Require approval to join"
                   />
                 </Stack>
+
+                <Box
+                  sx={{
+                    mt: 2,
+                    p: 1.5,
+                    borderRadius: 2,
+                    border: "1px solid rgba(255,107,92,0.18)",
+                    background: "rgba(255,107,92,0.06)",
+                  }}
+                >
+                  <Typography
+                    variant="body2"
+                    sx={{ fontWeight: 800, mb: 0.25 }}
+                  >
+                    Tip
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Keep it public while testing, then switch to private for
+                    invite-only.
+                  </Typography>
+                </Box>
               </CardContent>
-            </Card>
+            </SoftCard>
           </Stack>
         </Stack>
       </Box>

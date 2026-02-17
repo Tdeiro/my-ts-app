@@ -13,6 +13,7 @@ import {
   Select,
   InputLabel,
   FormControl,
+  Paper,
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 
@@ -85,18 +86,51 @@ const DUMMY_TOURNAMENTS: Tournament[] = [
   },
 ];
 
-function statusChipProps(status: Tournament["status"]) {
+function statusChipSx(status: Tournament["status"]) {
+  // Clean + consistent: mostly neutral + purple emphasis
   switch (status) {
     case "Draft":
-      return { label: "Draft", variant: "outlined" as const };
+      return {
+        label: "Draft",
+        sx: {
+          borderColor: "rgba(15,23,42,0.14)",
+          color: "text.secondary",
+          bgcolor: "transparent",
+        },
+        variant: "outlined" as const,
+      };
     case "Open":
-      return { label: "Open", color: "success" as const };
+      return {
+        label: "Open",
+        sx: {
+          bgcolor: "rgba(139,92,246,0.10)",
+          color: "primary.main",
+          borderColor: "rgba(139,92,246,0.22)",
+        },
+        variant: "outlined" as const,
+      };
     case "Live":
-      return { label: "Live", color: "primary" as const };
+      return {
+        label: "Live",
+        sx: {
+          bgcolor: "rgba(139,92,246,0.14)",
+          color: "primary.main",
+          borderColor: "rgba(139,92,246,0.28)",
+        },
+        variant: "outlined" as const,
+      };
     case "Completed":
-      return { label: "Completed", variant: "outlined" as const };
+      return {
+        label: "Completed",
+        sx: {
+          bgcolor: "rgba(15,23,42,0.05)",
+          color: "text.secondary",
+          borderColor: "rgba(15,23,42,0.10)",
+        },
+        variant: "outlined" as const,
+      };
     default:
-      return { label: status };
+      return { label: status, variant: "outlined" as const, sx: {} };
   }
 }
 
@@ -140,31 +174,44 @@ export default function TournamentsListPage() {
       }}
     >
       <Box sx={{ width: "100%", maxWidth: 1100 }}>
-        {/* Header */}
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={2}
-          alignItems={{ xs: "stretch", sm: "center" }}
-          justifyContent="space-between"
-          sx={{ mb: 3 }}
+        {/* Header (soft gradient wash) */}
+        <Paper
+          sx={{
+            mb: 2,
+            p: { xs: 2, sm: 2.5 },
+            borderRadius: 2,
+            background:
+              "linear-gradient(180deg, rgba(139,92,246,0.10) 0%, rgba(255,255,255,0) 70%)",
+          }}
         >
-          <Box>
-            <Typography variant="h2" sx={{ mb: 0.5 }}>
-              Tournaments
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              View and manage all tournaments in one place.
-            </Typography>
-          </Box>
-
-          <Button
-            variant="contained"
-            onClick={() => navigate("/tournaments/new")}
-            sx={{ alignSelf: { xs: "flex-start", sm: "auto" } }}
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
+            alignItems={{ xs: "stretch", sm: "center" }}
+            justifyContent="space-between"
           >
-            Create Tournament
-          </Button>
-        </Stack>
+            <Box>
+              <Typography variant="h2" sx={{ mb: 0.5, fontWeight: 900 }}>
+                Tournaments
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                View and manage all tournaments in one place.
+              </Typography>
+            </Box>
+
+            <Button
+              variant="contained"
+              onClick={() => navigate("/tournaments/new")}
+              sx={{
+                alignSelf: { xs: "flex-start", sm: "auto" },
+                borderRadius: 999,
+                px: 2,
+              }}
+            >
+              Create Tournament
+            </Button>
+          </Stack>
+        </Paper>
 
         {/* Filters */}
         <Card sx={{ mb: 2 }}>
@@ -179,6 +226,11 @@ export default function TournamentsListPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 fullWidth
+                sx={{
+                  "& .MuiOutlinedInput-root:focus-within": {
+                    boxShadow: "0 0 0 3px rgba(255, 107, 92, 0.12)", // subtle orange
+                  },
+                }}
               />
 
               <FormControl sx={{ minWidth: 200 }}>
@@ -219,7 +271,7 @@ export default function TournamentsListPage() {
         <Card>
           <CardContent sx={{ p: 0 }}>
             <Box sx={{ p: 2.5, pb: 2 }}>
-              <Typography variant="body1" sx={{ fontWeight: 700 }}>
+              <Typography variant="body1" sx={{ fontWeight: 900 }}>
                 All Tournaments
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -231,7 +283,7 @@ export default function TournamentsListPage() {
 
             {filtered.length === 0 ? (
               <Box sx={{ p: 3 }}>
-                <Typography variant="body1" sx={{ fontWeight: 650, mb: 0.5 }}>
+                <Typography variant="body1" sx={{ fontWeight: 900, mb: 0.5 }}>
                   No tournaments found
                 </Typography>
                 <Typography
@@ -244,81 +296,133 @@ export default function TournamentsListPage() {
                 <Button
                   variant="contained"
                   onClick={() => navigate("/tournaments/new")}
+                  sx={{ borderRadius: 999 }}
                 >
                   Create Tournament
                 </Button>
               </Box>
             ) : (
-              <Stack divider={<Divider />} sx={{ p: 0 }}>
-                {filtered.map((t) => (
-                  <Box
-                    key={t.id}
-                    sx={{
-                      p: 2.5,
-                      display: "flex",
-                      gap: 2,
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    {/* Left */}
-                    <Box sx={{ minWidth: 260 }}>
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <Typography variant="body1" sx={{ fontWeight: 700 }}>
-                          {t.name}
-                        </Typography>
-                        <Chip
-                          size="small"
-                          {...statusChipProps(t.status)}
-                          sx={{ ml: 0.5 }}
-                        />
-                        {!t.isPublic ? (
+              <Stack sx={{ p: 2.5 }} spacing={1.25}>
+                {filtered.map((t) => {
+                  const status = statusChipSx(t.status);
+
+                  return (
+                    <Box
+                      key={t.id}
+                      sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        border: "1px solid",
+                        borderColor: "rgba(15, 23, 42, 0.08)",
+                        bgcolor: "background.paper",
+                        display: "flex",
+                        gap: 2,
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        transition:
+                          "transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
+                        "&:hover": {
+                          transform: "translateY(-1px)",
+                          borderColor: "rgba(139,92,246,0.22)",
+                          boxShadow: "0 10px 22px rgba(15, 23, 42, 0.06)",
+                        },
+                      }}
+                    >
+                      {/* Left */}
+                      <Box sx={{ minWidth: 280, minHeight: 44 }}>
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          alignItems="center"
+                          flexWrap="wrap"
+                        >
+                          <Typography variant="body1" sx={{ fontWeight: 900 }}>
+                            {t.name}
+                          </Typography>
+
                           <Chip
                             size="small"
-                            label="Private"
-                            variant="outlined"
+                            label={status.label}
+                            variant={status.variant}
+                            sx={status.sx}
                           />
-                        ) : null}
+
+                          {!t.isPublic ? (
+                            <Chip
+                              size="small"
+                              label="Private"
+                              variant="outlined"
+                              sx={{
+                                borderColor: "rgba(255, 107, 92, 0.30)", // subtle orange
+                                color: "rgba(255, 107, 92, 0.95)",
+                              }}
+                            />
+                          ) : null}
+                        </Stack>
+
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{ mt: 0.25 }}
+                        >
+                          {t.locationName}
+                        </Typography>
+                      </Box>
+
+                      {/* Middle tags */}
+                      <Stack
+                        direction="row"
+                        spacing={1}
+                        sx={{ flexWrap: "wrap" }}
+                      >
+                        {[t.sport, t.format, t.level].map((tag) => (
+                          <Chip
+                            key={tag}
+                            size="small"
+                            label={tag}
+                            variant="outlined"
+                            sx={{
+                              borderColor: "rgba(139,92,246,0.18)",
+                              bgcolor: "rgba(139,92,246,0.05)",
+                            }}
+                          />
+                        ))}
                       </Stack>
 
-                      <Typography variant="body2" color="text.secondary">
-                        {t.locationName}
-                      </Typography>
-                    </Box>
-
-                    {/* Middle tags */}
-                    <Stack
-                      direction="row"
-                      spacing={1}
-                      sx={{ flexWrap: "wrap" }}
-                    >
-                      <Chip size="small" label={t.sport} />
-                      <Chip size="small" label={t.format} />
-                      <Chip size="small" label={t.level} />
-                    </Stack>
-
-                    {/* Right meta + actions */}
-                    <Stack
-                      direction={{ xs: "column", sm: "row" }}
-                      spacing={1.5}
-                      alignItems={{ xs: "flex-start", sm: "center" }}
-                    >
-                      <Typography variant="body2" color="text.secondary">
-                        {t.startDate} • {t.entryFee} {t.currency}
-                      </Typography>
-
-                      <Button
-                        variant="outlined"
-                        onClick={() =>
-                          alert(`Open details for ${t.id} (MVP stub)`)
-                        }
+                      {/* Right meta + actions */}
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={1.25}
+                        alignItems={{ xs: "flex-start", sm: "center" }}
                       >
-                        View
-                      </Button>
-                    </Stack>
-                  </Box>
-                ))}
+                        <Typography variant="body2" color="text.secondary">
+                          {t.startDate} • {t.entryFee} {t.currency}
+                        </Typography>
+
+                        <Button
+                          variant="outlined"
+                          onClick={() =>
+                            alert(`Open details for ${t.id} (MVP stub)`)
+                          }
+                          sx={{
+                            borderRadius: 999,
+                            px: 1.75,
+                            borderColor: "rgba(139,92,246,0.35)",
+                            color: "primary.main",
+                            "&:hover": {
+                              borderColor: "primary.main",
+                              backgroundColor: "rgba(139,92,246,0.08)",
+                              boxShadow: "0 0 0 3px rgba(255, 107, 92, 0.12)", // tiny orange hint
+                            },
+                          }}
+                        >
+                          View
+                        </Button>
+                      </Stack>
+                    </Box>
+                  );
+                })}
               </Stack>
             )}
           </CardContent>

@@ -9,8 +9,9 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import Logo from "../assets/onora.png";
 
-export default function Login() {
+export default function LoginPage() {
   const navigate = useNavigate();
 
   const handleRedirect = () => {
@@ -30,10 +31,18 @@ export default function Login() {
           <CardContent sx={{ p: 4 }}>
             {/* Logo / App name */}
             <Box sx={{ textAlign: "center", mb: 3 }}>
-              <Typography variant="h2">MatchFlow</Typography>
-              <Typography color="text.secondary">
-                Welcome back. Please sign in to continue.
-              </Typography>
+              <Box
+                component="img"
+                src={Logo}
+                alt="Onora logo"
+                sx={{
+                  height: 60,
+                  display: "block",
+                  mx: "auto",
+                  mb: 1,
+                }}
+              />
+              <Typography color="text.secondary">Sign in with Onora</Typography>
             </Box>
 
             {/* Form */}
@@ -93,7 +102,11 @@ export default function Login() {
             <Box sx={{ mt: 3, textAlign: "center" }}>
               <Typography variant="body2" color="text.secondary">
                 Don’t have an account?{" "}
-                <Button variant="text" size="small">
+                <Button
+                  variant="text"
+                  size="small"
+                  onClick={() => navigate("/signup")}
+                >
                   Sign up
                 </Button>
               </Typography>

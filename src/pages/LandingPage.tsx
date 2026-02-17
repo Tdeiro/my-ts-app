@@ -13,6 +13,7 @@ import {
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import PaymentsRoundedIcon from "@mui/icons-material/PaymentsRounded";
 import NotificationsActiveRoundedIcon from "@mui/icons-material/NotificationsActiveRounded";
+import Logo from "../assets/onora.png";
 
 export default function LandingPage() {
   return (
@@ -31,25 +32,17 @@ export default function LandingPage() {
         <Container maxWidth="lg">
           <Toolbar sx={{ minHeight: 76, px: { xs: 0, md: 1 } }}>
             {/* Logo */}
-            <Stack direction="row" spacing={1.2} alignItems="center">
-              <Box
-                sx={{
-                  width: 42,
-                  height: 42,
-                  borderRadius: "999px",
-                  bgcolor: "primary.main",
-                  color: "primary.contrastText",
-                  display: "grid",
-                  placeItems: "center",
-                  fontWeight: 900,
-                }}
-              >
-                M
-              </Box>
-              <Typography sx={{ fontWeight: 900, fontSize: 18 }}>
-                MatchFlow
-              </Typography>
-            </Stack>
+            <Box
+              component="img"
+              src={Logo}
+              alt="Onora logo"
+              sx={{
+                height: 40,
+                display: "block",
+                mx: "auto",
+                mb: 1,
+              }}
+            />
 
             {/* Center nav */}
             <Box sx={{ flex: 1, display: { xs: "none", md: "block" } }} />

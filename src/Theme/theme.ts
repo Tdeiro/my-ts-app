@@ -3,21 +3,32 @@ import { createTheme } from "@mui/material/styles";
 export const theme = createTheme({
   palette: {
     mode: "light",
+
     background: {
       default: "#F8FAFC",
       paper: "#FFFFFF",
     },
+
     text: {
-      primary: "#0F172A",
+      primary: "#18192B",   // logo navy
       secondary: "#64748B",
     },
+
     primary: {
-      main: "#22C55E",
-      dark: "#16A34A",
-      light: "#86EFAC",
-      contrastText: "#052E16",
+      main: "#A855F8",      // logo purple
+      dark: "#943AC8",      // deeper purple
+      light: "#D8B4FE",     // soft lilac for hovers / chips
+      contrastText: "#FFFFFF",
     },
-    divider: "rgba(15, 23, 42, 0.08)",
+
+    secondary: {
+      main: "#F66E67",      // coral dot
+      dark: "#E85A54",
+      light: "#FFB4AE",
+      contrastText: "#18192B",
+    },
+
+    divider: "rgba(24, 25, 43, 0.08)", // based on logo navy
   },
 
   shape: { borderRadius: 12 },
@@ -45,7 +56,7 @@ export const theme = createTheme({
     MuiPaper: {
       styleOverrides: {
         root: {
-          border: "1px solid rgba(15, 23, 42, 0.08)",
+          border: "1px solid rgba(24, 25, 43, 0.08)",
           boxShadow: "none",
         },
       },
@@ -53,22 +64,49 @@ export const theme = createTheme({
     MuiCard: {
       styleOverrides: {
         root: {
-          border: "1px solid rgba(15, 23, 42, 0.08)",
+          border: "1px solid rgba(24, 25, 43, 0.08)",
           boxShadow: "none",
         },
       },
     },
+
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {
         root: { borderRadius: 12 },
+
+        // tasteful “Canva-ish” gradient only on contained buttons
+        containedPrimary: {
+          backgroundImage: "linear-gradient(135deg, #BD2AF7 0%, #A855F8 55%, #943AC8 100%)",
+          color: "#FFFFFF",
+        },
+        containedPrimaryHover: {
+          // (MUI doesn't support this key, so we do it via &:hover below)
+        },
+
+        contained: {
+          "&:hover": {
+            filter: "brightness(0.97)",
+          },
+        },
       },
     },
+
     MuiAppBar: {
       styleOverrides: {
         root: {
           boxShadow: "none",
-          borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
+          borderBottom: "1px solid rgba(24, 25, 43, 0.08)",
+          backgroundColor: "#FFFFFF",
+          color: "#18192B",
+        },
+      },
+    },
+
+    MuiChip: {
+      styleOverrides: {
+        root: {
+          borderRadius: 999,
         },
       },
     },
