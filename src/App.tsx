@@ -10,6 +10,10 @@ import RequireAuth from "./Components/RequireAuth";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import AddEventPage from "./pages/AddEventPage";
+import CreateClassPage from "./pages/CreateClassPage";
+import RequireCreateAccess from "./Components/RequireCreateAccess";
+import TournamentSetupPage from "./pages/TournamentSetupPage";
+import TournamentGroupsPage from "./pages/TournamentGroupsPage";
 
 function Layout() {
   return (
@@ -27,19 +31,56 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/coach/register" element={<CoachRegisterPage />} />
-          <Route element={<Layout />}>
-            {/* <Route index element={<Navigate to="/dashboard" replace />} /> */}
+          <Route
+            element={
+              <RequireAuth>
+                <Layout />
+              </RequireAuth>
+            }
+          >
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/tournaments" element={<TournamentsListPage />} />
             <Route
-              path="/dashboard"
+              path="/tournaments/new"
               element={
-                <RequireAuth>
-                  <Dashboard />
-                </RequireAuth>
+                <RequireCreateAccess>
+                  <AddEventPage />
+                </RequireCreateAccess>
               }
             />
-            <Route path="/tournaments" element={<TournamentsListPage />} />
-            <Route path="/tournaments/new" element={<AddEventPage />} />
+            <Route
+              path="/tournaments/:id/setup"
+              element={
+                <RequireCreateAccess>
+                  <TournamentSetupPage />
+                </RequireCreateAccess>
+              }
+            />
+            <Route
+              path="/tournaments/:id/groups"
+              element={
+                <RequireCreateAccess>
+                  <TournamentGroupsPage />
+                </RequireCreateAccess>
+              }
+            />
             <Route path="/classes" element={<ClassesPage />} />
+            <Route
+              path="/classes/new"
+              element={
+                <RequireCreateAccess>
+                  <CreateClassPage />
+                </RequireCreateAccess>
+              }
+            />
+            <Route
+              path="/classes/:id/edit"
+              element={
+                <RequireCreateAccess>
+                  <CreateClassPage />
+                </RequireCreateAccess>
+              }
+            />
           </Route>
         </Routes>
       </BrowserRouter>

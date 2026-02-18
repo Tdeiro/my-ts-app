@@ -14,19 +14,49 @@ import {
   FormControlLabel,
   Chip,
   LinearProgress,
+  Alert,
+  CircularProgress,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import SignalCellularAltIcon from "@mui/icons-material/SignalCellularAlt";
+import { useNavigate } from "react-router-dom";
+import {
+  getLoggedInRole,
+  getLoggedInUserId,
+  hasCreatorAccess,
+  isParticipantRole,
+  getToken,
+} from "../auth/tokens";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
 // ---------- Types ----------
-type ClassLevel = "Beginner" | "Intermediate" | "Advanced";
+type ClassLevel = "Beginner" | "Intermediate" | "Advanced" | "All levels";
+type WeekFilter = "All Dates" | "Last 7 Days" | "Last 30 Days";
+type ApiClassEvent = {
+  id: number | string;
+  userId?: number | string;
+  user_id?: number | string;
+  isPublic?: boolean;
+  title?: string;
+  level?: string;
+  coach?: string;
+  weekDay?: string;
+  monthDate?: string;
+  startTime?: string;
+  endTime?: string;
+  capacity?: number | string;
+  students?: number | string;
+  status?: string;
+  location?: string;
+};
 
 type ClassItem = {
   id: string;
   title: string;
   coach: string;
+  date: string; // YYYY-MM-DD
   day:
     | "Monday"
     | "Tuesday"
@@ -37,96 +67,13 @@ type ClassItem = {
     | "Sunday";
   start: string; // "6:00 PM"
   end: string; // "7:30 PM"
+  startMinutes: number;
   level: ClassLevel;
   students: number;
   capacity: number;
   status: "Active" | "Cancelled";
   location?: string;
 };
-
-// ---------- Dummy data ----------
-const DEMO_WEEK_LABEL = "Apr 22 – Apr 28";
-
-const CLASSES: ClassItem[] = [
-  {
-    id: "c1",
-    title: "Junior Class",
-    coach: "Coach Alex",
-    day: "Monday",
-    start: "8:00 AM",
-    end: "9:00 AM",
-    level: "Beginner",
-    students: 9,
-    capacity: 12,
-    status: "Active",
-    location: "Court 2",
-  },
-  {
-    id: "c2",
-    title: "Doubles Clinic",
-    coach: "Debony",
-    day: "Monday",
-    start: "10:00 AM",
-    end: "11:30 AM",
-    level: "Intermediate",
-    students: 10,
-    capacity: 10,
-    status: "Active",
-    location: "Court 1",
-  },
-  {
-    id: "c3",
-    title: "Fundamentals",
-    coach: "Thiago",
-    day: "Tuesday",
-    start: "6:00 PM",
-    end: "7:00 PM",
-    level: "Beginner",
-    students: 6,
-    capacity: 12,
-    status: "Active",
-    location: "Court 3",
-  },
-  {
-    id: "c4",
-    title: "Advanced Training",
-    coach: "Coach Alex",
-    day: "Wednesday",
-    start: "12:00 PM",
-    end: "1:30 PM",
-    level: "Advanced",
-    students: 7,
-    capacity: 8,
-    status: "Active",
-    location: "Court 1",
-  },
-  {
-    id: "c5",
-    title: "Cardio Tennis",
-    coach: "Debony",
-    day: "Thursday",
-    start: "7:00 PM",
-    end: "8:00 PM",
-    level: "Intermediate",
-    students: 8,
-    capacity: 10,
-    status: "Active",
-    location: "Court 2",
-  },
-  {
-    id: "c6",
-    title: "Beginner Intro",
-    coach: "Thiago",
-    day: "Friday",
-    start: "5:30 PM",
-    end: "6:30 PM",
-    level: "Beginner",
-    students: 4,
-    capacity: 12,
-    status: "Cancelled",
-    location: "Court 4",
-  },
-];
 
 // ---------- Helpers ----------
 const DAYS: ClassItem["day"][] = [
@@ -148,6 +95,8 @@ function levelDotSx(level: ClassLevel) {
       return { bgcolor: "rgba(139, 92, 246, 0.75)" }; // purple
     case "Advanced":
       return { bgcolor: "rgba(139, 92, 246, 1)" }; // stronger purple
+    case "All levels":
+      return { bgcolor: "rgba(15, 23, 42, 0.45)" };
     default:
       return { bgcolor: "primary.main" };
   }
@@ -166,25 +115,175 @@ function formatUtilLabel(students: number, capacity: number) {
   return `${students}/${capacity}`;
 }
 
+function toDayName(value: string): ClassItem["day"] {
+  const [y, m, d] = value.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return DAYS[date.getDay() === 0 ? 6 : date.getDay() - 1];
+}
+
+function formatClock(time?: string) {
+  if (!time) return "—";
+  const [h, mm] = time.split(":");
+  const hour = Number(h);
+  if (Number.isNaN(hour)) return "—";
+  const minute = mm ?? "00";
+  const ampm = hour >= 12 ? "PM" : "AM";
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${minute} ${ampm}`;
+}
+
+function toMinutes(time?: string) {
+  if (!time) return Number.MAX_SAFE_INTEGER;
+  const [h, mm] = time.split(":");
+  const hour = Number(h);
+  const minute = Number(mm ?? 0);
+  if (Number.isNaN(hour) || Number.isNaN(minute))
+    return Number.MAX_SAFE_INTEGER;
+  return hour * 60 + minute;
+}
+
+function parseLevel(value?: string): ClassLevel {
+  if (value === "Beginner" || value === "Intermediate" || value === "Advanced")
+    return value;
+  if (value === "All levels") return value;
+  return "All levels";
+}
+
+function parseStatus(value?: string): ClassItem["status"] {
+  return value?.toUpperCase() === "CANCELLED" ? "Cancelled" : "Active";
+}
+
+function mapApiClass(event: ApiClassEvent): ClassItem | null {
+  if (!event.monthDate) return null;
+  const capacity = Number(event.capacity ?? 0);
+  const students = Number(event.students ?? 0);
+  const day = DAYS.includes(event.weekDay as ClassItem["day"])
+    ? (event.weekDay as ClassItem["day"])
+    : toDayName(event.monthDate);
+  return {
+    id: String(event.id),
+    title: event.title?.trim() || "Untitled Class",
+    coach: event.coach || "TBA",
+    date: event.monthDate,
+    day,
+    start: formatClock(event.startTime),
+    end: formatClock(event.endTime),
+    startMinutes: toMinutes(event.startTime),
+    level: parseLevel(event.level),
+    students: Number.isFinite(students) ? students : 0,
+    capacity: Number.isFinite(capacity) ? capacity : 0,
+    status: parseStatus(event.status),
+    location: event.location || undefined,
+  };
+}
+
+function isWithinLastDays(dateString: string, days: number) {
+  const [y, m, d] = dateString.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  const now = new Date();
+  const floorNow = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const minDate = new Date(floorNow);
+  minDate.setDate(minDate.getDate() - days);
+  return date >= minDate && date <= floorNow;
+}
+
 export default function ClassesPage() {
-  const [week, setWeek] = React.useState<string>(DEMO_WEEK_LABEL);
+  const navigate = useNavigate();
+  const role = getLoggedInRole();
+  const canCreateOrEdit = hasCreatorAccess(role);
+  const [week, setWeek] = React.useState<WeekFilter>("All Dates");
   const [coach, setCoach] = React.useState<string>("All");
   const [level, setLevel] = React.useState<string>("All");
   const [activeOnly, setActiveOnly] = React.useState<boolean>(true);
+  const [classes, setClasses] = React.useState<ClassItem[]>([]);
+  const [loading, setLoading] = React.useState<boolean>(true);
+  const [error, setError] = React.useState<string | null>(null);
 
-  const uniqueCoaches = React.useMemo(() => {
-    const s = new Set(CLASSES.map((c) => c.coach));
-    return ["All", ...Array.from(s).sort((a, b) => a.localeCompare(b))];
+  const loadClasses = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const token = getToken();
+    const currentUserId = getLoggedInUserId();
+    if (!token) {
+      setError("You are not logged in.");
+      setClasses([]);
+      setLoading(false);
+      return;
+    }
+    const participant = isParticipantRole(getLoggedInRole());
+    if (!participant && currentUserId === null) {
+      setError("Invalid session. Please sign in again.");
+      setClasses([]);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/classes`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setError(
+          data?.message?.[0] ||
+            data?.error ||
+            `Failed to load classes (${res.status})`,
+        );
+        setClasses([]);
+        return;
+      }
+
+      const raw: ApiClassEvent[] = Array.isArray(data)
+        ? data
+        : (data?.data ?? []);
+      const hasOwnerField = raw.some((c) => c.userId != null || c.user_id != null);
+      const scoped = participant
+        ? raw.filter((c) => c.isPublic === true)
+        : hasOwnerField
+          ? raw.filter((c) => {
+              const owner = Number(c.userId ?? c.user_id);
+              return Number.isFinite(owner) && owner === currentUserId;
+            })
+          : raw;
+
+      const mapped = scoped
+        .map(mapApiClass)
+        .filter((item): item is ClassItem => Boolean(item))
+        .sort((a, b) => {
+          if (a.date !== b.date) return b.date.localeCompare(a.date);
+          return b.startMinutes - a.startMinutes;
+        });
+
+      setClasses(mapped);
+    } catch {
+      setError("Network error loading classes.");
+      setClasses([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  React.useEffect(() => {
+    loadClasses();
+  }, [loadClasses]);
+
+  const uniqueCoaches = React.useMemo(() => {
+    const s = new Set(classes.map((c) => c.coach));
+    return ["All", ...Array.from(s).sort((a, b) => a.localeCompare(b))];
+  }, [classes]);
+
   const filtered = React.useMemo(() => {
-    return CLASSES.filter((c) => {
+    return classes.filter((c) => {
       if (activeOnly && c.status !== "Active") return false;
       if (coach !== "All" && c.coach !== coach) return false;
       if (level !== "All" && c.level !== level) return false;
+      if (week === "Last 7 Days" && !isWithinLastDays(c.date, 7)) return false;
+      if (week === "Last 30 Days" && !isWithinLastDays(c.date, 30))
+        return false;
       return true;
     });
-  }, [activeOnly, coach, level]);
+  }, [activeOnly, classes, coach, level, week]);
 
   const groupedByDay = React.useMemo(() => {
     const map = new Map<ClassItem["day"], ClassItem[]>();
@@ -192,7 +291,7 @@ export default function ClassesPage() {
     for (const item of filtered) map.get(item.day)?.push(item);
 
     for (const d of DAYS) {
-      map.get(d)!.sort((a, b) => `${a.start}`.localeCompare(`${b.start}`));
+      map.get(d)!.sort((a, b) => a.startMinutes - b.startMinutes);
     }
     return map;
   }, [filtered]);
@@ -237,19 +336,21 @@ export default function ClassesPage() {
               </Typography>
             </Box>
 
-            <Button
-              variant="contained"
-              size="large"
-              startIcon={<AddIcon />}
-              onClick={() => alert("TODO: Navigate to Add Class")}
-              sx={{
-                alignSelf: { xs: "flex-start", sm: "auto" },
-                borderRadius: 999,
-                px: 2,
-              }}
-            >
-              Add Class
-            </Button>
+            {canCreateOrEdit ? (
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<AddIcon />}
+                onClick={() => navigate("/classes/new")}
+                sx={{
+                  alignSelf: { xs: "flex-start", sm: "auto" },
+                  borderRadius: 999,
+                  px: 2,
+                }}
+              >
+                Add Class
+              </Button>
+            ) : null}
           </Stack>
         </Paper>
 
@@ -266,7 +367,7 @@ export default function ClassesPage() {
                 labelId="week-label"
                 label="Week"
                 value={week}
-                onChange={(e) => setWeek(String(e.target.value))}
+                onChange={(e) => setWeek(e.target.value as WeekFilter)}
                 startAdornment={
                   <CalendarMonthIcon
                     fontSize="small"
@@ -279,9 +380,9 @@ export default function ClassesPage() {
                   },
                 }}
               >
-                <MenuItem value={DEMO_WEEK_LABEL}>{DEMO_WEEK_LABEL}</MenuItem>
-                <MenuItem value={"Apr 29 – May 5"}>Apr 29 – May 5</MenuItem>
-                <MenuItem value={"May 6 – May 12"}>May 6 – May 12</MenuItem>
+                <MenuItem value={"All Dates"}>All Dates</MenuItem>
+                <MenuItem value={"Last 7 Days"}>Last 7 Days</MenuItem>
+                <MenuItem value={"Last 30 Days"}>Last 30 Days</MenuItem>
               </Select>
             </FormControl>
 
@@ -343,6 +444,12 @@ export default function ClassesPage() {
           </Stack>
         </CardShell>
 
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+
         {/* Content */}
         <Paper sx={{ p: { xs: 2, sm: 3 }, borderRadius: 3 }}>
           <Box sx={{ mb: 1 }}>
@@ -359,7 +466,14 @@ export default function ClassesPage() {
 
           <Divider sx={{ my: 2 }} />
 
-          {emptyState ? (
+          {loading ? (
+            <Box sx={{ py: 6, textAlign: "center" }}>
+              <CircularProgress size={28} sx={{ mb: 1.5 }} />
+              <Typography variant="body2" color="text.secondary">
+                Loading latest classes...
+              </Typography>
+            </Box>
+          ) : emptyState ? (
             <Box sx={{ py: 6, textAlign: "center" }}>
               <Typography
                 variant="h3"
@@ -373,6 +487,7 @@ export default function ClassesPage() {
               <Button
                 variant="outlined"
                 onClick={() => {
+                  setWeek("All Dates");
                   setCoach("All");
                   setLevel("All");
                   setActiveOnly(true);
@@ -408,7 +523,12 @@ export default function ClassesPage() {
 
                     <Stack spacing={1.25}>
                       {items.map((c) => (
-                        <ClassRow key={c.id} item={c} />
+                        <ClassRow
+                          key={c.id}
+                          item={c}
+                          canEdit={canCreateOrEdit}
+                          onEdit={() => navigate(`/classes/${c.id}/edit`)}
+                        />
                       ))}
                     </Stack>
 
@@ -443,7 +563,15 @@ function CardShell({ children }: { children: React.ReactNode }) {
 }
 
 // ---------- Row component ----------
-function ClassRow({ item }: { item: ClassItem }) {
+function ClassRow({
+  item,
+  canEdit,
+  onEdit,
+}: {
+  item: ClassItem;
+  canEdit: boolean;
+  onEdit: () => void;
+}) {
   const isFull = item.students >= item.capacity;
   const utilization = pct(item.students, item.capacity);
 
@@ -635,15 +763,17 @@ function ClassRow({ item }: { item: ClassItem }) {
             View
           </Button>
 
-          <Button
-            size="small"
-            variant="contained"
-            onClick={() => alert(`TODO: Edit class ${item.id}`)}
-            disabled={item.status !== "Active"}
-            sx={{ borderRadius: 999 }}
-          >
-            Edit
-          </Button>
+          {canEdit ? (
+            <Button
+              size="small"
+              variant="contained"
+              onClick={onEdit}
+              disabled={item.status !== "Active"}
+              sx={{ borderRadius: 999 }}
+            >
+              Edit
+            </Button>
+          ) : null}
         </Stack>
       </Box>
     </Box>

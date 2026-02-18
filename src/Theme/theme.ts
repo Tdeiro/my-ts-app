@@ -79,9 +79,9 @@ export const theme = createTheme({
         containedPrimary: {
           backgroundImage: "linear-gradient(135deg, #BD2AF7 0%, #A855F8 55%, #943AC8 100%)",
           color: "#FFFFFF",
-        },
-        containedPrimaryHover: {
-          // (MUI doesn't support this key, so we do it via &:hover below)
+          "&:hover": {
+            filter: "brightness(0.97)",
+          },
         },
 
         contained: {

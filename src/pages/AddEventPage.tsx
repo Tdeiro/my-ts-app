@@ -18,6 +18,7 @@ import {
   Paper,
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
+import { getToken } from "../auth/tokens";
 
 type TournamentForm = {
   name: string;
@@ -27,11 +28,11 @@ type TournamentForm = {
   timezone: string;
   locationName: string;
   address: string;
-  startDate: string; // yyyy-mm-dd
-  endDate: string; // yyyy-mm-dd
-  startTime: string; // hh:mm
-  endTime: string; // hh:mm
-  registrationDeadline: string; // yyyy-mm-dd
+  startDate: string;
+  endDate: string;
+  startTime: string;
+  endTime: string;
+  registrationDeadline: string;
   capacity: number;
   entryFee: number;
   currency: "AUD" | "USD" | "EUR" | "BRL";
@@ -145,12 +146,66 @@ export default function AddTournamentPage() {
   const handleCancel = () => navigate(-1);
 
   const handleSubmit = async () => {
+    const token = getToken();
+
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+
     setSaving(true);
+
     try {
-      // MVP stub — replace with your API call later
-      await new Promise((r) => setTimeout(r, 600));
-      console.log("Create tournament payload:", form);
-      navigate("/tournaments"); // nicer flow than dashboard
+      const payload = {
+        name: form.name.trim(),
+        eventType: "TOURNAMENT",
+        sport: form.sport.toUpperCase(),
+        format: form.format,
+        level: form.level,
+        timezone: form.timezone,
+        locationName: form.locationName,
+        address: form.address,
+        startDate: form.startDate,
+        endDate: form.endDate,
+        startTime: `${form.startTime}:00`,
+        endTime: `${form.endTime}:00`,
+        registrationDeadline: form.registrationDeadline,
+        capacity: form.capacity,
+        entryFee: form.entryFee,
+        currency: form.currency,
+        description: form.description,
+        isPublic: form.isPublic,
+        allowWaitlist: form.allowWaitlist,
+        requireApproval: form.requireApproval,
+      };
+
+      const res = await fetch("/events", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        console.error("Create event failed:", data);
+        if (res.status === 401) {
+          navigate("/login");
+          return;
+        }
+        throw new Error(data?.message || "Failed to create event");
+      }
+
+      console.log("Created event:", data);
+
+      // ✅ Success → go to tournaments list
+      navigate("/tournaments");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to create event");
     } finally {
       setSaving(false);
     }

@@ -13,6 +13,14 @@ import EventRoundedIcon from "@mui/icons-material/EventRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 
+type SelectActionCardProps = {
+  upcomingTitle?: string;
+  upcomingSubtitle?: string;
+  todaySessions?: number;
+  todayStudents?: number;
+  activeTournaments?: number;
+};
+
 function StatCard({
   title,
   accent = false,
@@ -27,9 +35,9 @@ function StatCard({
   return (
     <Card
       sx={{
-        flex: "1 1 0",
-        minWidth: 260,
-        maxWidth: 380,
+        flex: { xs: "1 1 100%", md: "1 1 0" },
+        minWidth: { xs: "100%", md: 260 },
+        maxWidth: { xs: "100%", md: 380 },
         minHeight: 140,
         borderRadius: 2,
         position: "relative",
@@ -59,7 +67,7 @@ function StatCard({
     >
       <CardContent
         sx={{
-          p: 3,
+          p: { xs: 2, sm: 3 },
           height: "100%",
           display: "flex",
           flexDirection: "column",
@@ -97,9 +105,13 @@ function StatCard({
   );
 }
 
-export default function TopStatCardsLikeDesign() {
-  const theme = useTheme();
-
+export default function TopStatCardsLikeDesign({
+  upcomingTitle = "No upcoming events",
+  upcomingSubtitle = "—",
+  todaySessions = 0,
+  todayStudents = 0,
+  activeTournaments = 0,
+}: SelectActionCardProps) {
   return (
     <Stack
       direction="row"
@@ -142,11 +154,11 @@ export default function TopStatCardsLikeDesign() {
                 textOverflow: "ellipsis",
               }}
             >
-              Tennis Tournament
+              {upcomingTitle}
             </Typography>
 
             <Typography variant="body2" color="text.secondary">
-              In 2 days
+              {upcomingSubtitle}
             </Typography>
           </Box>
         </Stack>
@@ -155,7 +167,7 @@ export default function TopStatCardsLikeDesign() {
       {/* Today's Classes */}
       <StatCard title="Today’s Classes">
         <Stack
-          direction="row"
+          direction={{ xs: "column", sm: "row" }}
           alignItems="center"
           spacing={2.5}
           sx={{ width: "100%" }}
@@ -177,7 +189,7 @@ export default function TopStatCardsLikeDesign() {
 
             <Stack direction="row" alignItems="baseline" spacing={1}>
               <Typography variant="h3" sx={{ lineHeight: 1, fontWeight: 900 }}>
-                5
+                {todaySessions}
               </Typography>
               <Typography
                 variant="body2"
@@ -189,11 +201,11 @@ export default function TopStatCardsLikeDesign() {
             </Stack>
           </Stack>
 
-          <Divider orientation="vertical" flexItem sx={{ opacity: 0.7 }} />
+          <Divider flexItem sx={{ opacity: 0.7, width: "100%" }} />
 
           <Stack direction="row" alignItems="baseline" spacing={1}>
             <Typography variant="h3" sx={{ lineHeight: 1, fontWeight: 900 }}>
-              32
+              {todayStudents}
             </Typography>
             <Typography
               variant="body2"
@@ -230,7 +242,7 @@ export default function TopStatCardsLikeDesign() {
 
           <Stack direction="row" alignItems="baseline" spacing={1.25}>
             <Typography variant="h3" sx={{ lineHeight: 1, fontWeight: 900 }}>
-              2
+              {activeTournaments}
             </Typography>
             <Typography variant="body2" color="text.secondary">
               Ongoing

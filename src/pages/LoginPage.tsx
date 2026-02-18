@@ -1,5 +1,7 @@
-import { useNavigate } from "react-router";
+import * as React from "react";
+import { useNavigate } from "react-router-dom";
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -10,13 +12,59 @@ import {
   Typography,
 } from "@mui/material";
 import Logo from "../assets/onora.png";
+import { setToken } from "../auth/tokens";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
 
-  const handleRedirect = () => {
-    navigate("/dashboard");
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      setError("Please enter email and password.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch("/login/signin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanEmail, password }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        const msg =
+          data?.message?.[0] ||
+          data?.error ||
+          data?.detail ||
+          "Invalid email or password.";
+        setError(msg);
+        return;
+      }
+
+      if (!data?.token) {
+        setError("Login failed: backend did not return a token.");
+        return;
+      }
+
+      setToken(data.token);
+      navigate("/dashboard");
+    } catch {
+      setError("Unable to reach server. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
+
   return (
     <Box
       sx={{
@@ -46,14 +94,23 @@ export default function LoginPage() {
             </Box>
 
             {/* Form */}
+            {error ? (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                {error}
+              </Alert>
+            ) : null}
+
             <Box
               component="form"
               noValidate
+              onSubmit={handleSubmit}
               sx={{ display: "flex", flexDirection: "column", gap: 2 }}
             >
               <TextField
                 label="Email address"
                 type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 fullWidth
                 autoComplete="email"
               />
@@ -61,6 +118,8 @@ export default function LoginPage() {
               <TextField
                 label="Password"
                 type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 fullWidth
                 autoComplete="current-password"
               />
@@ -76,9 +135,10 @@ export default function LoginPage() {
                 color="primary"
                 size="large"
                 fullWidth
-                onClick={handleRedirect}
+                type="submit"
+                disabled={loading || !email.trim() || !password}
               >
-                Sign In
+                {loading ? "Signing in..." : "Sign In"}
               </Button>
 
               <Divider sx={{ my: 2 }}></Divider>

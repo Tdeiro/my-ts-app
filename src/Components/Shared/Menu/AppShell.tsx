@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  Avatar,
   Box,
   CssBaseline,
   AppBar,
@@ -12,7 +13,14 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Stack,
+  Menu,
+  MenuItem,
+  TextField,
   Tooltip,
+  Typography,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
 
 import MenuIcon from "@mui/icons-material/Menu";
@@ -21,8 +29,12 @@ import DashboardIcon from "@mui/icons-material/DashboardRounded";
 import EmojiEventsIcon from "@mui/icons-material/EmojiEventsRounded";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonthRounded";
 import SettingsIcon from "@mui/icons-material/SettingsRounded";
+import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
+import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import { useLocation, useNavigate } from "react-router-dom";
 import Logo from "../../../assets/onora.png";
+import { clearToken, getToken } from "../../../auth/tokens";
 
 const drawerWidth = 272;
 
@@ -56,8 +68,33 @@ const navItems: NavItem[] = [
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = React.useState(true);
+  const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const [menuAnchor, setMenuAnchor] = React.useState<null | HTMLElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+  const userName = React.useMemo(() => {
+    const token = getToken();
+    if (!token) return "User";
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1] ?? ""));
+      const fullName = String(payload?.fullName ?? "").trim();
+      if (fullName) return fullName;
+      const email = String(payload?.email ?? "").trim();
+      if (email.includes("@")) return email.split("@")[0];
+      return "User";
+    } catch {
+      return "User";
+    }
+  }, []);
+
+  const handleLogout = () => {
+    setMenuAnchor(null);
+    clearToken();
+    navigate("/login", { replace: true });
+  };
 
   const isActive = (item: NavItem) => {
     if (item.match === "exact") return location.pathname === item.to;
@@ -65,6 +102,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       location.pathname === item.to ||
       location.pathname.startsWith(item.to + "/")
     );
+  };
+
+  const handleToggleMenu = () => {
+    if (isMobile) {
+      setMobileOpen((v) => !v);
+      return;
+    }
+    setOpen((v) => !v);
+  };
+
+  const handleNavigate = (to: string) => {
+    navigate(to);
+    if (isMobile) setMobileOpen(false);
   };
 
   return (
@@ -78,16 +128,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     >
       <CssBaseline />
 
-      <Box sx={{ p: { xs: 1.5, md: 2.5 } }}>
+      <Box sx={{ p: { xs: 0, md: 2.5 } }}>
         <Box
           sx={{
             mx: "auto",
             maxWidth: 1440,
-            minHeight: "calc(100vh - 40px)",
+            minHeight: { xs: "100vh", md: "calc(100vh - 40px)" },
             bgcolor: "background.paper",
             border: "1px solid",
             borderColor: "divider",
-            borderRadius: 2,
+            borderRadius: { xs: 0, md: 2 },
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
@@ -107,16 +157,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <Toolbar
               disableGutters
               sx={{
-                px: 2,
+                px: { xs: 1.25, sm: 2 },
                 gap: 1,
                 minHeight: 64,
                 "@media (min-width:600px)": { minHeight: 64 },
                 alignItems: "center",
               }}
             >
-              <Tooltip title={open ? "Collapse menu" : "Expand menu"} arrow>
+              <Tooltip
+                title={
+                  isMobile
+                    ? mobileOpen
+                      ? "Close menu"
+                      : "Open menu"
+                    : open
+                      ? "Collapse menu"
+                      : "Expand menu"
+                }
+                arrow
+              >
                 <IconButton
-                  onClick={() => setOpen((v) => !v)}
+                  onClick={handleToggleMenu}
                   edge="start"
                   sx={{
                     mr: 0.5,
@@ -148,16 +209,92 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
               <Box sx={{ flexGrow: 1 }} />
 
-              {/* Optional: tiny coral "status dot" (ties to logo dot) */}
-              <Box
+              <TextField
+                size="small"
+                placeholder="Search classes, tournaments..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
                 sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: "secondary.main",
-                  opacity: 0.9,
+                  display: { xs: "none", sm: "block" },
+                  minWidth: { xs: 150, sm: 260, md: 320 },
+                  maxWidth: 380,
+                  mr: 1,
+                  "& .MuiOutlinedInput-root": {
+                    bgcolor: "rgba(255,255,255,0.75)",
+                    borderRadius: 999,
+                  },
+                }}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <SearchRoundedIcon
+                        fontSize="small"
+                        style={{ marginRight: 8, opacity: 0.6 }}
+                      />
+                    ),
+                  },
                 }}
               />
+
+              <Stack direction="row" spacing={1.25} alignItems="center">
+                <Box
+                  role="button"
+                  onClick={(e) => setMenuAnchor(e.currentTarget)}
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    px: 1,
+                    py: 0.5,
+                    borderRadius: 999,
+                    cursor: "pointer",
+                    "&:hover": { bgcolor: "rgba(139,92,246,0.08)" },
+                  }}
+                >
+                  <Avatar
+                    sx={{
+                      width: 34,
+                      height: 34,
+                      bgcolor: "rgba(139, 92, 246, 0.18)",
+                      color: "primary.main",
+                      fontWeight: 700,
+                      fontSize: 14,
+                    }}
+                  >
+                    {userName.charAt(0).toUpperCase()}
+                  </Avatar>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      display: { xs: "none", sm: "block" },
+                      fontWeight: 700,
+                      maxWidth: 160,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={userName}
+                  >
+                    {userName}
+                  </Typography>
+                  <KeyboardArrowDownRoundedIcon fontSize="small" />
+                </Box>
+              </Stack>
+
+              <Menu
+                anchorEl={menuAnchor}
+                open={Boolean(menuAnchor)}
+                onClose={() => setMenuAnchor(null)}
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                transformOrigin={{ vertical: "top", horizontal: "right" }}
+              >
+                <MenuItem onClick={handleLogout}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <LogoutRoundedIcon fontSize="small" />
+                    <span>Logout</span>
+                  </Stack>
+                </MenuItem>
+              </Menu>
             </Toolbar>
           </AppBar>
 
@@ -165,15 +302,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <Box sx={{ display: "flex", flex: 1, minHeight: 0 }}>
             {/* Sidebar */}
             <Drawer
-              variant="persistent"
-              open={open}
+              variant={isMobile ? "temporary" : "persistent"}
+              open={isMobile ? mobileOpen : open}
+              onClose={() => setMobileOpen(false)}
               sx={{
-                width: open ? drawerWidth : 0,
+                width: isMobile ? 0 : open ? drawerWidth : 0,
                 flexShrink: 0,
                 "& .MuiDrawer-paper": {
-                  width: drawerWidth,
+                  width: { xs: "86vw", sm: 320, md: drawerWidth },
                   boxSizing: "border-box",
-                  position: "relative",
+                  position: isMobile ? "fixed" : "relative",
                   height: "100%",
                   bgcolor: "#FFFFFF",
                   borderRight: "1px solid rgba(139, 92, 246, 0.10)",
@@ -197,7 +335,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
                 <Tooltip title="Collapse" arrow>
                   <IconButton
-                    onClick={() => setOpen(false)}
+                    onClick={() => (isMobile ? setMobileOpen(false) : setOpen(false))}
                     sx={{
                       borderRadius: 2,
                       "&:hover": { bgcolor: "rgba(139, 92, 246, 0.08)" },
@@ -219,7 +357,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     <ListItem key={item.to} disablePadding sx={{ mb: 0.5 }}>
                       <ListItemButton
                         selected={active}
-                        onClick={() => navigate(item.to)}
+                        onClick={() => handleNavigate(item.to)}
                         sx={{
                           borderRadius: 2,
                           px: 1.25,
@@ -284,7 +422,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <List sx={{ px: 1, py: 1 }}>
                 <ListItem disablePadding>
                   <ListItemButton
-                    onClick={() => navigate("/settings")}
+                    onClick={() => handleNavigate("/settings")}
                     sx={{
                       borderRadius: 2,
                       px: 1.25,
@@ -315,7 +453,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 minHeight: 0,
                 bgcolor: "transparent",
                 // consistent page padding
-                p: { xs: 2, md: 3 },
+                p: { xs: 1.5, md: 3 },
               }}
             >
               {children}
