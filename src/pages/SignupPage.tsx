@@ -27,11 +27,7 @@ import type { AccountType, FormErrors, SignupForm } from "../Utils/FormTypes";
 import { validateInput } from "../Utils/FormValidationUtil";
 import Logo from "../assets/onora.png";
 
-const ACCOUNT_TYPE_TO_ROLE_ID: Record<AccountType, number> = {
-  participant: 1,
-  coach: 3,
-  organization: 4,
-};
+const REGISTER_ROLE_IDS = [1, 2];
 
 export default function SignupPage() {
   const navigate = useNavigate();
@@ -106,9 +102,9 @@ export default function SignupPage() {
         email: form.email.trim().toLowerCase(),
         fullName: form.name.trim(), // backend expects fullName
         phone: form.phone.trim(),
-        roleId: ACCOUNT_TYPE_TO_ROLE_ID[form.accountType],
+        roleIds: REGISTER_ROLE_IDS,
         password: form.password,
-        billingInfo: form.accountType === "organization", // optional - adjust if needed
+        billingInfo: false,
       };
 
       const res = await fetch(`/login/signup`, {

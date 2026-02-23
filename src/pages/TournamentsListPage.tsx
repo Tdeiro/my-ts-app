@@ -396,28 +396,58 @@ export default function TournamentsListPage() {
                           {t.startDate} • {t.entryFee} {t.currency}
                         </Typography>
 
-                        <Button
-                          variant="outlined"
-                          onClick={() =>
-                            navigate(
-                              canCreate
-                                ? `/tournaments/${t.id}/setup`
-                                : "/tournaments",
-                            )
-                          }
-                          sx={{
-                            borderRadius: 999,
-                            borderColor: "rgba(139,92,246,0.35)",
-                            color: "primary.main",
-                            "&:hover": {
-                              borderColor: "primary.main",
-                              backgroundColor: "rgba(139,92,246,0.08)",
-                              boxShadow: "0 0 0 3px rgba(255, 107, 92, 0.12)",
-                            },
-                          }}
-                        >
-                          {canCreate ? "Manage" : "View"}
-                        </Button>
+                        {canCreate ? (
+                          <>
+                            <Button
+                              variant="outlined"
+                              onClick={() => navigate(`/tournaments/${t.id}/edit`)}
+                              sx={{
+                                borderRadius: 999,
+                                borderColor: "rgba(15,23,42,0.20)",
+                                color: "text.primary",
+                                "&:hover": {
+                                  borderColor: "rgba(15,23,42,0.40)",
+                                  backgroundColor: "rgba(15,23,42,0.04)",
+                                },
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="outlined"
+                              onClick={() => navigate(`/tournaments/${t.id}/setup`)}
+                              sx={{
+                                borderRadius: 999,
+                                borderColor: "rgba(139,92,246,0.35)",
+                                color: "primary.main",
+                                "&:hover": {
+                                  borderColor: "primary.main",
+                                  backgroundColor: "rgba(139,92,246,0.08)",
+                                  boxShadow: "0 0 0 3px rgba(255, 107, 92, 0.12)",
+                                },
+                              }}
+                            >
+                              Manage
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outlined"
+                            onClick={() => navigate("/tournaments")}
+                            sx={{
+                              borderRadius: 999,
+                              borderColor: "rgba(139,92,246,0.35)",
+                              color: "primary.main",
+                              "&:hover": {
+                                borderColor: "primary.main",
+                                backgroundColor: "rgba(139,92,246,0.08)",
+                                boxShadow: "0 0 0 3px rgba(255, 107, 92, 0.12)",
+                              },
+                            }}
+                          >
+                            View
+                          </Button>
+                        )}
                       </Stack>
                     </Box>
                   );

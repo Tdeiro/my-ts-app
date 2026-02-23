@@ -1,16 +1,5 @@
-type AccountType = "participant" | "coach" | "organization";
+import type { FormErrors, SignupForm } from "./FormTypes";
 
-type FormErrors = Partial<Record<keyof SignupForm, string>>;
-
-type SignupForm = {
-name: string;
-email: string;
-phone: string;
-accountType: AccountType;
-organizationName: string;
-password: string;
-confirmPassword: string;
-};
 
 export const validateInput = (data: SignupForm): FormErrors => {
     const next: FormErrors = {};
@@ -38,3 +27,5 @@ export const validateInput = (data: SignupForm): FormErrors => {
 
     return next;
 };
+
+

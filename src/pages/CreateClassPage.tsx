@@ -394,7 +394,10 @@ export default function CreateClassPage() {
                 variant="contained"
                 onClick={handleSubmit}
                 disabled={
-                  saving || loadingClass || !form.title.trim() || !form.monthDate
+                  saving ||
+                  loadingClass ||
+                  !form.title.trim() ||
+                  !form.monthDate
                 }
                 sx={{ borderRadius: 999 }}
               >

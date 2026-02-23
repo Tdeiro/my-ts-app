@@ -49,6 +49,14 @@ function App() {
               }
             />
             <Route
+              path="/tournaments/:id/edit"
+              element={
+                <RequireCreateAccess>
+                  <AddEventPage />
+                </RequireCreateAccess>
+              }
+            />
+            <Route
               path="/tournaments/:id/setup"
               element={
                 <RequireCreateAccess>
