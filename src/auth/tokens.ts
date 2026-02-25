@@ -45,10 +45,15 @@ export function getLoggedInRole(): string | null {
   const payload = parseJwtPayload(token);
   if (!payload) return null;
 
-  const rawRole =
-    payload.role ??
-    payload.roleName ??
-    (Array.isArray(payload.roles) ? payload.roles[0] : null);
+  const rolesArray = Array.isArray(payload.roles)
+    ? payload.roles.map((role) => String(role).trim().toLowerCase())
+    : [];
+  const roleFromArray = rolesArray.includes("player")
+    ? "player"
+    : rolesArray.includes("participant")
+      ? "participant"
+      : rolesArray[0];
+  const rawRole = payload.role ?? payload.roleName ?? roleFromArray ?? null;
   if (rawRole == null) return null;
   return String(rawRole).trim().toLowerCase();
 }

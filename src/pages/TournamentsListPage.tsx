@@ -22,7 +22,6 @@ import {
   getLoggedInRole,
   getLoggedInUserId,
   hasCreatorAccess,
-  isParticipantRole,
   getToken,
 } from "../auth/tokens";
 
@@ -33,6 +32,7 @@ type ApiEvent = {
   id: number;
   userId?: number | string;
   user_id?: number | string;
+  createdBy?: number | string;
   name: string;
   eventType: string;
   sport?: string;
@@ -40,6 +40,7 @@ type ApiEvent = {
   level?: string;
   locationName?: string;
   startDate: string;
+  status?: string;
   entryFee?: number | string;
   currency?: string;
   isPublic?: boolean;
@@ -50,6 +51,7 @@ type ApiEvent = {
 =========================== */
 type Tournament = {
   id: string;
+  ownerId: number | null;
   name: string;
   sport: string;
   format: string;
@@ -62,13 +64,26 @@ type Tournament = {
   isPublic: boolean;
 };
 
+function formatTournamentLevelLabel(level?: string): string {
+  const raw = String(level ?? "").trim();
+  if (!raw) return "Open";
+  const normalized = raw.toUpperCase().replaceAll("_", " ");
+  if (normalized === "ALL LEVELS") return "Open";
+  return raw
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function mapApiEvent(e: ApiEvent): Tournament {
+  const ownerRaw = e.createdBy ?? e.userId ?? e.user_id;
+  const ownerId = ownerRaw == null ? null : Number(ownerRaw);
   return {
     id: String(e.id),
+    ownerId: Number.isFinite(ownerId) ? ownerId : null,
     name: e.name ?? "Untitled",
     sport: e.sport ?? "Other",
     format: e.format ?? "-",
-    level: e.level ?? "All levels",
+    level: formatTournamentLevelLabel(e.level ?? "All levels"),
     locationName: e.locationName ?? "-",
     startDate: e.startDate,
     entryFee:
@@ -97,6 +112,7 @@ function statusChipSx() {
 export default function TournamentsListPage() {
   const navigate = useNavigate();
   const role = getLoggedInRole();
+  const currentUserId = getLoggedInUserId();
   const canCreate = hasCreatorAccess(role);
 
   const [query, setQuery] = React.useState("");
@@ -111,14 +127,12 @@ export default function TournamentsListPage() {
     setError(null);
 
     const token = getToken();
-    const currentUserId = getLoggedInUserId();
-    const participant = isParticipantRole(getLoggedInRole());
     if (!token) {
       setError("You are not logged in.");
       setLoading(false);
       return;
     }
-    if (!participant && currentUserId === null) {
+    if (currentUserId === null) {
       setError("Invalid session. Please sign in again.");
       setLoading(false);
       return;
@@ -142,19 +156,13 @@ export default function TournamentsListPage() {
       }
 
       const raw: ApiEvent[] = Array.isArray(data) ? data : (data?.data ?? []);
-
-      const hasOwnerField = raw.some((e) => e.userId != null || e.user_id != null);
-      const scoped = participant
-        ? raw.filter((e) => e.isPublic === true)
-        : hasOwnerField
-          ? raw.filter((e) => {
-              const owner = Number(e.userId ?? e.user_id);
-              return Number.isFinite(owner) && owner === currentUserId;
-            })
-          : raw;
-
-      const mapped = scoped
+      const mapped = raw
         .filter((e) => e.eventType?.toUpperCase() === "TOURNAMENT")
+        .filter((e) => e.isPublic !== false)
+        .filter((e) => {
+          const status = String(e.status ?? "").toUpperCase();
+          return !status || ["OPEN", "ACTIVE", "ONGOING", "REGISTRATION"].includes(status);
+        })
         .map(mapApiEvent)
         .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
 
@@ -310,6 +318,7 @@ export default function TournamentsListPage() {
               <Stack sx={{ p: 2.5 }} spacing={1.25}>
                 {filtered.map((t) => {
                   const status = statusChipSx();
+                  const isOwner = t.ownerId != null && t.ownerId === Number(currentUserId);
 
                   return (
                     <Box
@@ -396,7 +405,7 @@ export default function TournamentsListPage() {
                           {t.startDate} • {t.entryFee} {t.currency}
                         </Typography>
 
-                        {canCreate ? (
+                        {canCreate && isOwner ? (
                           <>
                             <Button
                               variant="outlined"
@@ -433,7 +442,11 @@ export default function TournamentsListPage() {
                         ) : (
                           <Button
                             variant="outlined"
-                            onClick={() => navigate("/tournaments")}
+                            onClick={() =>
+                              navigate(
+                                `/tournaments/invite?inviteTournamentId=${encodeURIComponent(t.id)}`,
+                              )
+                            }
                             sx={{
                               borderRadius: 999,
                               borderColor: "rgba(139,92,246,0.35)",

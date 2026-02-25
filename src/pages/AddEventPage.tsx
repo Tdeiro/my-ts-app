@@ -20,10 +20,12 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
   Chip,
   Paper,
 } from "@mui/material";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useNavigate, useParams } from "react-router-dom";
 import { getToken } from "../auth/tokens";
 
@@ -31,8 +33,8 @@ const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
 type TournamentForm = {
   name: string;
-  sport: "Tennis" | "Beach Tennis" | "Padel" | "Pickleball" | "Other";
-  level: "Beginner" | "Intermediate" | "Advanced" | "All levels";
+  sport: "" | "Tennis" | "Beach Tennis" | "Padel" | "Pickleball" | "Other";
+  level: "" | "Beginner" | "Intermediate" | "Advanced" | "All levels";
   timezone: string;
   locationName: string;
   address: string;
@@ -43,7 +45,7 @@ type TournamentForm = {
   registrationDeadline: string;
   capacity: number;
   entryFee: number;
-  currency: "AUD" | "USD" | "EUR" | "BRL";
+  currency: "" | "AUD" | "USD" | "EUR" | "BRL";
   description: string;
   isPublic: boolean;
   allowWaitlist: boolean;
@@ -60,32 +62,34 @@ type TournamentCategoryForm = {
   maxAge: string;
   gender: "Women" | "Men" | "Mixed" | "Open";
   expandToAllGenders: boolean;
+  expandToMaleFemale: boolean;
+  isKidsCategory: boolean;
 };
 
 const initialForm: TournamentForm = {
-  name: "Spring Open",
-  sport: "Tennis",
-  level: "All levels",
-  timezone: "Australia/Sydney",
-  locationName: "Sydney Tennis Centre",
-  address: "Olympic Blvd, Sydney NSW",
-  startDate: "2026-04-22",
-  endDate: "2026-04-22",
-  startTime: "09:00",
-  endTime: "17:00",
-  registrationDeadline: "2026-04-20",
-  capacity: 64,
-  entryFee: 25,
-  currency: "AUD",
-  description:
-    "A friendly weekend tournament. Round-robin groups + knockout finals. Bring water and sunscreen.",
+  name: "",
+  sport: "",
+  level: "",
+  timezone: "",
+  locationName: "",
+  address: "",
+  startDate: "",
+  endDate: "",
+  startTime: "",
+  endTime: "",
+  registrationDeadline: "",
+  capacity: 0,
+  entryFee: 0,
+  currency: "",
+  description: "",
   isPublic: true,
-  allowWaitlist: true,
+  allowWaitlist: false,
   requireApproval: false,
   tournamentStage: "REGISTRATION",
 };
 
 const SPORT_TO_API_VALUE: Record<TournamentForm["sport"], string> = {
+  "": "OTHER",
   Tennis: "TENNIS",
   "Beach Tennis": "BEACH_TENNIS",
   Padel: "PADEL",
@@ -102,6 +106,8 @@ function newCategory(): TournamentCategoryForm {
     maxAge: "",
     gender: "Open",
     expandToAllGenders: false,
+    expandToMaleFemale: false,
+    isKidsCategory: false,
   };
 }
 
@@ -110,6 +116,68 @@ function formatAgeRange(category: TournamentCategoryForm): string {
   if (category.minAge) return `${category.minAge}+`;
   if (category.maxAge) return `up to ${category.maxAge}`;
   return "All ages";
+}
+
+function formatTournamentLevelLabel(level?: string): string {
+  const raw = String(level ?? "").trim();
+  if (!raw) return "Open";
+  const normalized = raw.toUpperCase().replaceAll("_", " ");
+  if (normalized === "ALL LEVELS") return "Open";
+  return raw
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatCategoryLevelLabel(level: TournamentCategoryForm["level"]): string {
+  const normalized = String(level).toUpperCase().replaceAll("_", " ");
+  if (normalized === "ALL LEVELS") return "Open";
+  return normalized
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function getCategoryGenderSummary(category: TournamentCategoryForm): string {
+  if (category.expandToAllGenders) return "Men/Women/Mixed";
+  if (category.expandToMaleFemale) return "Men/Women";
+  return category.gender;
+}
+
+function buildAutoCategoryName(category: TournamentCategoryForm): string {
+  return formatCategoryLevelLabel(category.level);
+}
+
+function mapApiTournamentLevel(level?: string): TournamentForm["level"] {
+  const normalized = String(level ?? "").toUpperCase().replaceAll("_", " ").trim();
+  if (normalized === "BEGINNER") return "Beginner";
+  if (normalized === "INTERMEDIATE") return "Intermediate";
+  if (normalized === "ADVANCED") return "Advanced";
+  return "All levels";
+}
+
+function getTodayIsoDate(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function validateTournamentBasics(form: TournamentForm): string | null {
+  const today = getTodayIsoDate();
+  if (!form.name.trim()) return "Tournament name is required.";
+  if (!form.sport) return "Sport is required.";
+  if (!form.level) return "Level is required.";
+  if (!form.timezone) return "Timezone is required.";
+  if (!form.startDate) return "Start date is required.";
+  if (form.startDate < today) return "Start date cannot be before today.";
+  if (!form.endDate) return "End date is required.";
+  if (form.endDate < form.startDate) return "End date must be on or after start date.";
+  if (!form.startTime) return "Start time is required.";
+  if (!form.endTime) return "End time is required.";
+  if (form.startDate === form.endDate && form.endTime <= form.startTime) {
+    return "End time must be after start time for the same day.";
+  }
+  return null;
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -181,6 +249,8 @@ export default function AddTournamentPage() {
   const [inviteLink, setInviteLink] = React.useState("");
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const todayIsoDate = React.useMemo(() => getTodayIsoDate(), []);
+  const basicsValidationError = React.useMemo(() => validateTournamentBasics(form), [form]);
 
   React.useEffect(() => {
     if (!isEditMode || !id) return;
@@ -237,7 +307,7 @@ export default function AddTournamentPage() {
           ...prev,
           name: String(selected.name ?? ""),
           sport,
-          level: String(selected.level ?? "All levels") as TournamentForm["level"],
+          level: mapApiTournamentLevel(selected.level),
           timezone: String(selected.timezone ?? prev.timezone),
           locationName: String(selected.locationName ?? ""),
           address: String(selected.address ?? ""),
@@ -268,6 +338,8 @@ export default function AddTournamentPage() {
           maxAge: c.maxAge == null ? "" : String(c.maxAge),
           gender: String(c.gender ?? "Open") as TournamentCategoryForm["gender"],
           expandToAllGenders: false,
+          expandToMaleFemale: false,
+          isKidsCategory: false,
         }));
         setSavedCategories(mappedCategories);
         setLoadedCategoryIds(
@@ -307,28 +379,54 @@ export default function AddTournamentPage() {
     };
 
   const handleCancel = () => navigate(-1);
+  const handleStepOneNext = () => {
+    setStatusMessage(null);
+    const validationError = validateTournamentBasics(form);
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+    setErrorMessage(null);
+    setStep(2);
+  };
 
   const toggleGenderVariants = () => {
     setDraftCategory((prev) => ({
       ...prev,
       expandToAllGenders: !prev.expandToAllGenders,
+      expandToMaleFemale: prev.expandToAllGenders ? prev.expandToMaleFemale : false,
+    }));
+  };
+
+  const toggleMaleFemaleVariants = () => {
+    setDraftCategory((prev) => ({
+      ...prev,
+      expandToMaleFemale: !prev.expandToMaleFemale,
+      expandToAllGenders: prev.expandToMaleFemale ? prev.expandToAllGenders : false,
+    }));
+  };
+
+  const toggleKidsCategory = () => {
+    setDraftCategory((prev) => ({
+      ...prev,
+      isKidsCategory: !prev.isKidsCategory,
+      maxAge: prev.isKidsCategory ? "" : "12",
     }));
   };
 
   const addCategory = () => {
     const cleanName = draftCategory.name.trim();
-    if (!cleanName) {
-      setErrorMessage("Category name is required before adding.");
-      return;
-    }
-
     setErrorMessage(null);
+    const normalizedDraft = draftCategory.isKidsCategory
+      ? { ...draftCategory, maxAge: draftCategory.maxAge || "12" }
+      : draftCategory;
+    const finalName = cleanName || buildAutoCategoryName(normalizedDraft);
 
     if (editingCategoryId) {
       setSavedCategories((prev) =>
         prev.map((item) =>
           item.id === editingCategoryId
-            ? { ...draftCategory, id: editingCategoryId, name: cleanName }
+            ? { ...normalizedDraft, id: editingCategoryId, name: finalName }
             : item,
         ),
       );
@@ -337,9 +435,9 @@ export default function AddTournamentPage() {
       setSavedCategories((prev) => [
         ...prev,
         {
-          ...draftCategory,
+          ...normalizedDraft,
           id: crypto.randomUUID(),
-          name: cleanName,
+          name: finalName,
         },
       ]);
       setStatusMessage("Category added to the list.");
@@ -411,14 +509,12 @@ export default function AddTournamentPage() {
       savedCategories.flatMap((category) => {
         const baseName = category.name.trim();
         if (!baseName) return [];
-        if (!category.expandToAllGenders) {
+        if (!category.expandToAllGenders && !category.expandToMaleFemale) {
           return [{ ...category, name: baseName }];
         }
-        const targetGenders: Array<TournamentCategoryForm["gender"]> = [
-          "Men",
-          "Women",
-          "Mixed",
-        ];
+        const targetGenders: Array<TournamentCategoryForm["gender"]> = category.expandToAllGenders
+          ? ["Men", "Women", "Mixed"]
+          : ["Men", "Women"];
         return targetGenders.map((gender) => ({
           ...category,
           name: `${baseName} - ${gender}`,
@@ -435,6 +531,12 @@ export default function AddTournamentPage() {
     setErrorMessage(null);
     setStatusMessage(null);
 
+    const validationError = validateTournamentBasics(form);
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+
     if (!token) {
       navigate("/login");
       return;
@@ -447,7 +549,7 @@ export default function AddTournamentPage() {
         name: form.name.trim(),
         eventType: "TOURNAMENT",
         sport: SPORT_TO_API_VALUE[form.sport],
-        level: form.level,
+        level: form.level || undefined,
         timezone: form.timezone,
         locationName: form.locationName,
         address: form.address,
@@ -458,7 +560,7 @@ export default function AddTournamentPage() {
         registrationDeadline: form.registrationDeadline,
         capacity: form.capacity,
         entryFee: form.entryFee,
-        currency: form.currency,
+        currency: form.currency || undefined,
         description: form.description,
         isPublic: form.isPublic,
         allowWaitlist: form.allowWaitlist,
@@ -500,7 +602,7 @@ export default function AddTournamentPage() {
           const baseName = source.name.trim();
           if (!baseName) return [];
 
-          if (!source.expandToAllGenders) {
+          if (!source.expandToAllGenders && !source.expandToMaleFemale) {
             return [
               {
                 backendId: source.backendId,
@@ -513,7 +615,9 @@ export default function AddTournamentPage() {
             ];
           }
 
-          const genders: Array<TournamentCategoryForm["gender"]> = ["Men", "Women", "Mixed"];
+          const genders: Array<TournamentCategoryForm["gender"]> = source.expandToAllGenders
+            ? ["Men", "Women", "Mixed"]
+            : ["Men", "Women"];
           return genders.map((gender, index) => ({
             backendId: index === 0 ? source.backendId : undefined,
             name: `${baseName} - ${gender}`,
@@ -750,8 +854,8 @@ export default function AddTournamentPage() {
               {step === 1 ? (
                 <Button
                   variant="contained"
-                  onClick={() => setStep(2)}
-                  disabled={!form.name.trim()}
+                  onClick={handleStepOneNext}
+                  disabled={Boolean(basicsValidationError)}
                   sx={{ borderRadius: 999 }}
                 >
                   Next: Categories
@@ -775,12 +879,21 @@ export default function AddTournamentPage() {
                   <Button variant="outlined" onClick={() => setStep(2)} sx={{ borderRadius: 999 }}>
                     Back
                   </Button>
+                  {createdTournamentId ? (
+                    <Button
+                      variant="outlined"
+                      onClick={() => navigate("/tournaments")}
+                      sx={{ borderRadius: 999 }}
+                    >
+                      Back to Tournaments
+                    </Button>
+                  ) : null}
                   <Button
                     variant="contained"
                     onClick={handleSubmit}
                     disabled={
                       saving ||
-                      !form.name.trim() ||
+                      Boolean(basicsValidationError) ||
                       !hasValidCategories ||
                       (createdTournamentId !== null && !isEditMode)
                     }
@@ -815,6 +928,9 @@ export default function AddTournamentPage() {
                       <FormControl fullWidth>
                         <InputLabel>Sport</InputLabel>
                         <Select label="Sport" value={form.sport} onChange={setField("sport")}>
+                          <MenuItem value="">
+                            <em>Select sport</em>
+                          </MenuItem>
                           <MenuItem value="Tennis">Tennis</MenuItem>
                           <MenuItem value="Beach Tennis">Beach Tennis</MenuItem>
                           <MenuItem value="Padel">Padel</MenuItem>
@@ -826,6 +942,9 @@ export default function AddTournamentPage() {
                       <FormControl fullWidth>
                         <InputLabel>Level</InputLabel>
                         <Select label="Level" value={form.level} onChange={setField("level")}>
+                          <MenuItem value="">
+                            <em>Select level</em>
+                          </MenuItem>
                           <MenuItem value="Beginner">Beginner</MenuItem>
                           <MenuItem value="Intermediate">Intermediate</MenuItem>
                           <MenuItem value="Advanced">Advanced</MenuItem>
@@ -837,6 +956,9 @@ export default function AddTournamentPage() {
                     <FormControl fullWidth>
                       <InputLabel>Timezone</InputLabel>
                       <Select label="Timezone" value={form.timezone} onChange={setField("timezone")}>
+                        <MenuItem value="">
+                          <em>Select timezone</em>
+                        </MenuItem>
                         <MenuItem value="Australia/Sydney">Australia/Sydney</MenuItem>
                         <MenuItem value="Australia/Melbourne">Australia/Melbourne</MenuItem>
                         <MenuItem value="Australia/Brisbane">Australia/Brisbane</MenuItem>
@@ -858,8 +980,36 @@ export default function AddTournamentPage() {
 
                   <Stack spacing={2}>
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                      <TextField label="Start Date" type="date" value={form.startDate} onChange={setField("startDate")} InputLabelProps={{ shrink: true }} fullWidth />
-                      <TextField label="End Date" type="date" value={form.endDate} onChange={setField("endDate")} InputLabelProps={{ shrink: true }} fullWidth />
+                      <TextField
+                        label="Start Date"
+                        type="date"
+                        value={form.startDate}
+                        onChange={setField("startDate")}
+                        InputLabelProps={{ shrink: true }}
+                        inputProps={{ min: todayIsoDate }}
+                        error={Boolean(form.startDate) && form.startDate < todayIsoDate}
+                        helperText={
+                          form.startDate && form.startDate < todayIsoDate
+                            ? "Start date cannot be before today."
+                            : " "
+                        }
+                        fullWidth
+                      />
+                      <TextField
+                        label="End Date"
+                        type="date"
+                        value={form.endDate}
+                        onChange={setField("endDate")}
+                        InputLabelProps={{ shrink: true }}
+                        inputProps={{ min: form.startDate || todayIsoDate }}
+                        error={Boolean(form.endDate) && Boolean(form.startDate) && form.endDate < form.startDate}
+                        helperText={
+                          form.endDate && form.startDate && form.endDate < form.startDate
+                            ? "End date must be on or after start date."
+                            : " "
+                        }
+                        fullWidth
+                      />
                     </Stack>
 
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
@@ -867,7 +1017,15 @@ export default function AddTournamentPage() {
                       <TextField label="End Time" type="time" value={form.endTime} onChange={setField("endTime")} InputLabelProps={{ shrink: true }} fullWidth />
                     </Stack>
 
-                    <TextField label="Registration Deadline" type="date" value={form.registrationDeadline} onChange={setField("registrationDeadline")} InputLabelProps={{ shrink: true }} fullWidth />
+                    <TextField
+                      label="Registration Deadline"
+                      type="date"
+                      value={form.registrationDeadline}
+                      onChange={setField("registrationDeadline")}
+                      InputLabelProps={{ shrink: true }}
+                      inputProps={{ min: todayIsoDate, max: form.startDate || undefined }}
+                      fullWidth
+                    />
                   </Stack>
 
                   <SectionTitle>Capacity & Fees</SectionTitle>
@@ -895,6 +1053,9 @@ export default function AddTournamentPage() {
                     <FormControl fullWidth>
                       <InputLabel>Currency</InputLabel>
                       <Select label="Currency" value={form.currency} onChange={setField("currency")}>
+                        <MenuItem value="">
+                          <em>Select currency</em>
+                        </MenuItem>
                         <MenuItem value="AUD">AUD</MenuItem>
                         <MenuItem value="USD">USD</MenuItem>
                         <MenuItem value="EUR">EUR</MenuItem>
@@ -960,7 +1121,7 @@ export default function AddTournamentPage() {
                   {form.name || "Untitled Tournament"}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {form.sport} • {form.level} • {form.startDate || "TBD"}
+                  {form.sport} • {formatTournamentLevelLabel(form.level)} • {form.startDate || "TBD"}
                 </Typography>
               </Box>
 
@@ -971,17 +1132,25 @@ export default function AddTournamentPage() {
                       <Stack direction="row" alignItems="center" justifyContent="space-between">
                         <Typography sx={{ fontWeight: 800 }}>New Category</Typography>
                         {draftCategory.name.trim() ? (
-                          <Chip size="small" label={`${draftCategory.level} • ${draftCategory.gender} • ${formatAgeRange(draftCategory)}`} variant="outlined" sx={pillChipSx("muted")} />
+                          <Chip size="small" label={`${formatCategoryLevelLabel(draftCategory.level)} • ${draftCategory.gender} • ${formatAgeRange(draftCategory)}`} variant="outlined" sx={pillChipSx("muted")} />
                         ) : null}
                       </Stack>
 
-                      <TextField
-                        label="Category Name"
-                        value={draftCategory.name}
-                        onChange={(e) => setDraftCategory((prev) => ({ ...prev, name: e.target.value }))}
-                        placeholder="e.g. U12, Open, Pro Women"
-                        fullWidth
-                      />
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <TextField
+                          label="Category Name (optional)"
+                          value={draftCategory.name}
+                          onChange={(e) => setDraftCategory((prev) => ({ ...prev, name: e.target.value }))}
+                          placeholder="e.g. U12, Open, Pro Women"
+                          fullWidth
+                        />
+                        <Tooltip
+                          title="Optional: if empty, name is auto-generated from level + gender."
+                          arrow
+                        >
+                          <InfoOutlinedIcon sx={{ color: "text.secondary", fontSize: 20 }} />
+                        </Tooltip>
+                      </Stack>
 
                       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
                         <TextField
@@ -996,10 +1165,10 @@ export default function AddTournamentPage() {
                           }
                           fullWidth
                         >
-                          <MenuItem value="BEGINNER">BEGINNER</MenuItem>
-                          <MenuItem value="INTERMEDIATE">INTERMEDIATE</MenuItem>
-                          <MenuItem value="ADVANCED">ADVANCED</MenuItem>
-                          <MenuItem value="ALL_LEVELS">ALL_LEVELS</MenuItem>
+                          <MenuItem value="BEGINNER">Beginner</MenuItem>
+                          <MenuItem value="INTERMEDIATE">Intermediate</MenuItem>
+                          <MenuItem value="ADVANCED">Advanced</MenuItem>
+                          <MenuItem value="ALL_LEVELS">Open</MenuItem>
                         </TextField>
 
                         <TextField
@@ -1013,7 +1182,7 @@ export default function AddTournamentPage() {
                             }))
                           }
                           fullWidth
-                          disabled={draftCategory.expandToAllGenders}
+                          disabled={draftCategory.expandToAllGenders || draftCategory.expandToMaleFemale}
                         >
                           <MenuItem value="Open">Open</MenuItem>
                           <MenuItem value="Women">Women</MenuItem>
@@ -1039,10 +1208,18 @@ export default function AddTournamentPage() {
                         />
                       </Stack>
 
-                      <FormControlLabel
-                        control={<Switch checked={draftCategory.expandToAllGenders} onChange={toggleGenderVariants} />}
-                        label="Enable M/F/Mix variants for this category"
-                      />
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ alignSelf: "flex-start" }}>
+                        <Switch checked={draftCategory.expandToAllGenders} onChange={toggleGenderVariants} />
+                        <Typography variant="body2">Enable M/F/Mix variants for this category</Typography>
+                      </Stack>
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ alignSelf: "flex-start" }}>
+                        <Switch checked={draftCategory.expandToMaleFemale} onChange={toggleMaleFemaleVariants} />
+                        <Typography variant="body2">Enable M/F variants only</Typography>
+                      </Stack>
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ alignSelf: "flex-start" }}>
+                        <Switch checked={draftCategory.isKidsCategory} onChange={toggleKidsCategory} />
+                        <Typography variant="body2">Kids category (auto-sets max age to 12 when empty)</Typography>
+                      </Stack>
 
                       <Stack direction="row" justifyContent="flex-end">
                         {editingCategoryId ? (
@@ -1114,11 +1291,9 @@ export default function AddTournamentPage() {
                           savedCategories.map((category) => (
                             <TableRow key={category.id} hover>
                               <TableCell sx={{ fontWeight: 700 }}>{category.name.trim()}</TableCell>
-                              <TableCell>{category.level}</TableCell>
+                              <TableCell>{formatCategoryLevelLabel(category.level)}</TableCell>
                               <TableCell>{formatAgeRange(category)}</TableCell>
-                              <TableCell>
-                                {category.expandToAllGenders ? "Men / Women / Mixed" : category.gender}
-                              </TableCell>
+                              <TableCell>{getCategoryGenderSummary(category).replaceAll("/", " / ")}</TableCell>
                               <TableCell align="right">
                                 <Button size="small" onClick={() => editCategory(category.id)} sx={{ mr: 1 }}>
                                   Edit
@@ -1163,7 +1338,7 @@ export default function AddTournamentPage() {
 
               <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" rowGap={1}>
                 <Chip size="small" label={form.sport} variant="outlined" sx={pillChipSx("primary")} />
-                <Chip size="small" label={form.level} variant="outlined" sx={pillChipSx("muted")} />
+                <Chip size="small" label={formatTournamentLevelLabel(form.level)} variant="outlined" sx={pillChipSx("muted")} />
                 <Chip size="small" label={form.tournamentStage} variant="outlined" sx={pillChipSx("muted")} />
                 <Chip
                   size="small"

@@ -363,6 +363,12 @@ export default function TournamentGroupsPage() {
               </Typography>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 <Chip
+                  label={`Editing: ${selectedCategory?.name || selectedCategory?.discipline || "None"}`}
+                  color="primary"
+                  variant="outlined"
+                  sx={{ borderRadius: 999, width: "fit-content" }}
+                />
+                <Chip
                   label={phaseTitle(structureMode)}
                   variant="outlined"
                   sx={{ borderRadius: 999, width: "fit-content" }}

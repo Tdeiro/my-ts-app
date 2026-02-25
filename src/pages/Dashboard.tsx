@@ -46,6 +46,17 @@ type DashboardViewData = {
     name: string;
     when: string;
   }>;
+  joinedTournaments: Array<{
+    id: string;
+    eventId: number;
+    name: string;
+    when: string;
+  }>;
+  myTournaments: Array<{
+    id: string;
+    name: string;
+    when: string;
+  }>;
   openClasses: Array<{
     id: string;
     title: string;
@@ -65,6 +76,7 @@ type DashboardViewData = {
 
 type ApiEvent = {
   id: number | string;
+  createdBy?: number | string;
   userId?: number | string;
   user_id?: number | string;
   name?: string;
@@ -87,6 +99,11 @@ type ApiClass = {
   students?: number | string;
   capacity?: number | string;
   status?: string;
+};
+
+type DashboardApiResp = {
+  events?: ApiEvent[] | null;
+  classes?: ApiClass[] | null;
 };
 
 function parseJwt(token: string) {
@@ -181,14 +198,57 @@ export default function Dashboard() {
       weekStudents: 0,
       weeklyClasses: [],
       openTournaments: [],
+      joinedTournaments: [],
+      myTournaments: [],
       openClasses: [],
       latestClasses: [],
       upcomingClasses: [],
     },
   });
+  const [withdrawingEventId, setWithdrawingEventId] = React.useState<number | null>(null);
   const viewData = state.viewData;
+  const joinedTournamentIds = React.useMemo(
+    () => new Set(viewData.joinedTournaments.map((item) => item.id)),
+    [viewData.joinedTournaments],
+  );
 
   const handleRedirect = () => navigate("/tournaments/new");
+
+  const handleWithdrawJoinedTournament = async (eventId: number) => {
+    if (!token) return;
+      setWithdrawingEventId(eventId);
+    try {
+      const res = await fetch(`${API_URL}/events/${eventId}/subscriptions/me/withdraw`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const msg =
+          body?.message?.[0] ||
+          body?.error ||
+          "Could not withdraw from this tournament.";
+        throw new Error(msg);
+      }
+
+      setState((prev) => ({
+        ...prev,
+        viewData: {
+          ...prev.viewData,
+          joinedTournaments: prev.viewData.joinedTournaments.filter(
+            (item) => Number(item.eventId) !== Number(eventId),
+          ),
+        },
+      }));
+    } catch (e: any) {
+      setState((s) => ({
+        ...s,
+        error: e?.message || "Could not withdraw from this tournament.",
+      }));
+    } finally {
+      setWithdrawingEventId(null);
+    }
+  };
 
   React.useEffect(() => {
     // No token? Don’t call backend.
@@ -207,57 +267,36 @@ export default function Dashboard() {
       setState((s) => ({ ...s, loading: true, error: null }));
 
       try {
-        const [eventsRes, classesRes] = await Promise.all([
-          fetch(`${API_URL}/events`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch(`${API_URL}/classes`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-
-        const eventsBody = await eventsRes.json().catch(() => null);
-        const classesBody = await classesRes.json().catch(() => null);
+        const dashboardRes = await fetch(`${API_URL}/dashboard`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const dashboardBody = await dashboardRes.json().catch(() => null);
 
         if (cancelled) return;
 
-        if (!eventsRes.ok || !classesRes.ok) {
+        if (!dashboardRes.ok) {
           const message =
-            eventsBody?.message?.[0] ||
-            eventsBody?.error ||
-            classesBody?.message?.[0] ||
-            classesBody?.error ||
+            dashboardBody?.message?.[0] ||
+            dashboardBody?.error ||
             "Failed to load dashboard data";
           setState((s) => ({
             ...s,
             loading: false,
-            apiStatus: Math.max(eventsRes.status, classesRes.status),
+            apiStatus: dashboardRes.status,
             error: message,
           }));
           return;
         }
 
         const currentUserId = Number(user?.id);
-        const rawEvents: ApiEvent[] = Array.isArray(eventsBody)
-          ? eventsBody
-          : (eventsBody?.data ?? []);
-        const rawClasses: ApiClass[] = Array.isArray(classesBody)
-          ? classesBody
-          : (classesBody?.data ?? []);
-
-        const participant = isParticipantRole(getLoggedInRole());
-        const scopedEvents = participant
-          ? rawEvents.filter((e: any) => e.isPublic === true)
-          : Number.isFinite(currentUserId) &&
-              rawEvents.some((e) => e.userId != null || e.user_id != null)
-            ? rawEvents.filter((e) => Number(e.userId ?? e.user_id) === currentUserId)
-            : rawEvents;
-        const scopedClasses = participant
-          ? rawClasses.filter((c: any) => c.isPublic === true)
-          : Number.isFinite(currentUserId) &&
-              rawClasses.some((c) => c.userId != null || c.user_id != null)
-            ? rawClasses.filter((c) => Number(c.userId ?? c.user_id) === currentUserId)
-            : rawClasses;
+        const payload: DashboardApiResp =
+          dashboardBody && typeof dashboardBody === "object" ? dashboardBody : {};
+        const scopedEvents: ApiEvent[] = Array.isArray(payload.events)
+          ? payload.events
+          : [];
+        const scopedClasses: ApiClass[] = Array.isArray(payload.classes)
+          ? payload.classes
+          : [];
 
         const todayStr = toDateOnly(new Date().toISOString());
         const weekStart = getMonday(new Date());
@@ -267,6 +306,23 @@ export default function Dashboard() {
         const tournaments = scopedEvents.filter(
           (e) => String(e.eventType ?? "").toUpperCase() === "TOURNAMENT",
         );
+        const joinedTournaments = tournaments
+          .filter((t) => Number(t.createdBy) !== currentUserId)
+          .sort((a, b) => toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)))
+          .map((t) => ({
+            id: String(t.id),
+            eventId: Number(t.id),
+            name: String(t.name ?? t.title ?? "Tournament"),
+            when: toDateOnly(t.startDate) || "TBD",
+          }));
+        const myTournaments = tournaments
+          .filter((t) => Number(t.createdBy) === currentUserId)
+          .sort((a, b) => toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)))
+          .map((t) => ({
+            id: String(t.id),
+            name: String(t.name ?? t.title ?? "Tournament"),
+            when: toDateOnly(t.startDate) || "TBD",
+          }));
         const upcomingTournament = tournaments
           .filter((e) => {
             const date = toDateOnly(e.startDate);
@@ -408,6 +464,8 @@ export default function Dashboard() {
             weekStudents,
             weeklyClasses,
             openTournaments,
+            joinedTournaments,
+            myTournaments,
             openClasses,
             latestClasses,
             upcomingClasses,
@@ -428,7 +486,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, user?.id]);
 
   return (
     <Box
@@ -565,6 +623,72 @@ export default function Dashboard() {
               <Card sx={{ flex: 1, borderRadius: 2 }}>
                 <CardContent>
                   <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
+                    Your Joined Tournaments
+                  </Typography>
+                  <Stack spacing={1.25}>
+                    {viewData.joinedTournaments.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">
+                        No tournament subscriptions yet.
+                      </Typography>
+                    ) : (
+                      viewData.joinedTournaments.map((item) => (
+                        <Box
+                          key={item.id}
+                          sx={{
+                            p: 1.25,
+                            border: "1px solid rgba(15,23,42,0.08)",
+                            borderRadius: 1.5,
+                            display: "flex",
+                            flexDirection: { xs: "column", sm: "row" },
+                            alignItems: { xs: "flex-start", sm: "center" },
+                            justifyContent: "space-between",
+                            gap: 1.5,
+                          }}
+                        >
+                          <Box>
+                            <Typography sx={{ fontWeight: 700 }}>{item.name}</Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {item.when}
+                            </Typography>
+                          </Box>
+                          <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() =>
+                                navigate(
+                                  `/events/upcoming?eventId=${encodeURIComponent(String(item.eventId))}`
+                                )
+                              }
+                              sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
+                            >
+                              View
+                            </Button>
+                            <Button
+                              size="small"
+                              color="warning"
+                              variant="contained"
+                              disabled={withdrawingEventId === item.eventId}
+                              onClick={() =>
+                                handleWithdrawJoinedTournament(item.eventId)
+                              }
+                              sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
+                            >
+                              {withdrawingEventId === item.eventId
+                                ? "Withdrawing..."
+                                : "Withdraw"}
+                            </Button>
+                          </Stack>
+                        </Box>
+                      ))
+                    )}
+                  </Stack>
+                </CardContent>
+              </Card>
+
+              <Card sx={{ flex: 1, borderRadius: 2 }}>
+                <CardContent>
+                  <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
                     Your Latest Classes
                   </Typography>
                   <Stack spacing={1.25}>
@@ -677,14 +801,33 @@ export default function Dashboard() {
                             {item.when}
                           </Typography>
                         </Box>
+                        {joinedTournamentIds.has(item.id) ? (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() =>
+                              navigate(
+                                `/events/upcoming?eventId=${encodeURIComponent(item.id)}`,
+                              )
+                            }
+                            sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
+                          >
+                            Joined
+                          </Button>
+                        ) : (
                         <Button
                           size="small"
                           variant="contained"
-                          onClick={() => navigate("/tournaments")}
+                          onClick={() =>
+                            navigate(
+                              `/tournaments/invite?inviteTournamentId=${encodeURIComponent(item.id)}`,
+                            )
+                          }
                           sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
                         >
                           Join
                         </Button>
+                        )}
                       </Box>
                     ))
                   )}

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -16,6 +16,8 @@ import { setToken } from "../auth/tokens";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const inviteTournamentId = searchParams.get("inviteTournamentId");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -33,7 +35,11 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const res = await fetch("/login/signin", {
+      const signinUrl = inviteTournamentId
+        ? `/login/signin?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+        : "/login/signin";
+
+      const res = await fetch(signinUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: cleanEmail, password }),
@@ -57,7 +63,10 @@ export default function LoginPage() {
       }
 
       setToken(data.token);
-      navigate("/dashboard");
+      const target = inviteTournamentId
+        ? `/tournaments/invite?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+        : "/dashboard";
+      navigate(target);
     } catch {
       setError("Unable to reach server. Please try again.");
     } finally {
@@ -151,7 +160,13 @@ export default function LoginPage() {
                 <Button
                   variant="text"
                   size="small"
-                  onClick={() => navigate("/signup")}
+                  onClick={() =>
+                    navigate(
+                      inviteTournamentId
+                        ? `/signup?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+                        : "/signup"
+                    )
+                  }
                 >
                   Sign up
                 </Button>

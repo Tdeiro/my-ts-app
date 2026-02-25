@@ -7,26 +7,28 @@ import {
   CardContent,
   Chip,
   Divider,
-  IconButton,
-  MenuItem,
   Paper,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
-import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import { useNavigate, useParams } from "react-router-dom";
 import { getLoggedInUserId, getToken } from "../auth/tokens";
 import {
-  BracketPreviewCard,
-  GroupStagePreviewCard,
-  RoundsProgressionCard,
-} from "../Components/Shared/TournamentVisuals";
-import {
+  type GroupBucket,
+  loadTournamentGroups,
+  saveTournamentGroups,
   type TournamentCategory,
-  saveTournamentSetup,
   loadTournamentSetup,
+  saveTournamentSetup,
 } from "../Utils/tournamentPlanner";
+import TournamentPhaseBuilder, {
+  generateBracketSkeleton,
+  generateGroupsSkeleton,
+  type BuilderBracketMatch,
+} from "../Components/Shared/TournamentPhaseBuilder";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -43,103 +45,98 @@ type ApiEvent = {
   startDate?: string;
 };
 
+type ApiTournamentCategory = {
+  id: number | string;
+  eventId?: number | string;
+  name?: string;
+  level?: string;
+  minAge?: number | string | null;
+  maxAge?: number | string | null;
+  gender?: string;
+};
+
+type ApiTournamentGroup = {
+  id: number;
+  categoryId: number;
+  name: string;
+};
+
 type StructureMode =
   | "groups_knockout"
   | "knockout_only"
   | "group_phase_only"
   | "swiss";
-type TournamentFormat = "Singles" | "Doubles" | "Mixed" | "Teams";
+type TournamentFormat = "Singles" | "Doubles" | "Teams";
+type SetupTab = "overview" | "categories" | "groups";
+type CategorySetupConfig = {
+  formats: TournamentFormat[];
+  structureMode: StructureMode | "";
+  groupCount?: number;
+  teamsPerGroup?: number;
+  qualifiedPerGroup?: number;
+  bracketMatches?: BuilderBracketMatch[];
+};
 
 const FORMAT_OPTIONS: Array<{
   id: TournamentFormat;
   title: string;
   subtitle: string;
-  visual: string;
 }> = [
-  {
-    id: "Singles",
-    title: "Singles",
-    subtitle: "1 vs 1 per match",
-    visual: "A vs B",
-  },
-  {
-    id: "Doubles",
-    title: "Doubles",
-    subtitle: "2 vs 2 per match",
-    visual: "A+B vs C+D",
-  },
-  {
-    id: "Mixed",
-    title: "Mixed",
-    subtitle: "Mixed pairings",
-    visual: "A+B vs C+D",
-  },
-  {
-    id: "Teams",
-    title: "Teams",
-    subtitle: "Team fixtures",
-    visual: "Team 1 vs Team 2",
-  },
+  { id: "Singles", title: "Singles", subtitle: "1 vs 1 matches" },
+  { id: "Doubles", title: "Doubles", subtitle: "2 vs 2 matches" },
+  { id: "Teams", title: "Teams", subtitle: "Team fixtures" },
 ];
 
 const STRUCTURE_OPTIONS: Array<{
   id: StructureMode;
   title: string;
   subtitle: string;
-  visual: "groups" | "knockout" | "rounds";
 }> = [
   {
     id: "groups_knockout",
     title: "Group Phase + Knockout",
-    subtitle: "Best for balanced competition",
-    visual: "groups",
+    subtitle: "Round-robin groups then finals",
   },
   {
     id: "knockout_only",
-    title: "Knockout Bracket",
+    title: "Knockout Only",
     subtitle: "Fast elimination format",
-    visual: "knockout",
   },
   {
     id: "group_phase_only",
     title: "Group Phase Only",
-    subtitle: "League-style standings",
-    visual: "groups",
+    subtitle: "Standings-based competition",
   },
   {
     id: "swiss",
     title: "Swiss Rounds",
     subtitle: "Pair by score each round",
-    visual: "rounds",
   },
 ];
 
-function normalizeFormat(value?: string): TournamentFormat {
-  if (value === "Doubles" || value === "Mixed" || value === "Teams")
-    return value;
+function inferDisciplineFromCategory(raw: ApiTournamentCategory): TournamentCategory["discipline"] {
+  const name = String(raw.name ?? "").toLowerCase();
+  const gender = String(raw.gender ?? "").toLowerCase();
+  if (name.includes("team")) return "Teams";
+  if (name.includes("mixed") || gender.includes("mixed")) return "Mixed Doubles";
+  if (gender.includes("women") || gender.includes("female")) return "Doubles Female";
+  if (gender.includes("men") || gender.includes("male")) return "Doubles Male";
   return "Singles";
 }
 
-function disciplinesFromFormats(formats: TournamentFormat[]) {
-  const list: Array<TournamentCategory["discipline"]> = [];
-  if (formats.includes("Singles")) list.push("Singles");
-  if (formats.includes("Doubles")) {
-    list.push("Doubles Male", "Doubles Female");
-  }
-  if (formats.includes("Mixed")) list.push("Mixed Doubles");
-  if (formats.includes("Teams")) list.push("Teams");
-  return list;
+function normalizeTournamentFormat(value: string): TournamentFormat | null {
+  if (value === "Teams" || value === "Doubles" || value === "Singles") return value;
+  return null;
 }
 
-function defaultCategoryName(discipline: TournamentCategory["discipline"]) {
-  if (discipline === "Teams") return "Open Teams";
-  return discipline;
+function groupLetter(index: number): string {
+  return String.fromCharCode(65 + index);
 }
 
-function renderStructureVisual(mode: "groups" | "knockout" | "rounds") {
-  if (mode === "knockout") return <BracketPreviewCard />;
-  if (mode === "rounds") return <RoundsProgressionCard />;
-  return <GroupStagePreviewCard />;
+function entryLabelFromFormat(format?: TournamentFormat): string {
+  if (format === "Singles") return "Player";
+  if (format === "Doubles") return "Pair";
+  return "Team";
 }
 
 export default function TournamentSetupPage() {
@@ -149,9 +146,6 @@ export default function TournamentSetupPage() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [event, setEvent] = React.useState<ApiEvent | null>(null);
-  const [formats, setFormats] = React.useState<TournamentFormat[]>(["Singles"]);
-  const [structureMode, setStructureMode] =
-    React.useState<StructureMode>("groups_knockout");
   const [categories, setCategories] = React.useState<TournamentCategory[]>([
     {
       id: crypto.randomUUID(),
@@ -160,9 +154,134 @@ export default function TournamentSetupPage() {
       groups: 4,
     },
   ]);
-  const selectedStructure = React.useMemo(
-    () => STRUCTURE_OPTIONS.find((opt) => opt.id === structureMode),
-    [structureMode],
+  const [selectedCategoryId, setSelectedCategoryId] = React.useState<string>("");
+  const [categoryConfigs, setCategoryConfigs] = React.useState<
+    Record<string, CategorySetupConfig>
+  >({});
+  const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
+  const [formatAppliedToAll, setFormatAppliedToAll] = React.useState(false);
+  const [activeTab, setActiveTab] = React.useState<SetupTab>("overview");
+  const [groupsByCategory, setGroupsByCategory] = React.useState<
+    Record<string, GroupBucket[]>
+  >({});
+  const [serverGroupIdsByCategory, setServerGroupIdsByCategory] = React.useState<
+    Record<string, number[]>
+  >({});
+  const groupStructureSignatureRef = React.useRef<Record<string, string>>({});
+
+  React.useEffect(() => {
+    if (!id) return;
+    setGroupsByCategory(loadTournamentGroups(id));
+  }, [id]);
+
+  const groupStructureSignature = (groups: GroupBucket[]) =>
+    groups.map((g) => `${g.id}::${g.name}`).join("||");
+
+  const syncTournamentGroupsForCategory = React.useCallback(
+    async (categoryId: string, nextGroups: GroupBucket[]) => {
+      const token = getToken();
+      if (!token) return;
+      const parsedCategoryId = Number(categoryId);
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return;
+
+      const signature = groupStructureSignature(nextGroups);
+      if (groupStructureSignatureRef.current[categoryId] === signature) return;
+
+      try {
+        const serverIds = new Set(serverGroupIdsByCategory[categoryId] ?? []);
+        const usedIds = new Set<number>();
+        const updated = [...nextGroups];
+
+        for (let i = 0; i < updated.length; i += 1) {
+          const group = updated[i];
+          const backendId = Number(group.id);
+          const isPersisted = Number.isFinite(backendId) && backendId > 0;
+
+          if (isPersisted) {
+            usedIds.add(backendId);
+            const updateRes = await fetch(`${API_URL}/tournament-groups/${backendId}`, {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                categoryId: parsedCategoryId,
+                name: group.name,
+              }),
+            });
+            if (!updateRes.ok) {
+              const updateBody = await updateRes.json().catch(() => null);
+              throw new Error(
+                updateBody?.message?.[0] ||
+                  updateBody?.error ||
+                  "Failed to update tournament group",
+              );
+            }
+            continue;
+          }
+
+          const createRes = await fetch(`${API_URL}/tournament-groups`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              categoryId: parsedCategoryId,
+              name: group.name,
+            }),
+          });
+          const createBody = await createRes.json().catch(() => null);
+          if (!createRes.ok) {
+            throw new Error(
+              createBody?.message?.[0] ||
+                createBody?.error ||
+                "Failed to create tournament group",
+            );
+          }
+          const newId = Number(createBody?.id ?? createBody?.data?.id);
+          if (Number.isFinite(newId) && newId > 0) {
+            usedIds.add(newId);
+            updated[i] = { ...group, id: String(newId) };
+          }
+        }
+
+        const deleteOps = Array.from(serverIds).filter((idToDelete) => !usedIds.has(idToDelete));
+        await Promise.all(
+          deleteOps.map(async (idToDelete) => {
+            const deleteRes = await fetch(`${API_URL}/tournament-groups/${idToDelete}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!deleteRes.ok) {
+              const deleteBody = await deleteRes.json().catch(() => null);
+              throw new Error(
+                deleteBody?.message?.[0] ||
+                  deleteBody?.error ||
+                  "Failed to delete tournament group",
+              );
+            }
+          }),
+        );
+
+        setGroupsByCategory((prev) => {
+          const next = { ...prev, [categoryId]: updated };
+          if (id) saveTournamentGroups(id, next);
+          return next;
+        });
+        setServerGroupIdsByCategory((prev) => ({
+          ...prev,
+          [categoryId]: Array.from(usedIds),
+        }));
+        groupStructureSignatureRef.current[categoryId] = groupStructureSignature(updated);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to sync tournament groups",
+        );
+      }
+    },
+    [id, serverGroupIdsByCategory],
   );
 
   React.useEffect(() => {
@@ -183,16 +302,29 @@ export default function TournamentSetupPage() {
       }
 
       try {
-        const res = await fetch(`${API_URL}/events`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const [eventRes, categoriesRes] = await Promise.all([
+          fetch(`${API_URL}/events`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${API_URL}/tournament-categories?eventId=${id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
 
-        const data = await res.json().catch(() => null);
-        if (!res.ok) {
+        const data = await eventRes.json().catch(() => null);
+        const categoriesData = await categoriesRes.json().catch(() => null);
+        if (!eventRes.ok) {
           throw new Error(
             data?.message?.[0] ||
               data?.error ||
-              `Failed to load tournament (${res.status})`,
+              `Failed to load tournament (${eventRes.status})`,
+          );
+        }
+        if (!categoriesRes.ok) {
+          throw new Error(
+            categoriesData?.message?.[0] ||
+              categoriesData?.error ||
+              `Failed to load tournament categories (${categoriesRes.status})`,
           );
         }
 
@@ -215,23 +347,124 @@ export default function TournamentSetupPage() {
 
         if (cancelled) return;
         setEvent(selected);
-        setFormats([normalizeFormat(selected.format)]);
         const saved = loadTournamentSetup(String(selected.id));
-        if (saved) {
-          const savedFormats =
-            Array.isArray(saved.formats) && saved.formats.length > 0
-              ? saved.formats
-              : [];
-          if (savedFormats.length > 0) {
-            setFormats(
-              savedFormats
-                .map((f) => normalizeFormat(String(f)))
-                .filter((v, idx, arr) => arr.indexOf(v) === idx),
+        const rawCategories: ApiTournamentCategory[] = Array.isArray(categoriesData)
+          ? categoriesData
+          : (categoriesData?.data ?? []);
+        const savedCategories = saved?.categories ?? [];
+        const backendMappedCategories: TournamentCategory[] = rawCategories.map((cat, idx) => {
+          const fallbackName = `Category ${idx + 1}`;
+          const categoryName = String(cat.name ?? "").trim() || fallbackName;
+          const persisted =
+            savedCategories.find((sc) => sc.id === String(cat.id)) ??
+            savedCategories.find(
+              (sc) => sc.name.trim().toLowerCase() === categoryName.toLowerCase(),
             );
+          return {
+            id: String(cat.id),
+            name: categoryName,
+            discipline: persisted?.discipline ?? inferDisciplineFromCategory(cat),
+            groups: Math.max(1, Number(persisted?.groups ?? 2)),
+          };
+        });
+
+        if (saved) {
+          const savedConfigs = saved.categoryConfigs ?? {};
+          const computedConfigs: Record<string, CategorySetupConfig> = {};
+          const sourceCategories =
+            backendMappedCategories.length > 0 ? backendMappedCategories : saved.categories;
+          sourceCategories.forEach((cat) => {
+            const current = savedConfigs[String(cat.id)];
+            const normalizedFormat = normalizeTournamentFormat(
+              String(current?.formats?.[0] ?? ""),
+            );
+            computedConfigs[String(cat.id)] = {
+              formats: normalizedFormat ? [normalizedFormat] : [],
+              structureMode: (current?.structureMode as StructureMode) ?? "",
+              groupCount:
+                typeof current?.groupCount === "number" ? current.groupCount : undefined,
+              teamsPerGroup:
+                typeof current?.teamsPerGroup === "number"
+                  ? current.teamsPerGroup
+                  : undefined,
+              qualifiedPerGroup:
+                typeof current?.qualifiedPerGroup === "number"
+                  ? current.qualifiedPerGroup
+                  : undefined,
+              bracketMatches: Array.isArray(current?.bracketMatches)
+                ? current.bracketMatches.map((m) => ({
+                    id: String(m.id),
+                    name: String((m as any).name ?? `Match ${m.id}`),
+                    round: String(m.round),
+                    roundIndex: Number((m as any).roundIndex ?? 0),
+                    home: String(m.home ?? ""),
+                    away: String(m.away ?? ""),
+                  }))
+                : [],
+            };
+          });
+          setCategoryConfigs(computedConfigs);
+
+          if (backendMappedCategories.length > 0) {
+            setCategories(backendMappedCategories);
+          } else {
+            setCategories(saved.categories);
           }
-          setStructureMode(saved.structureMode as StructureMode);
-          setCategories(saved.categories);
+        } else if (backendMappedCategories.length > 0) {
+          setCategories(backendMappedCategories);
+          const computedConfigs: Record<string, CategorySetupConfig> = {};
+          backendMappedCategories.forEach((cat) => {
+            computedConfigs[String(cat.id)] = {
+              formats: [],
+              structureMode: "",
+              bracketMatches: [],
+            };
+          });
+          setCategoryConfigs(computedConfigs);
         }
+
+        const categoriesForGroups =
+          backendMappedCategories.length > 0
+            ? backendMappedCategories
+            : (saved?.categories ?? []);
+        const groupFetches = await Promise.all(
+          categoriesForGroups.map(async (cat) => {
+            const catId = Number(cat.id);
+            if (!Number.isFinite(catId) || catId <= 0) {
+              return { categoryKey: String(cat.id), groups: [] as ApiTournamentGroup[] };
+            }
+            const res = await fetch(
+              `${API_URL}/tournament-groups?categoryId=${encodeURIComponent(catId)}`,
+              { headers: { Authorization: `Bearer ${token}` } },
+            );
+            if (!res.ok) return { categoryKey: String(cat.id), groups: [] as ApiTournamentGroup[] };
+            const body = await res.json().catch(() => null);
+            const list: ApiTournamentGroup[] = Array.isArray(body) ? body : (body?.data ?? []);
+            return { categoryKey: String(cat.id), groups: list };
+          }),
+        );
+
+        const nextGroupsMap: Record<string, GroupBucket[]> = {};
+        const nextServerIdsMap: Record<string, number[]> = {};
+        groupFetches.forEach(({ categoryKey, groups }) => {
+          const mappedGroups: GroupBucket[] = groups.map((g) => ({
+            id: String(g.id),
+            name: String(g.name ?? "Group"),
+            participants: [],
+          }));
+          nextGroupsMap[categoryKey] = mappedGroups;
+          nextServerIdsMap[categoryKey] = groups
+            .map((g) => Number(g.id))
+            .filter((v) => Number.isFinite(v) && v > 0);
+          groupStructureSignatureRef.current[categoryKey] =
+            groupStructureSignature(mappedGroups);
+        });
+        setServerGroupIdsByCategory(nextServerIdsMap);
+        setGroupsByCategory((prev) => {
+          const merged = { ...prev, ...nextGroupsMap };
+          if (id) saveTournamentGroups(id, merged);
+          return merged;
+        });
       } catch (e) {
         if (!cancelled) {
           setError(
@@ -250,44 +483,140 @@ export default function TournamentSetupPage() {
   }, [id]);
 
   React.useEffect(() => {
-    setCategories((prev) => {
-      const target = disciplinesFromFormats(formats);
-      if (target.length === 0) return prev;
-
-      const byDiscipline = new Map(prev.map((c) => [c.discipline, c]));
-      return target.map((discipline) => {
-        const existing = byDiscipline.get(discipline);
-        if (existing) return existing;
-        return {
-          id: crypto.randomUUID(),
-          name: defaultCategoryName(discipline),
-          discipline,
-          groups: 2,
-        };
+    if (categories.length === 0) return;
+    setCategoryConfigs((prev) => {
+      const next = { ...prev };
+      categories.forEach((cat) => {
+        const key = String(cat.id);
+        if (!next[key]) {
+          next[key] = {
+            formats: [],
+            structureMode: "",
+            bracketMatches: [],
+          };
+        }
       });
+      return next;
     });
-  }, [formats]);
+  }, [categories]);
 
-  const addCategory = () => {
-    setCategories((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        name: "",
-        discipline: "Singles",
-        groups: 2,
-      },
-    ]);
-  };
+  const selectedCategory = categories.find((c) => c.id === selectedCategoryId) ?? null;
+  const selectedConfig = selectedCategory
+    ? (categoryConfigs[selectedCategory.id] ?? { formats: [], structureMode: "" })
+    : undefined;
+  const requiresGroupStructure = selectedConfig?.structureMode === "groups_knockout";
+  const hasGroupStructureConfig = Boolean(
+    selectedConfig &&
+      (selectedConfig.groupCount ?? 0) > 0 &&
+      (selectedConfig.teamsPerGroup ?? 0) >= 4 &&
+      (selectedConfig.qualifiedPerGroup ?? 0) > 0 &&
+      (selectedConfig.qualifiedPerGroup ?? 0) <= (selectedConfig.teamsPerGroup ?? 0),
+  );
+  const canSaveSelectedCategorySetup = Boolean(
+    selectedCategory &&
+      selectedConfig &&
+      selectedConfig.formats.length > 0 &&
+      selectedConfig.structureMode &&
+      (!requiresGroupStructure || hasGroupStructureConfig),
+  );
+  const selectedFormat = selectedConfig?.formats?.[0];
+  const selectedEntryLabel = entryLabelFromFormat(selectedFormat);
+  const categoriesOverview = React.useMemo(
+    () =>
+      categories.map((cat) => {
+        const cfg = categoryConfigs[cat.id];
+        const groups = groupsByCategory[cat.id] ?? [];
+        const hasGroups =
+          groups.length > 0 &&
+          groups.some((g) => g.participants.some((p) => String(p).trim().length > 0));
+        const hasBracket = (cfg?.bracketMatches?.length ?? 0) > 0;
+        return {
+          id: cat.id,
+          name: cat.name,
+          format: cfg?.formats?.[0] ?? "",
+          structure: cfg?.structureMode ?? "",
+          hasGroups,
+          hasBracket,
+        };
+      }),
+    [categories, categoryConfigs, groupsByCategory],
+  );
 
-  const saveSetupDraft = () => {
+  const saveSetup = () => {
     if (!id) return;
     saveTournamentSetup(id, {
-      formats,
-      structureMode,
-      categories: categories.filter((c) => c.name.trim()),
+      formats: [],
+      structureMode: "groups_knockout",
+      categories,
+      categoryConfigs,
     });
+    setStatusMessage("Category setup saved.");
   };
+
+  const applySelectedFormatToAllCategories = () => {
+    if (!selectedCategory || !selectedConfig) return;
+    const selectedFormat = selectedConfig.formats[0];
+    if (!selectedFormat) return;
+    setCategoryConfigs((prev) => {
+      const next = { ...prev };
+      categories.forEach((cat) => {
+        next[cat.id] = {
+          ...(next[cat.id] ?? {
+            structureMode: "",
+          }),
+          formats: [selectedFormat],
+          structureMode: (next[cat.id]?.structureMode ?? "") as StructureMode | "",
+        };
+      });
+      return next;
+    });
+    setFormatAppliedToAll(true);
+    setStatusMessage(`Applied ${selectedFormat} format to all categories.`);
+  };
+
+  const generateGroupsAndBracketForSelectedCategory = () => {
+    if (!selectedCategory || !selectedConfig) return;
+    const groupCount = Number(selectedConfig.groupCount ?? 0);
+    const teamsPerGroup = Number(selectedConfig.teamsPerGroup ?? 0);
+    const qualifiedPerGroup = Number(selectedConfig.qualifiedPerGroup ?? 0);
+    if (groupCount <= 0 || teamsPerGroup < 4 || qualifiedPerGroup <= 0 || qualifiedPerGroup > teamsPerGroup) {
+      setError("Invalid structure. Use: groups > 0, teams/group >= 4, qualified between 1 and teams/group.");
+      return;
+    }
+
+    const existingTeams =
+      groupsByCategory[selectedCategory.id]?.flatMap((g) =>
+        (g.participants ?? []).map((p: string) => p.trim()).filter(Boolean),
+      ) ?? [];
+    const uniqueTeams = Array.from(new Set(existingTeams));
+
+    const generatedGroups = generateGroupsSkeleton(groupCount, teamsPerGroup, uniqueTeams).map(
+      (group, idx) => ({
+        ...group,
+        id: `g_${selectedCategory.id}_${idx + 1}`,
+        name: `Group ${groupLetter(idx)}`,
+      }),
+    );
+    const bracketMatches = generateBracketSkeleton(groupCount, qualifiedPerGroup);
+
+    persistGroups({ ...groupsByCategory, [selectedCategory.id]: generatedGroups });
+    setCategoryConfigs((prev) => ({
+      ...prev,
+      [selectedCategory.id]: {
+        ...selectedConfig,
+        bracketMatches,
+      },
+    }));
+    setError(null);
+    setStatusMessage(`Generated ${groupCount} groups and bracket structure.`);
+  };
+
+  const persistGroups = (next: Record<string, GroupBucket[]>) => {
+    setGroupsByCategory(next);
+    if (!id) return;
+    saveTournamentGroups(id, next);
+  };
+
 
   return (
     <Box
@@ -334,11 +663,28 @@ export default function TournamentSetupPage() {
               Back to Tournaments
             </Button>
           </Stack>
+          <Tabs
+            value={activeTab}
+            onChange={(_, value: SetupTab) => {
+              setError(null);
+              setActiveTab(value);
+            }}
+            sx={{ mt: 2 }}
+          >
+            <Tab value="overview" label="Overview" />
+            <Tab value="categories" label="Categories" />
+            <Tab value="groups" label="Groups" />
+          </Tabs>
         </Paper>
 
         {error ? (
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}
+          </Alert>
+        ) : null}
+        {statusMessage ? (
+          <Alert severity="success" sx={{ mb: 2 }}>
+            {statusMessage}
           </Alert>
         ) : null}
 
@@ -350,340 +696,404 @@ export default function TournamentSetupPage() {
           </Card>
         ) : event ? (
           <Stack spacing={2}>
-            <Card>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="h6" sx={{ fontWeight: 900 }}>
-                  {event.name || "Untitled Tournament"}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {event.locationName || "Venue TBD"} • {event.startDate || "Date TBD"}
-                </Typography>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent sx={{ p: 3 }}>
-                <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
-                  Format & Structure
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-
-                <Stack spacing={2}>
+            {activeTab === "overview" ? (
+              <Card>
+                <CardContent sx={{ p: 3 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 900 }}>
+                    {event.name || "Untitled Tournament"}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    {event.locationName || "Venue TBD"} • {event.startDate || "Date TBD"}
+                  </Typography>
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    Use tabs to configure this tournament without leaving this page.
+                  </Alert>
                   <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                    Progress
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Category selected: {selectedCategory ? "Yes" : "No"} • Format selected:{" "}
+                    {selectedConfig?.formats?.length ? "Yes" : "No"} • Structure selected:{" "}
+                    {selectedConfig?.structureMode ? "Yes" : "No"}
+                  </Typography>
+                  <Divider sx={{ my: 1.5 }} />
+                  <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
+                    Category Setup Status
+                  </Typography>
+                  <Stack spacing={0.75}>
+                    {categoriesOverview.map((item) => (
+                      <Stack
+                        key={item.id}
+                        role="button"
+                        onClick={() => {
+                          setSelectedCategoryId(item.id);
+                          setFormatAppliedToAll(false);
+                          setActiveTab("groups");
+                        }}
+                        direction={{ xs: "column", sm: "row" }}
+                        justifyContent="space-between"
+                        alignItems={{ sm: "center" }}
+                        sx={{
+                          p: 1,
+                          borderRadius: 1.25,
+                          border: "1px solid rgba(15,23,42,0.10)",
+                          bgcolor: "rgba(15,23,42,0.02)",
+                          cursor: "pointer",
+                          transition: "all 120ms ease",
+                          "&:hover": {
+                            borderColor: "rgba(139,92,246,0.35)",
+                            bgcolor: "rgba(139,92,246,0.08)",
+                          },
+                        }}
+                      >
+                        <Typography sx={{ fontWeight: 700 }}>{item.name}</Typography>
+                        <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
+                          <Chip
+                            size="small"
+                            label={item.format ? `Format: ${item.format}` : "Format: Pending"}
+                            color={item.format ? "primary" : "default"}
+                            variant={item.format ? "filled" : "outlined"}
+                          />
+                          <Chip
+                            size="small"
+                            label={item.structure ? "Structure: Set" : "Structure: Pending"}
+                            color={item.structure ? "primary" : "default"}
+                            variant={item.structure ? "filled" : "outlined"}
+                          />
+                          <Chip
+                            size="small"
+                            label={item.hasGroups ? "Groups: Created" : "Groups: Pending"}
+                            color={item.hasGroups ? "success" : "default"}
+                            variant={item.hasGroups ? "filled" : "outlined"}
+                          />
+                          <Chip
+                            size="small"
+                            label={item.hasBracket ? "Bracket: Created" : "Bracket: Pending"}
+                            color={item.hasBracket ? "success" : "default"}
+                            variant={item.hasBracket ? "filled" : "outlined"}
+                          />
+                        </Stack>
+                      </Stack>
+                    ))}
+                  </Stack>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {activeTab === "categories" ? (
+              <Card>
+                <CardContent sx={{ p: 3 }}>
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    1. Select a category. 2. Select a format. 3. Select a structure. Save is enabled only after all 3.
+                  </Alert>
+                  <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
+                    Tournament Categories
+                  </Typography>
+                  <Divider sx={{ mb: 2 }} />
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    Select a category and configure its format and structure.
+                  </Typography>
+
+                  <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
+                    {categories.length > 0 ? (
+                      categories.map((cat) => {
+                        const selected = formatAppliedToAll || selectedCategoryId === cat.id;
+                        return (
+                          <Chip
+                            key={cat.id}
+                            label={cat.name}
+                            clickable
+                            onClick={() => {
+                              setSelectedCategoryId(cat.id);
+                              setFormatAppliedToAll(false);
+                            }}
+                            variant={selected ? "filled" : "outlined"}
+                            sx={{
+                              borderRadius: 999,
+                              borderColor: selected
+                                ? "rgba(139,92,246,0.45)"
+                                : "rgba(15,23,42,0.16)",
+                              bgcolor: selected
+                                ? "rgba(139,92,246,0.16)"
+                                : "transparent",
+                              color: selected ? "primary.main" : "text.primary",
+                              fontWeight: 700,
+                            }}
+                          />
+                        );
+                      })
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        No categories found for this tournament yet.
+                      </Typography>
+                    )}
+                  </Stack>
+
+                  <Divider sx={{ mb: 2 }} />
+                  <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
                     Tournament Format
                   </Typography>
-                  <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+                  <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={applySelectedFormatToAllCategories}
+                      disabled={
+                        !selectedCategory ||
+                        !selectedConfig ||
+                        selectedConfig.formats.length === 0
+                      }
+                      sx={{ borderRadius: 999 }}
+                    >
+                      Apply format to all categories
+                    </Button>
+                  </Stack>
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={1.25} sx={{ mb: 2 }}>
                     {FORMAT_OPTIONS.map((opt) => {
-                      const selected = formats.includes(opt.id);
+                      const isSelected = Boolean(selectedConfig?.formats.includes(opt.id));
                       return (
                         <Card
                           key={opt.id}
-                          onClick={() =>
-                            setFormats((prev) => {
-                              if (prev.includes(opt.id)) {
-                                const next = prev.filter((v) => v !== opt.id);
-                                return next.length ? next : prev;
-                              }
-                              return [...prev, opt.id];
-                            })
-                          }
+                          onClick={() => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            const previousFormat = selectedConfig.formats[0];
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                formats: [opt.id],
+                                bracketMatches:
+                                  previousFormat && previousFormat !== opt.id
+                                    ? []
+                                    : selectedConfig.bracketMatches,
+                              },
+                            }));
+                            if (previousFormat && previousFormat !== opt.id) {
+                              persistGroups({
+                                ...groupsByCategory,
+                                [selectedCategory.id]: [],
+                              });
+                              setStatusMessage(
+                                `Format changed to ${opt.id}. Groups and bracket were reset for this category.`,
+                              );
+                            }
+                            setFormatAppliedToAll(false);
+                          }}
                           sx={{
-                            cursor: "pointer",
+                            cursor: selectedCategory ? "pointer" : "not-allowed",
                             flex: 1,
                             borderRadius: 2,
                             border: "1px solid",
-                            borderColor: selected
+                            borderColor: isSelected
                               ? "rgba(139,92,246,0.45)"
                               : "rgba(15,23,42,0.10)",
-                            bgcolor: selected
-                              ? "rgba(139,92,246,0.06)"
+                            bgcolor: isSelected
+                              ? "rgba(139,92,246,0.08)"
                               : "background.paper",
-                            transition: "all 120ms ease",
-                            "&:hover": { borderColor: "rgba(139,92,246,0.35)" },
+                            opacity: selectedCategory ? 1 : 0.6,
                           }}
                         >
-                          <CardContent sx={{ p: 1.75 }}>
-                            <Stack
-                              direction="row"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              spacing={1}
-                            >
-                              <Typography sx={{ fontWeight: 800 }}>
-                                {opt.title}
-                              </Typography>
-                              {selected ? (
-                                <Chip
-                                  label="Selected"
-                                  size="small"
-                                  sx={{
-                                    height: 22,
-                                    borderRadius: 999,
-                                    bgcolor: "rgba(139,92,246,0.16)",
-                                    color: "primary.main",
-                                  }}
-                                />
-                              ) : null}
-                            </Stack>
+                          <CardContent sx={{ p: 1.5 }}>
+                            <Typography sx={{ fontWeight: 800 }}>{opt.title}</Typography>
                             <Typography variant="body2" color="text.secondary">
                               {opt.subtitle}
                             </Typography>
-                            <Box
-                              sx={{
-                                mt: 1,
-                                px: 1,
-                                py: 0.75,
-                                borderRadius: 1,
-                                bgcolor: "rgba(15,23,42,0.04)",
-                                fontSize: 12,
-                                fontWeight: 700,
-                                textAlign: "center",
-                              }}
-                            >
-                              {opt.visual}
-                            </Box>
                           </CardContent>
                         </Card>
                       );
                     })}
                   </Stack>
 
-                  <Stack
-                    direction={{ xs: "column", sm: "row" }}
-                    spacing={1}
-                    alignItems={{ sm: "center" }}
-                    justifyContent="space-between"
-                  >
-                    <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                      Structure Mode (choose one)
-                    </Typography>
-                    <Chip
-                      size="small"
-                      label={`Selected: ${selectedStructure?.title ?? "None"}`}
-                      sx={{
-                        borderRadius: 999,
-                        bgcolor: "rgba(139,92,246,0.12)",
-                        color: "primary.main",
-                        width: "fit-content",
-                      }}
-                    />
-                  </Stack>
+                  <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
+                    Structure
+                  </Typography>
                   <Stack direction={{ xs: "column", md: "row" }} spacing={1.25} useFlexGap flexWrap="wrap">
                     {STRUCTURE_OPTIONS.map((opt) => {
-                      const selected = structureMode === opt.id;
+                      const isSelected = selectedConfig?.structureMode === opt.id;
                       return (
                         <Card
                           key={opt.id}
-                          onClick={() => setStructureMode(opt.id)}
+                          onClick={() => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                structureMode: opt.id,
+                              },
+                            }));
+                          }}
                           sx={{
-                            cursor: "pointer",
+                            cursor: selectedCategory ? "pointer" : "not-allowed",
                             width: { xs: "100%", md: "calc(50% - 5px)" },
                             borderRadius: 2,
                             border: "1px solid",
-                            borderColor: selected
+                            borderColor: isSelected
                               ? "rgba(139,92,246,0.45)"
                               : "rgba(15,23,42,0.10)",
-                            bgcolor: selected
-                              ? "rgba(139,92,246,0.06)"
+                            bgcolor: isSelected
+                              ? "rgba(139,92,246,0.08)"
                               : "background.paper",
-                            transition: "all 120ms ease",
-                            "&:hover": { borderColor: "rgba(139,92,246,0.35)" },
+                            opacity: selectedCategory ? 1 : 0.6,
                           }}
                         >
-                          <CardContent sx={{ p: 1.75 }}>
-                            <Stack
-                              direction="row"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              sx={{ mb: 0.5 }}
-                            >
-                              <Typography sx={{ fontWeight: 800 }}>
-                                {opt.title}
-                              </Typography>
-                              <Chip
-                                size="small"
-                                label={selected ? "Selected" : "Choose"}
-                                variant={selected ? "filled" : "outlined"}
-                                sx={{
-                                  borderRadius: 999,
-                                  ...(selected
-                                    ? {
-                                        bgcolor: "rgba(139,92,246,0.16)",
-                                        color: "primary.main",
-                                      }
-                                    : {}),
-                                }}
-                              />
-                            </Stack>
+                          <CardContent sx={{ p: 1.5 }}>
+                            <Typography sx={{ fontWeight: 800 }}>{opt.title}</Typography>
                             <Typography variant="body2" color="text.secondary">
                               {opt.subtitle}
                             </Typography>
-                            {renderStructureVisual(opt.visual)}
                           </CardContent>
                         </Card>
                       );
                     })}
                   </Stack>
-                </Stack>
-              </CardContent>
-            </Card>
 
-            <Card>
-              <CardContent sx={{ p: 3 }}>
-                <Stack
-                  direction={{ xs: "column", sm: "row" }}
-                  alignItems={{ sm: "center" }}
-                  justifyContent="space-between"
-                  spacing={1}
-                  sx={{ mb: 1 }}
-                >
-                  <Typography variant="body1" sx={{ fontWeight: 900 }}>
-                    Categories Configuration
-                  </Typography>
-                  <Button variant="outlined" onClick={addCategory} sx={{ borderRadius: 999 }}>
-                    Add Category
-                  </Button>
-                </Stack>
-                <Divider sx={{ mb: 2 }} />
+                  {selectedConfig?.structureMode === "groups_knockout" ? (
+                    <>
+                      <Divider sx={{ my: 2 }} />
+                      <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
+                        Group Phase Inputs
+                      </Typography>
+                      <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
+                        <TextField
+                          label="Number of groups"
+                          type="number"
+                          value={selectedConfig.groupCount ?? ""}
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                groupCount: Math.max(1, Number(e.target.value || 0)),
+                              },
+                            }));
+                          }}
+                          fullWidth
+                        />
+                        <TextField
+                          label="Teams per group (min 4)"
+                          type="number"
+                          value={selectedConfig.teamsPerGroup ?? ""}
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                teamsPerGroup: Math.max(4, Number(e.target.value || 0)),
+                              },
+                            }));
+                          }}
+                          fullWidth
+                        />
+                        <TextField
+                          label="Qualified per group"
+                          type="number"
+                          value={selectedConfig.qualifiedPerGroup ?? ""}
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                qualifiedPerGroup: Math.max(1, Number(e.target.value || 0)),
+                              },
+                            }));
+                          }}
+                          fullWidth
+                        />
+                      </Stack>
+                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+                        Groups and bracket will be auto-generated when you click Next: Groups.
+                      </Typography>
+                    </>
+                  ) : null}
 
-                <Stack spacing={1.5}>
-                  {categories.map((cat, idx) => (
-                    <Card
-                      key={cat.id}
-                      sx={{
-                        borderRadius: 2,
-                        border: "1px solid rgba(15,23,42,0.10)",
-                        boxShadow: "none",
-                      }}
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ mt: 2 }}>
+                    <Button
+                      variant="contained"
+                      onClick={saveSetup}
+                      disabled={!canSaveSelectedCategorySetup}
+                      sx={{ borderRadius: 999 }}
                     >
-                      <CardContent sx={{ p: 1.5 }}>
-                        <Stack spacing={1.25}>
-                          <Stack direction="row" justifyContent="space-between" alignItems="center">
-                            <Typography sx={{ fontWeight: 800 }}>
-                              Category {idx + 1}
-                            </Typography>
-                            <IconButton
-                              size="small"
-                              onClick={() =>
-                                setCategories((prev) =>
-                                  prev.length <= 1
-                                    ? prev
-                                    : prev.filter((c) => c.id !== cat.id),
-                                )
-                              }
-                            >
-                              <DeleteOutlineRoundedIcon fontSize="small" />
-                            </IconButton>
-                          </Stack>
+                      Save Category Setup
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      onClick={() => {
+                        if (
+                          selectedConfig?.structureMode === "groups_knockout" &&
+                          hasGroupStructureConfig
+                        ) {
+                          generateGroupsAndBracketForSelectedCategory();
+                        }
+                        saveSetup();
+                        setActiveTab("groups");
+                      }}
+                      sx={{ borderRadius: 999 }}
+                    >
+                      Next: Groups
+                    </Button>
+                  </Stack>
+                </CardContent>
+              </Card>
+            ) : null}
 
-                          <TextField
-                            label="Category Name"
-                            value={cat.name}
-                            onChange={(e) =>
-                              setCategories((prev) =>
-                                prev.map((c) =>
-                                  c.id === cat.id
-                                    ? { ...c, name: e.target.value }
-                                    : c,
-                                ),
-                              )
-                            }
-                            placeholder="e.g. Doubles Male A Grade"
-                            fullWidth
-                          />
-
-                          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
-                            <TextField
-                              select
-                              label="Discipline"
-                              value={cat.discipline}
-                              onChange={(e) =>
-                                setCategories((prev) =>
-                                  prev.map((c) =>
-                                    c.id === cat.id
-                                      ? {
-                                          ...c,
-                                          discipline: e.target
-                                            .value as TournamentCategory["discipline"],
-                                        }
-                                      : c,
-                                  ),
-                                )
-                              }
-                              fullWidth
-                            >
-                              <MenuItem value="Singles">Singles</MenuItem>
-                              <MenuItem value="Doubles Male">
-                                Doubles Male
-                              </MenuItem>
-                              <MenuItem value="Doubles Female">
-                                Doubles Female
-                              </MenuItem>
-                              <MenuItem value="Mixed Doubles">
-                                Mixed Doubles
-                              </MenuItem>
-                              <MenuItem value="Teams">Teams</MenuItem>
-                            </TextField>
-
-                            <TextField
-                              label="Groups"
-                              type="number"
-                              value={cat.groups}
-                              onChange={(e) =>
-                                setCategories((prev) =>
-                                  prev.map((c) =>
-                                    c.id === cat.id
-                                      ? {
-                                          ...c,
-                                          groups: Math.max(
-                                            1,
-                                            Number(e.target.value || 1),
-                                          ),
-                                        }
-                                      : c,
-                                  ),
-                                )
-                              }
-                              fullWidth
-                            />
-                          </Stack>
-                        </Stack>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </Stack>
-
-                <Stack
-                  direction={{ xs: "column", sm: "row" }}
-                  spacing={1.25}
-                  sx={{ mt: 2 }}
-                >
-                  <Button
-                    variant="contained"
-                    onClick={() => {
-                      saveSetupDraft();
-                      navigate(`/tournaments/${id}/groups`);
-                    }}
-                    sx={{ borderRadius: 999 }}
-                  >
-                    Save & Manage Groups
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    onClick={saveSetupDraft}
-                    sx={{ borderRadius: 999 }}
-                  >
-                    Save Draft
-                  </Button>
-                </Stack>
-              </CardContent>
-            </Card>
-
-            <Alert severity="info">
-              Bracket engine is not implemented yet. Planned features: group
-              phase, knockout bracket, seeding, and rounds/matches progression
-              (Tournify-style).
-            </Alert>
+            {activeTab === "groups" ? (
+              <Card>
+                <CardContent sx={{ p: 3 }}>
+                  {!selectedCategory ? (
+                    <Alert severity="info">Select a category in the Categories tab first.</Alert>
+                  ) : (
+                    <Stack spacing={1.25}>
+                      <Alert severity="info">
+                        Editing category: <strong>{selectedCategory.name}</strong>
+                        {selectedConfig?.formats?.[0]
+                          ? ` • ${selectedConfig.formats[0]}`
+                          : ""}
+                        {selectedConfig?.structureMode
+                          ? ` • ${selectedConfig.structureMode}`
+                          : ""}
+                      </Alert>
+                      <TournamentPhaseBuilder
+                        groups={groupsByCategory[selectedCategory.id] ?? []}
+                        bracketMatches={selectedConfig?.bracketMatches ?? []}
+                        groupCount={selectedConfig?.groupCount ?? Math.max(1, selectedCategory.groups || 2)}
+                        teamsPerGroup={selectedConfig?.teamsPerGroup ?? 4}
+                        qualifiersPerGroup={selectedConfig?.qualifiedPerGroup ?? 1}
+                        entryLabel={selectedEntryLabel}
+                        structureMode={selectedConfig?.structureMode ?? ""}
+                        onGroupsChange={(nextGroups) => {
+                          persistGroups({ ...groupsByCategory, [selectedCategory.id]: nextGroups });
+                          void syncTournamentGroupsForCategory(selectedCategory.id, nextGroups);
+                        }}
+                        onGroupCountChange={(count) => {
+                          if (!selectedConfig) return;
+                          setCategoryConfigs((prev) => ({
+                            ...prev,
+                            [selectedCategory.id]: {
+                              ...selectedConfig,
+                              groupCount: count,
+                            },
+                          }));
+                        }}
+                        onBracketChange={(nextMatches) => {
+                          if (!selectedConfig) return;
+                          setCategoryConfigs((prev) => ({
+                            ...prev,
+                            [selectedCategory.id]: {
+                              ...selectedConfig,
+                              bracketMatches: nextMatches,
+                            },
+                          }));
+                        }}
+                      />
+                    </Stack>
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
           </Stack>
         ) : null}
       </Box>

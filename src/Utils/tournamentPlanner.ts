@@ -16,6 +16,22 @@ export type TournamentSetupDraft = {
   formats: string[];
   structureMode: string;
   categories: TournamentCategory[];
+  categoryConfigs?: Record<
+    string,
+    {
+      formats: string[];
+      structureMode: string;
+      groupCount?: number;
+      teamsPerGroup?: number;
+      qualifiedPerGroup?: number;
+      bracketMatches?: Array<{
+        id: string;
+        round: string;
+        home: string;
+        away: string;
+      }>;
+    }
+  >;
 };
 
 export type GroupBucket = {

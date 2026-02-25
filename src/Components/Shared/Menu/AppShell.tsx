@@ -27,14 +27,16 @@ import MenuIcon from "@mui/icons-material/Menu";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import DashboardIcon from "@mui/icons-material/DashboardRounded";
 import EmojiEventsIcon from "@mui/icons-material/EmojiEventsRounded";
+import EventAvailableRoundedIcon from "@mui/icons-material/EventAvailableRounded";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonthRounded";
+import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import SettingsIcon from "@mui/icons-material/SettingsRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import { useLocation, useNavigate } from "react-router-dom";
 import Logo from "../../../assets/onora.png";
-import { clearToken, getToken } from "../../../auth/tokens";
+import { clearToken, getLoggedInRole, getToken, hasCreatorAccess } from "../../../auth/tokens";
 
 const drawerWidth = 272;
 
@@ -45,7 +47,7 @@ type NavItem = {
   match?: "exact" | "prefix";
 };
 
-const navItems: NavItem[] = [
+const baseNavItems: NavItem[] = [
   {
     label: "Dashboard",
     to: "/dashboard",
@@ -56,6 +58,12 @@ const navItems: NavItem[] = [
     label: "Tournaments",
     to: "/tournaments",
     icon: <EmojiEventsIcon />,
+    match: "prefix",
+  },
+  {
+    label: "Upcoming Events",
+    to: "/events/upcoming",
+    icon: <EventAvailableRoundedIcon />,
     match: "prefix",
   },
   {
@@ -75,6 +83,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+  const role = getLoggedInRole();
+  const canManageTeams = hasCreatorAccess(role);
+  const navItems = React.useMemo(
+    () =>
+      canManageTeams
+        ? [
+            ...baseNavItems,
+            {
+              label: "Teams",
+              to: "/teams",
+              icon: <GroupsRoundedIcon />,
+              match: "prefix" as const,
+            },
+          ]
+        : baseNavItems,
+    [canManageTeams],
+  );
   const userName = React.useMemo(() => {
     const token = getToken();
     if (!token) return "User";
@@ -132,7 +157,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Box
           sx={{
             mx: "auto",
-            maxWidth: 1440,
+            maxWidth: isMobile ? "100%" : open ? 1440 : 1720,
             minHeight: { xs: "100vh", md: "calc(100vh - 40px)" },
             bgcolor: "background.paper",
             border: "1px solid",

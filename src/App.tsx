@@ -14,6 +14,10 @@ import CreateClassPage from "./pages/CreateClassPage";
 import RequireCreateAccess from "./Components/RequireCreateAccess";
 import TournamentSetupPage from "./pages/TournamentSetupPage";
 import TournamentGroupsPage from "./pages/TournamentGroupsPage";
+import TeamsPage from "./pages/TeamsPage";
+import PlayerTournamentInvitePage from "./pages/PlayerTournamentInvitePage";
+import TournamentPaymentPage from "./pages/TournamentPaymentPage";
+import UpcomingEventsPage from "./pages/UpcomingEventsPage";
 
 function Layout() {
   return (
@@ -40,6 +44,9 @@ function App() {
           >
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/tournaments" element={<TournamentsListPage />} />
+            <Route path="/events/upcoming" element={<UpcomingEventsPage />} />
+            <Route path="/tournaments/invite" element={<PlayerTournamentInvitePage />} />
+            <Route path="/tournaments/payment" element={<TournamentPaymentPage />} />
             <Route
               path="/tournaments/new"
               element={
@@ -73,6 +80,14 @@ function App() {
               }
             />
             <Route path="/classes" element={<ClassesPage />} />
+            <Route
+              path="/teams"
+              element={
+                <RequireCreateAccess>
+                  <TeamsPage />
+                </RequireCreateAccess>
+              }
+            />
             <Route
               path="/classes/new"
               element={

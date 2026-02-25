@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Box,
   Button,
@@ -27,10 +27,16 @@ import type { AccountType, FormErrors, SignupForm } from "../Utils/FormTypes";
 import { validateInput } from "../Utils/FormValidationUtil";
 import Logo from "../assets/onora.png";
 
-const REGISTER_ROLE_IDS = [1, 2];
+const REGISTER_ROLE_IDS_BY_ACCOUNT_TYPE: Record<AccountType, number[]> = {
+  participant: [1],
+  coach: [2],
+  organization: [2],
+};
 
 export default function SignupPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const inviteTournamentId = searchParams.get("inviteTournamentId");
 
   const [form, setForm] = React.useState<SignupForm>({
     name: "",
@@ -98,16 +104,24 @@ export default function SignupPage() {
     // const normaliseName = `${form.name.trim()} ${form.lastName.trim()}`;
 
     try {
+      const roleIds =
+        REGISTER_ROLE_IDS_BY_ACCOUNT_TYPE[form.accountType] ??
+        REGISTER_ROLE_IDS_BY_ACCOUNT_TYPE.participant;
+
       const payload = {
         email: form.email.trim().toLowerCase(),
         fullName: form.name.trim(), // backend expects fullName
         phone: form.phone.trim(),
-        roleIds: REGISTER_ROLE_IDS,
+        roleIds,
         password: form.password,
         billingInfo: false,
       };
 
-      const res = await fetch(`/login/signup`, {
+      const signupUrl = inviteTournamentId
+        ? `/login/signup?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+        : "/login/signup";
+
+      const res = await fetch(signupUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -135,8 +149,10 @@ export default function SignupPage() {
       setToken(data.token);
       setApiSuccess("Account created! Token saved.");
 
-      // Navigate after success
-      navigate("/dashboard");
+      const target = inviteTournamentId
+        ? `/tournaments/invite?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+        : "/dashboard";
+      navigate(target);
     } catch (err) {
       console.error(err);
       setApiError("Signup failed. Please try again.");
@@ -349,7 +365,13 @@ export default function SignupPage() {
                 <Button
                   variant="text"
                   size="small"
-                  onClick={() => navigate("/login")}
+                  onClick={() =>
+                    navigate(
+                      inviteTournamentId
+                        ? `/login?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+                        : "/login"
+                    )
+                  }
                 >
                   Sign in
                 </Button>
