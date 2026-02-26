@@ -444,13 +444,17 @@ export default function PlayerTournamentInvitePage() {
     React.useState<EventSubscriptionDto | null>(null);
   const [tournamentInfo, setTournamentInfo] =
     React.useState<InvitedTournamentInfoDto | null>(null);
+  const [fallbackCategories, setFallbackCategories] = React.useState<InvitedTournamentCategoryDto[]>([]);
 
   const [activeGenderTab, setActiveGenderTab] = React.useState<string>("Men");
   const [selectedCategoryIds, setSelectedCategoryIds] = React.useState<number[]>([]);
   const [partnerPrefs, setPartnerPrefs] = React.useState<Record<string, PartnerPref>>({});
   const [expandedPartnerRows, setExpandedPartnerRows] = React.useState<Record<string, boolean>>({});
 
-  const allCategories = tournamentInfo?.categories ?? [];
+  const allCategories =
+    tournamentInfo?.categories && tournamentInfo.categories.length > 0
+      ? tournamentInfo.categories
+      : fallbackCategories;
 
   const availableGenders = React.useMemo(() => {
     const set = new Set<string>();
@@ -533,7 +537,7 @@ export default function PlayerTournamentInvitePage() {
         setSubscription(subscriptionRes.data);
 
         const infoRes = await api.get<InvitedTournamentInfoDto>(
-          `/events/${eventId}/subscriptions/me/tournament-info`
+          `/events/${eventId}`
         );
         setTournamentInfo(infoRes.data);
 
@@ -542,12 +546,18 @@ export default function PlayerTournamentInvitePage() {
           .map((category) => category.id);
 
         try {
-          const selectionRes = await api.get<SelectedCategoriesResponse>(
-            `/events/${eventId}/subscriptions/me/categories`
+          const selectionRes = await api.get<InvitedTournamentCategoryDto[]>(
+            "/tournament-categories",
+            { params: { eventId } },
           );
-          const selected = selectionRes.data.selectedCategories ?? [];
-          setSelectedCategoryIds(selected.map((category) => category.id));
-          selected.forEach((category) => mergePartnerPrefFromApi(category));
+          const categories = Array.isArray(selectionRes.data) ? selectionRes.data : [];
+          setFallbackCategories(categories);
+          const selected = categories.filter((category) => category.selected);
+          if (selected.length > 0) {
+            setSelectedCategoryIds(selected.map((category) => category.id));
+          } else {
+            setSelectedCategoryIds(selectedFromInfo);
+          }
         } catch {
           setSelectedCategoryIds(selectedFromInfo);
         }
@@ -741,50 +751,48 @@ export default function PlayerTournamentInvitePage() {
                 playerName={subscription?.userFullName}
               />
 
-              {!isReadOnlyView ? (
-                <Card sx={{ borderRadius: 3 }}>
-                  <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-                    <Stack spacing={2}>
-                      <Typography variant="h6" sx={{ fontWeight: 800 }}>
-                        Choose Categories
-                      </Typography>
-                      <Tabs
-                        value={activeGenderTab}
-                        onChange={(_, value) => setActiveGenderTab(value)}
-                        variant="scrollable"
-                        allowScrollButtonsMobile
-                      >
-                        {availableGenders.map((gender) => (
-                          <Tab key={gender} label={gender} value={gender} />
-                        ))}
-                      </Tabs>
+              <Card sx={{ borderRadius: 3 }}>
+                <CardContent sx={{ p: { xs: 2, md: 3 } }}>
+                  <Stack spacing={2}>
+                    <Typography variant="h6" sx={{ fontWeight: 800 }}>
+                      Choose Categories
+                    </Typography>
+                    <Tabs
+                      value={activeGenderTab}
+                      onChange={(_, value) => setActiveGenderTab(value)}
+                      variant="scrollable"
+                      allowScrollButtonsMobile
+                    >
+                      {availableGenders.map((gender) => (
+                        <Tab key={gender} label={gender} value={gender} />
+                      ))}
+                    </Tabs>
 
-                      <Box
-                        sx={{
-                          display: "grid",
-                          gridTemplateColumns: {
-                            xs: "1fr",
-                            sm: "repeat(2, minmax(0, 1fr))",
-                            md: "repeat(3, minmax(0, 1fr))",
-                          },
-                          gap: 1.5,
-                        }}
-                      >
-                        {visibleCategories.map((category) => (
-                          <Box key={category.id}>
-                            <CategoryTile
-                              category={category}
-                              selected={selectedCategoryIds.includes(category.id)}
-                              currency={tournamentInfo.currency}
-                              onToggle={toggleCategory}
-                            />
-                          </Box>
-                        ))}
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ) : null}
+                    <Box
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: {
+                          xs: "1fr",
+                          sm: "repeat(2, minmax(0, 1fr))",
+                          md: "repeat(3, minmax(0, 1fr))",
+                        },
+                        gap: 1.5,
+                      }}
+                    >
+                      {visibleCategories.map((category) => (
+                        <Box key={category.id}>
+                          <CategoryTile
+                            category={category}
+                            selected={selectedCategoryIds.includes(category.id)}
+                            currency={tournamentInfo.currency}
+                            onToggle={isReadOnlyView ? () => {} : toggleCategory}
+                          />
+                        </Box>
+                      ))}
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </Card>
 
               {selectedCategories.length > 0 ? (
                 <Card sx={{ borderRadius: 3 }}>

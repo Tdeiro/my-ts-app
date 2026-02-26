@@ -1,0 +1,26 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://postgres-db:5432/class-db
+    # url: jdbc:postgresql://localhost:5432/class-db
+    username: tjadmin
+    password: eshB2RqtU<2Pr]HX
+    # driverClassName: org.postgresql.Driver
+  jpa:
+    open-in-view: false
+  #   hibernate:
+  #     ddl-auto: update   # for dev; use 'validate' or 'none' in production
+  #   show-sql: true
+  #   properties:
+  #     hibernate:
+  #       format_sql: true
+  # sql:
+  #   init:
+  #     mode: never        # prevents Spring from trying to auto-run scripts if not needed
+
+# Optional: configure logging
+logging:
+  level:
+    org:
+      hibernate:
+        SQL: info
+        type: trace
