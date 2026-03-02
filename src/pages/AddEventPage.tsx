@@ -23,7 +23,6 @@ import {
   Tooltip,
   Typography,
   Chip,
-  Paper,
 } from "@mui/material";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useNavigate, useParams } from "react-router-dom";
@@ -112,7 +111,8 @@ function newCategory(): TournamentCategoryForm {
 }
 
 function formatAgeRange(category: TournamentCategoryForm): string {
-  if (category.minAge && category.maxAge) return `${category.minAge}-${category.maxAge}`;
+  if (category.minAge && category.maxAge)
+    return `${category.minAge}-${category.maxAge}`;
   if (category.minAge) return `${category.minAge}+`;
   if (category.maxAge) return `up to ${category.maxAge}`;
   return "All ages";
@@ -123,17 +123,15 @@ function formatTournamentLevelLabel(level?: string): string {
   if (!raw) return "Open";
   const normalized = raw.toUpperCase().replaceAll("_", " ");
   if (normalized === "ALL LEVELS") return "Open";
-  return raw
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return raw.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function formatCategoryLevelLabel(level: TournamentCategoryForm["level"]): string {
+function formatCategoryLevelLabel(
+  level: TournamentCategoryForm["level"],
+): string {
   const normalized = String(level).toUpperCase().replaceAll("_", " ");
   if (normalized === "ALL LEVELS") return "Open";
-  return normalized
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return normalized.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function getCategoryGenderSummary(category: TournamentCategoryForm): string {
@@ -147,7 +145,10 @@ function buildAutoCategoryName(category: TournamentCategoryForm): string {
 }
 
 function mapApiTournamentLevel(level?: string): TournamentForm["level"] {
-  const normalized = String(level ?? "").toUpperCase().replaceAll("_", " ").trim();
+  const normalized = String(level ?? "")
+    .toUpperCase()
+    .replaceAll("_", " ")
+    .trim();
   if (normalized === "BEGINNER") return "Beginner";
   if (normalized === "INTERMEDIATE") return "Intermediate";
   if (normalized === "ADVANCED") return "Advanced";
@@ -171,7 +172,8 @@ function validateTournamentBasics(form: TournamentForm): string | null {
   if (!form.startDate) return "Start date is required.";
   if (form.startDate < today) return "Start date cannot be before today.";
   if (!form.endDate) return "End date is required.";
-  if (form.endDate < form.startDate) return "End date must be on or after start date.";
+  if (form.endDate < form.startDate)
+    return "End date must be on or after start date.";
   if (!form.startTime) return "Start time is required.";
   if (!form.endTime) return "End time is required.";
   if (form.startDate === form.endDate && form.endTime <= form.startTime) {
@@ -182,7 +184,10 @@ function validateTournamentBasics(form: TournamentForm): string | null {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <Typography variant="body1" sx={{ fontWeight: 900, fontSize: "0.95rem", mb: 1 }}>
+    <Typography
+      variant="body1"
+      sx={{ fontWeight: 900, fontSize: "0.95rem", mb: 1 }}
+    >
       {children}
     </Typography>
   );
@@ -203,34 +208,6 @@ function SoftCard({ children }: { children: React.ReactNode }) {
   );
 }
 
-function pillChipSx(kind: "primary" | "muted" | "orange" = "muted") {
-  if (kind === "primary") {
-    return {
-      borderRadius: 999,
-      borderColor: "rgba(139,92,246,0.22)",
-      bgcolor: "rgba(139,92,246,0.06)",
-      color: "primary.main",
-      fontWeight: 650,
-    };
-  }
-  if (kind === "orange") {
-    return {
-      borderRadius: 999,
-      borderColor: "rgba(255,107,92,0.35)",
-      bgcolor: "rgba(255,107,92,0.06)",
-      color: "rgba(255,107,92,0.95)",
-      fontWeight: 650,
-    };
-  }
-  return {
-    borderRadius: 999,
-    borderColor: "rgba(15,23,42,0.12)",
-    bgcolor: "rgba(15,23,42,0.03)",
-    color: "text.secondary",
-    fontWeight: 650,
-  };
-}
-
 export default function AddTournamentPage() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -238,19 +215,33 @@ export default function AddTournamentPage() {
   const [form, setForm] = React.useState<TournamentForm>(initialForm);
   const [step, setStep] = React.useState<1 | 2 | 3>(1);
 
-  const [savedCategories, setSavedCategories] = React.useState<TournamentCategoryForm[]>([]);
-  const [draftCategory, setDraftCategory] = React.useState<TournamentCategoryForm>(newCategory());
-  const [editingCategoryId, setEditingCategoryId] = React.useState<string | null>(null);
-  const [loadedCategoryIds, setLoadedCategoryIds] = React.useState<number[]>([]);
-  const [deletingCategoryIds, setDeletingCategoryIds] = React.useState<string[]>([]);
+  const [savedCategories, setSavedCategories] = React.useState<
+    TournamentCategoryForm[]
+  >([]);
+  const [draftCategory, setDraftCategory] =
+    React.useState<TournamentCategoryForm>(newCategory());
+  const [editingCategoryId, setEditingCategoryId] = React.useState<
+    string | null
+  >(null);
+  const [loadedCategoryIds, setLoadedCategoryIds] = React.useState<number[]>(
+    [],
+  );
+  const [deletingCategoryIds, setDeletingCategoryIds] = React.useState<
+    string[]
+  >([]);
 
   const [saving, setSaving] = React.useState(false);
-  const [createdTournamentId, setCreatedTournamentId] = React.useState<number | null>(null);
+  const [createdTournamentId, setCreatedTournamentId] = React.useState<
+    number | null
+  >(null);
   const [inviteLink, setInviteLink] = React.useState("");
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const todayIsoDate = React.useMemo(() => getTodayIsoDate(), []);
-  const basicsValidationError = React.useMemo(() => validateTournamentBasics(form), [form]);
+  const basicsValidationError = React.useMemo(
+    () => validateTournamentBasics(form),
+    [form],
+  );
 
   React.useEffect(() => {
     if (!isEditMode || !id) return;
@@ -276,7 +267,9 @@ export default function AddTournamentPage() {
         const categoriesBody = await categoriesRes.json().catch(() => null);
         if (!eventRes.ok) {
           throw new Error(
-            eventBody?.message?.[0] || eventBody?.error || "Failed to load tournament",
+            eventBody?.message?.[0] ||
+              eventBody?.error ||
+              "Failed to load tournament",
           );
         }
         if (!categoriesRes.ok) {
@@ -286,7 +279,9 @@ export default function AddTournamentPage() {
               "Failed to load categories",
           );
         }
-        const raw = Array.isArray(eventBody) ? eventBody : (eventBody?.data ?? []);
+        const raw = Array.isArray(eventBody)
+          ? eventBody
+          : (eventBody?.data ?? []);
         const selected = raw.find((e: any) => String(e.id) === String(id));
         if (!selected) throw new Error("Tournament not found");
 
@@ -318,7 +313,9 @@ export default function AddTournamentPage() {
           registrationDeadline: String(selected.registrationDeadline ?? ""),
           capacity: Math.max(0, Number(selected.capacity ?? 0) || 0),
           entryFee: Math.max(0, Number(selected.entryFee ?? 0) || 0),
-          currency: String(selected.currency ?? prev.currency) as TournamentForm["currency"],
+          currency: String(
+            selected.currency ?? prev.currency,
+          ) as TournamentForm["currency"],
           description: String(selected.description ?? ""),
           isPublic: Boolean(selected.isPublic ?? true),
           allowWaitlist: Boolean(selected.allowWaitlist ?? false),
@@ -329,18 +326,24 @@ export default function AddTournamentPage() {
         const rawCategories = Array.isArray(categoriesBody)
           ? categoriesBody
           : (categoriesBody?.data ?? []);
-        const mappedCategories: TournamentCategoryForm[] = rawCategories.map((c: any) => ({
-          id: crypto.randomUUID(),
-          backendId: Number(c.id),
-          name: String(c.name ?? ""),
-          level: String(c.level ?? "INTERMEDIATE") as TournamentCategoryForm["level"],
-          minAge: c.minAge == null ? "" : String(c.minAge),
-          maxAge: c.maxAge == null ? "" : String(c.maxAge),
-          gender: String(c.gender ?? "Open") as TournamentCategoryForm["gender"],
-          expandToAllGenders: false,
-          expandToMaleFemale: false,
-          isKidsCategory: false,
-        }));
+        const mappedCategories: TournamentCategoryForm[] = rawCategories.map(
+          (c: any) => ({
+            id: crypto.randomUUID(),
+            backendId: Number(c.id),
+            name: String(c.name ?? ""),
+            level: String(
+              c.level ?? "INTERMEDIATE",
+            ) as TournamentCategoryForm["level"],
+            minAge: c.minAge == null ? "" : String(c.minAge),
+            maxAge: c.maxAge == null ? "" : String(c.maxAge),
+            gender: String(
+              c.gender ?? "Open",
+            ) as TournamentCategoryForm["gender"],
+            expandToAllGenders: false,
+            expandToMaleFemale: false,
+            isKidsCategory: false,
+          }),
+        );
         setSavedCategories(mappedCategories);
         setLoadedCategoryIds(
           mappedCategories
@@ -349,7 +352,9 @@ export default function AddTournamentPage() {
         );
       } catch (err) {
         if (cancelled) return;
-        setErrorMessage(err instanceof Error ? err.message : "Failed to load tournament");
+        setErrorMessage(
+          err instanceof Error ? err.message : "Failed to load tournament",
+        );
       }
     };
 
@@ -394,7 +399,9 @@ export default function AddTournamentPage() {
     setDraftCategory((prev) => ({
       ...prev,
       expandToAllGenders: !prev.expandToAllGenders,
-      expandToMaleFemale: prev.expandToAllGenders ? prev.expandToMaleFemale : false,
+      expandToMaleFemale: prev.expandToAllGenders
+        ? prev.expandToMaleFemale
+        : false,
     }));
   };
 
@@ -402,7 +409,9 @@ export default function AddTournamentPage() {
     setDraftCategory((prev) => ({
       ...prev,
       expandToMaleFemale: !prev.expandToMaleFemale,
-      expandToAllGenders: prev.expandToMaleFemale ? prev.expandToAllGenders : false,
+      expandToAllGenders: prev.expandToMaleFemale
+        ? prev.expandToAllGenders
+        : false,
     }));
   };
 
@@ -472,20 +481,29 @@ export default function AddTournamentPage() {
 
     setDeletingCategoryIds((prev) => [...prev, id]);
     try {
-      const res = await fetch(`${API_URL}/tournament-categories/${target.backendId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `${API_URL}/tournament-categories/${target.backendId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error(body?.message?.[0] || body?.error || "Failed to delete category");
+        throw new Error(
+          body?.message?.[0] || body?.error || "Failed to delete category",
+        );
       }
 
       removeLocal();
-      setLoadedCategoryIds((prev) => prev.filter((cid) => cid !== Number(target.backendId)));
+      setLoadedCategoryIds((prev) =>
+        prev.filter((cid) => cid !== Number(target.backendId)),
+      );
       setStatusMessage("Category deleted.");
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to delete category");
+      setErrorMessage(
+        err instanceof Error ? err.message : "Failed to delete category",
+      );
     } finally {
       setDeletingCategoryIds((prev) => prev.filter((value) => value !== id));
     }
@@ -512,9 +530,10 @@ export default function AddTournamentPage() {
         if (!category.expandToAllGenders && !category.expandToMaleFemale) {
           return [{ ...category, name: baseName }];
         }
-        const targetGenders: Array<TournamentCategoryForm["gender"]> = category.expandToAllGenders
-          ? ["Men", "Women", "Mixed"]
-          : ["Men", "Women"];
+        const targetGenders: Array<TournamentCategoryForm["gender"]> =
+          category.expandToAllGenders
+            ? ["Men", "Women", "Mixed"]
+            : ["Men", "Women"];
         return targetGenders.map((gender) => ({
           ...category,
           name: `${baseName} - ${gender}`,
@@ -571,12 +590,12 @@ export default function AddTournamentPage() {
       const res = await fetch(
         isEditMode && id ? `${API_URL}/events/${id}` : `${API_URL}/events`,
         {
-        method: isEditMode ? "PUT" : "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
+          method: isEditMode ? "PUT" : "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
         },
       );
 
@@ -587,7 +606,9 @@ export default function AddTournamentPage() {
           navigate("/login");
           return;
         }
-        throw new Error(data?.message || data?.error || "Failed to create event");
+        throw new Error(
+          data?.message || data?.error || "Failed to create event",
+        );
       }
 
       const createdId = isEditMode
@@ -615,9 +636,10 @@ export default function AddTournamentPage() {
             ];
           }
 
-          const genders: Array<TournamentCategoryForm["gender"]> = source.expandToAllGenders
-            ? ["Men", "Women", "Mixed"]
-            : ["Men", "Women"];
+          const genders: Array<TournamentCategoryForm["gender"]> =
+            source.expandToAllGenders
+              ? ["Men", "Women", "Mixed"]
+              : ["Men", "Women"];
           return genders.map((gender, index) => ({
             backendId: index === 0 ? source.backendId : undefined,
             name: `${baseName} - ${gender}`,
@@ -637,21 +659,24 @@ export default function AddTournamentPage() {
           .map(async (category) => {
             const backendId = Number(category.backendId);
             usedBackendIds.add(backendId);
-            const resUpdate = await fetch(`${API_URL}/tournament-categories/${backendId}`, {
-              method: "PUT",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
+            const resUpdate = await fetch(
+              `${API_URL}/tournament-categories/${backendId}`,
+              {
+                method: "PUT",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                  eventId: createdId,
+                  name: category.name,
+                  level: category.level,
+                  minAge: category.minAge,
+                  maxAge: category.maxAge,
+                  gender: category.gender,
+                }),
               },
-              body: JSON.stringify({
-                eventId: createdId,
-                name: category.name,
-                level: category.level,
-                minAge: category.minAge,
-                maxAge: category.maxAge,
-                gender: category.gender,
-              }),
-            });
+            );
             const body = await resUpdate.json().catch(() => null);
             return { ok: resUpdate.ok, body };
           });
@@ -681,14 +706,21 @@ export default function AddTournamentPage() {
         const deleteOps = loadedCategoryIds
           .filter((existingId) => !usedBackendIds.has(existingId))
           .map(async (categoryId) => {
-            const resDelete = await fetch(`${API_URL}/tournament-categories/${categoryId}`, {
-              method: "DELETE",
-              headers: { Authorization: `Bearer ${token}` },
-            });
+            const resDelete = await fetch(
+              `${API_URL}/tournament-categories/${categoryId}`,
+              {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              },
+            );
             return { ok: resDelete.ok, body: null };
           });
 
-        const results = await Promise.all([...updateOps, ...createOps, ...deleteOps]);
+        const results = await Promise.all([
+          ...updateOps,
+          ...createOps,
+          ...deleteOps,
+        ]);
         const failed = results.filter((r) => !r.ok);
         if (failed.length > 0) {
           const firstError =
@@ -700,26 +732,29 @@ export default function AddTournamentPage() {
       } else {
         const categoriesToCreate = signupCategories
           .map((c) => ({
-          eventId: createdId,
-          name: c.name,
-          level: c.level,
-          minAge: c.minAge ? Number(c.minAge) : undefined,
-          maxAge: c.maxAge ? Number(c.maxAge) : undefined,
-          gender: c.gender,
+            eventId: createdId,
+            name: c.name,
+            level: c.level,
+            minAge: c.minAge ? Number(c.minAge) : undefined,
+            maxAge: c.maxAge ? Number(c.maxAge) : undefined,
+            gender: c.gender,
           }))
           .filter((c) => c.name);
 
         if (categoriesToCreate.length > 0) {
           const results = await Promise.all(
             categoriesToCreate.map(async (category) => {
-              const categoryRes = await fetch(`${API_URL}/tournament-categories`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
+              const categoryRes = await fetch(
+                `${API_URL}/tournament-categories`,
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                  },
+                  body: JSON.stringify(category),
                 },
-                body: JSON.stringify(category),
-              });
+              );
               const categoryBody = await categoryRes.json().catch(() => null);
               return { ok: categoryRes.ok, body: categoryBody };
             }),
@@ -748,7 +783,9 @@ export default function AddTournamentPage() {
           : "Tournament created. You can now generate an invite link.",
       );
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to create event");
+      setErrorMessage(
+        err instanceof Error ? err.message : "Failed to create event",
+      );
     } finally {
       setSaving(false);
     }
@@ -788,7 +825,8 @@ export default function AddTournamentPage() {
     form.startTime || "—"
   }–${form.endTime || "—"}`;
   const feeText = `${Number(form.entryFee || 0)} ${form.currency}`;
-  const canUseNativeShare = typeof navigator !== "undefined" && "share" in navigator;
+  const canUseNativeShare =
+    typeof navigator !== "undefined" && "share" in navigator;
 
   return (
     <Box
@@ -796,125 +834,394 @@ export default function AddTournamentPage() {
       sx={{
         flex: 1,
         minWidth: 0,
-        bgcolor: "background.default",
-        p: { xs: 2, md: 3 },
+        bgcolor: "#F9FAFB",
+        p: { xs: 2, md: 4 },
         display: "flex",
         justifyContent: "center",
       }}
     >
-      <Box sx={{ width: "100%", maxWidth: 1100 }}>
-        <Paper
+      <Box sx={{ width: "100%", maxWidth: 1200 }}>
+        <Card
           sx={{
-            mb: 2,
-            p: { xs: 2, sm: 2.5 },
-            borderRadius: 2,
-            background:
-              "linear-gradient(180deg, rgba(139,92,246,0.10) 0%, rgba(255,255,255,0) 70%)",
+            mb: 4,
+            borderRadius: 3,
+            border: "1px solid #E5E7EB",
+            boxShadow: "0 4px 6px -1px rgb(139 92 246 / 0.1)",
+            overflow: "hidden",
+            position: "relative",
+            background: "#FFFFFF",
           }}
         >
-          {errorMessage ? (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {errorMessage}
-            </Alert>
-          ) : null}
-          {statusMessage ? (
-            <Alert severity="success" sx={{ mb: 2 }}>
-              {statusMessage}
-            </Alert>
-          ) : null}
+          {/* Decorative gradient bar */}
+          <Box
+            sx={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              height: "6px",
+              background:
+                "linear-gradient(90deg, #8B5CF6 0%, #A855F7 50%, #EC4899 100%)",
+            }}
+          />
 
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            spacing={2}
-            alignItems={{ xs: "stretch", sm: "center" }}
-            justifyContent="space-between"
-          >
-            <Box>
-              <Typography variant="h2" sx={{ mb: 0.5, fontWeight: 900 }}>
-                {isEditMode ? "Edit Tournament" : "Add Tournament"}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Step {step} of 3: {step === 1 ? "Tournament details" : step === 2 ? "Categories & Settings" : "Final preview"}
-              </Typography>
-            </Box>
-
-            <Stack direction="row" spacing={1.25} justifyContent="flex-end">
-              <Button
-                variant="outlined"
-                onClick={handleCancel}
-                sx={{
-                  borderRadius: 999,
-                  borderColor: "rgba(139,92,246,0.25)",
-                  color: "primary.main",
-                }}
-              >
-                Cancel
-              </Button>
-
-              {step === 1 ? (
-                <Button
-                  variant="contained"
-                  onClick={handleStepOneNext}
-                  disabled={Boolean(basicsValidationError)}
-                  sx={{ borderRadius: 999 }}
+          <CardContent sx={{ p: { xs: 3, sm: 4 }, pt: { xs: 4, sm: 5 } }}>
+            <Stack spacing={4}>
+              {/* Alerts */}
+              {errorMessage ? (
+                <Alert
+                  severity="error"
+                  sx={{
+                    borderRadius: 2.5,
+                    border: "1.5px solid #FEE2E2",
+                    bgcolor: "#FEF2F2",
+                  }}
                 >
-                  Next: Categories
-                </Button>
-              ) : step === 2 ? (
-                <>
-                  <Button variant="outlined" onClick={() => setStep(1)} sx={{ borderRadius: 999 }}>
-                    Back
-                  </Button>
-                  <Button
-                    variant="contained"
-                    onClick={() => setStep(3)}
-                    disabled={!hasValidCategories}
-                    sx={{ borderRadius: 999 }}
+                  {errorMessage}
+                </Alert>
+              ) : null}
+              {statusMessage ? (
+                <Alert
+                  severity="success"
+                  sx={{
+                    borderRadius: 2.5,
+                    border: "1.5px solid #D1FAE5",
+                    bgcolor: "#F0FDF4",
+                  }}
+                >
+                  {statusMessage}
+                </Alert>
+              ) : null}
+
+              {/* Header Section */}
+              <Stack spacing={3}>
+                <Stack
+                  direction={{ xs: "column", sm: "row" }}
+                  spacing={3}
+                  alignItems={{ xs: "flex-start", sm: "center" }}
+                  justifyContent="space-between"
+                >
+                  <Stack spacing={1}>
+                    <Typography
+                      variant="h4"
+                      sx={{
+                        fontWeight: 800,
+                        fontSize: { xs: "1.75rem", sm: "2.25rem" },
+                        color: "#111827",
+                        background:
+                          "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                        WebkitBackgroundClip: "text",
+                        WebkitTextFillColor: "transparent",
+                        backgroundClip: "text",
+                      }}
+                    >
+                      {isEditMode ? "Edit Tournament" : "Add Tournament"}
+                    </Typography>
+                    <Typography
+                      variant="body1"
+                      sx={{ color: "#6B7280", fontSize: "1rem" }}
+                    >
+                      Step {step} of 3:{" "}
+                      {step === 1
+                        ? "Tournament details"
+                        : step === 2
+                          ? "Categories & Settings"
+                          : "Final preview"}
+                    </Typography>
+                  </Stack>
+
+                  <Stack
+                    direction="row"
+                    spacing={2}
+                    justifyContent="flex-end"
+                    flexWrap="wrap"
                   >
-                    Preview
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button variant="outlined" onClick={() => setStep(2)} sx={{ borderRadius: 999 }}>
-                    Back
-                  </Button>
-                  {createdTournamentId ? (
                     <Button
                       variant="outlined"
-                      onClick={() => navigate("/tournaments")}
-                      sx={{ borderRadius: 999 }}
+                      onClick={handleCancel}
+                      sx={{
+                        borderRadius: 2,
+                        borderWidth: "1.5px",
+                        borderColor: "#E5E7EB",
+                        color: "#374151",
+                        fontWeight: 600,
+                        px: 3,
+                        py: 1.25,
+                        textTransform: "none",
+                        "&:hover": {
+                          borderWidth: "1.5px",
+                          borderColor: "#D1D5DB",
+                          bgcolor: "#F9FAFB",
+                        },
+                      }}
                     >
-                      Back to Tournaments
+                      Cancel
                     </Button>
-                  ) : null}
-                  <Button
-                    variant="contained"
-                    onClick={handleSubmit}
-                    disabled={
-                      saving ||
-                      Boolean(basicsValidationError) ||
-                      !hasValidCategories ||
-                      (createdTournamentId !== null && !isEditMode)
-                    }
-                    sx={{ borderRadius: 999 }}
-                  >
-                    {saving
-                      ? "Saving…"
-                      : isEditMode
-                        ? "Save Changes"
-                        : createdTournamentId
-                          ? "Tournament Created"
-                          : "Create Tournament"}
-                  </Button>
-                </>
-              )}
+
+                    {step === 1 ? (
+                      <Button
+                        variant="contained"
+                        onClick={handleStepOneNext}
+                        disabled={Boolean(basicsValidationError)}
+                        sx={{
+                          borderRadius: 2,
+                          background:
+                            "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                          fontWeight: 600,
+                          px: 3,
+                          py: 1.25,
+                          textTransform: "none",
+                          boxShadow: "0 4px 6px -1px rgb(139 92 246 / 0.3)",
+                          "&:hover": {
+                            background:
+                              "linear-gradient(135deg, #7C3AED 0%, #DB2777 100%)",
+                            boxShadow: "0 6px 8px -1px rgb(139 92 246 / 0.4)",
+                          },
+                          "&:disabled": {
+                            background: "#E5E7EB",
+                            color: "#9CA3AF",
+                          },
+                        }}
+                      >
+                        Next: Categories
+                      </Button>
+                    ) : step === 2 ? (
+                      <>
+                        <Button
+                          variant="outlined"
+                          onClick={() => setStep(1)}
+                          sx={{
+                            borderRadius: 2,
+                            borderWidth: "1.5px",
+                            borderColor: "#E5E7EB",
+                            color: "#374151",
+                            fontWeight: 600,
+                            px: 3,
+                            py: 1.25,
+                            textTransform: "none",
+                            "&:hover": {
+                              borderWidth: "1.5px",
+                              borderColor: "#D1D5DB",
+                              bgcolor: "#F9FAFB",
+                            },
+                          }}
+                        >
+                          Back
+                        </Button>
+                        <Button
+                          variant="contained"
+                          onClick={() => setStep(3)}
+                          disabled={!hasValidCategories}
+                          sx={{
+                            borderRadius: 2,
+                            background:
+                              "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                            fontWeight: 600,
+                            px: 3,
+                            py: 1.25,
+                            textTransform: "none",
+                            boxShadow: "0 4px 6px -1px rgb(139 92 246 / 0.3)",
+                            "&:hover": {
+                              background:
+                                "linear-gradient(135deg, #7C3AED 0%, #DB2777 100%)",
+                              boxShadow: "0 6px 8px -1px rgb(139 92 246 / 0.4)",
+                            },
+                            "&:disabled": {
+                              background: "#E5E7EB",
+                              color: "#9CA3AF",
+                            },
+                          }}
+                        >
+                          Preview
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          variant="outlined"
+                          onClick={() => setStep(2)}
+                          sx={{
+                            borderRadius: 2,
+                            borderWidth: "1.5px",
+                            borderColor: "#E5E7EB",
+                            color: "#374151",
+                            fontWeight: 600,
+                            px: 3,
+                            py: 1.25,
+                            textTransform: "none",
+                            "&:hover": {
+                              borderWidth: "1.5px",
+                              borderColor: "#D1D5DB",
+                              bgcolor: "#F9FAFB",
+                            },
+                          }}
+                        >
+                          Back
+                        </Button>
+                        {createdTournamentId ? (
+                          <Button
+                            variant="outlined"
+                            onClick={() => navigate("/tournaments")}
+                            sx={{
+                              borderRadius: 2,
+                              borderWidth: "1.5px",
+                              borderColor: "#8B5CF6",
+                              color: "#8B5CF6",
+                              fontWeight: 600,
+                              px: 3,
+                              py: 1.25,
+                              textTransform: "none",
+                              "&:hover": {
+                                borderWidth: "1.5px",
+                                borderColor: "#7C3AED",
+                                bgcolor: "#FAF5FF",
+                              },
+                            }}
+                          >
+                            Back to Tournaments
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="contained"
+                          onClick={handleSubmit}
+                          disabled={
+                            saving ||
+                            Boolean(basicsValidationError) ||
+                            !hasValidCategories ||
+                            (createdTournamentId !== null && !isEditMode)
+                          }
+                          sx={{
+                            borderRadius: 2,
+                            background:
+                              "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                            fontWeight: 600,
+                            px: 3,
+                            py: 1.25,
+                            textTransform: "none",
+                            boxShadow: "0 4px 6px -1px rgb(139 92 246 / 0.3)",
+                            "&:hover": {
+                              background:
+                                "linear-gradient(135deg, #7C3AED 0%, #DB2777 100%)",
+                              boxShadow: "0 6px 8px -1px rgb(139 92 246 / 0.4)",
+                            },
+                            "&:disabled": {
+                              background: "#E5E7EB",
+                              color: "#9CA3AF",
+                            },
+                          }}
+                        >
+                          {saving
+                            ? "Saving…"
+                            : isEditMode
+                              ? "Save Changes"
+                              : createdTournamentId
+                                ? "Tournament Created"
+                                : "Create Tournament"}
+                        </Button>
+                      </>
+                    )}
+                  </Stack>
+                </Stack>
+
+                {/* Enhanced Progress Indicator */}
+                <Box>
+                  <Stack direction="row" spacing={2} sx={{ mb: 1.5 }}>
+                    {[
+                      { num: 1, label: "Details" },
+                      { num: 2, label: "Categories" },
+                      { num: 3, label: "Preview" },
+                    ].map((item) => (
+                      <Stack
+                        key={item.num}
+                        direction="row"
+                        spacing={1}
+                        alignItems="center"
+                        sx={{ flex: 1 }}
+                      >
+                        <Box
+                          sx={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: "50%",
+                            background:
+                              step >= item.num
+                                ? "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)"
+                                : "#E5E7EB",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: step >= item.num ? "#FFFFFF" : "#9CA3AF",
+                            fontWeight: 700,
+                            fontSize: "0.8125rem",
+                            transition: "all 0.3s ease",
+                          }}
+                        >
+                          {item.num}
+                        </Box>
+                        <Typography
+                          sx={{
+                            fontSize: "0.8125rem",
+                            fontWeight: 600,
+                            color: step >= item.num ? "#8B5CF6" : "#9CA3AF",
+                            display: { xs: "none", sm: "block" },
+                          }}
+                        >
+                          {item.label}
+                        </Typography>
+                      </Stack>
+                    ))}
+                  </Stack>
+
+                  <Stack direction="row" spacing={2}>
+                    <Box
+                      sx={{
+                        flex: 1,
+                        height: 8,
+                        borderRadius: 999,
+                        background:
+                          step >= 1
+                            ? "linear-gradient(90deg, #8B5CF6 0%, #A855F7 100%)"
+                            : "#E5E7EB",
+                        transition: "all 0.3s ease",
+                      }}
+                    />
+                    <Box
+                      sx={{
+                        flex: 1,
+                        height: 8,
+                        borderRadius: 999,
+                        background:
+                          step >= 2
+                            ? "linear-gradient(90deg, #A855F7 0%, #EC4899 100%)"
+                            : "#E5E7EB",
+                        transition: "all 0.3s ease",
+                      }}
+                    />
+                    <Box
+                      sx={{
+                        flex: 1,
+                        height: 8,
+                        borderRadius: 999,
+                        background:
+                          step >= 3
+                            ? "linear-gradient(90deg, #EC4899 0%, #F472B6 100%)"
+                            : "#E5E7EB",
+                        transition: "all 0.3s ease",
+                      }}
+                    />
+                  </Stack>
+                </Box>
+              </Stack>
             </Stack>
-          </Stack>
-        </Paper>
+          </CardContent>
+        </Card>
 
         {step === 1 ? (
-          <Stack direction={{ xs: "column", lg: "row" }} spacing={2} alignItems="flex-start">
+          <Stack
+            direction={{ xs: "column", lg: "row" }}
+            spacing={2}
+            alignItems="flex-start"
+          >
             <Box sx={{ width: "100%", flex: 1 }}>
               <SoftCard>
                 <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
@@ -922,12 +1229,21 @@ export default function AddTournamentPage() {
                   <Divider sx={{ mb: 2 }} />
 
                   <Stack spacing={2}>
-                    <TextField label="Tournament Name" value={form.name} onChange={setField("name")} fullWidth />
+                    <TextField
+                      label="Tournament Name"
+                      value={form.name}
+                      onChange={setField("name")}
+                      fullWidth
+                    />
 
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                       <FormControl fullWidth>
                         <InputLabel>Sport</InputLabel>
-                        <Select label="Sport" value={form.sport} onChange={setField("sport")}>
+                        <Select
+                          label="Sport"
+                          value={form.sport}
+                          onChange={setField("sport")}
+                        >
                           <MenuItem value="">
                             <em>Select sport</em>
                           </MenuItem>
@@ -941,7 +1257,11 @@ export default function AddTournamentPage() {
 
                       <FormControl fullWidth>
                         <InputLabel>Level</InputLabel>
-                        <Select label="Level" value={form.level} onChange={setField("level")}>
+                        <Select
+                          label="Level"
+                          value={form.level}
+                          onChange={setField("level")}
+                        >
                           <MenuItem value="">
                             <em>Select level</em>
                           </MenuItem>
@@ -955,13 +1275,23 @@ export default function AddTournamentPage() {
 
                     <FormControl fullWidth>
                       <InputLabel>Timezone</InputLabel>
-                      <Select label="Timezone" value={form.timezone} onChange={setField("timezone")}>
+                      <Select
+                        label="Timezone"
+                        value={form.timezone}
+                        onChange={setField("timezone")}
+                      >
                         <MenuItem value="">
                           <em>Select timezone</em>
                         </MenuItem>
-                        <MenuItem value="Australia/Sydney">Australia/Sydney</MenuItem>
-                        <MenuItem value="Australia/Melbourne">Australia/Melbourne</MenuItem>
-                        <MenuItem value="Australia/Brisbane">Australia/Brisbane</MenuItem>
+                        <MenuItem value="Australia/Sydney">
+                          Australia/Sydney
+                        </MenuItem>
+                        <MenuItem value="Australia/Melbourne">
+                          Australia/Melbourne
+                        </MenuItem>
+                        <MenuItem value="Australia/Brisbane">
+                          Australia/Brisbane
+                        </MenuItem>
                         <MenuItem value="UTC">UTC</MenuItem>
                       </Select>
                     </FormControl>
@@ -971,8 +1301,18 @@ export default function AddTournamentPage() {
                   <Divider sx={{ mb: 2 }} />
 
                   <Stack spacing={2}>
-                    <TextField label="Venue / Club Name" value={form.locationName} onChange={setField("locationName")} fullWidth />
-                    <TextField label="Address" value={form.address} onChange={setField("address")} fullWidth />
+                    <TextField
+                      label="Venue / Club Name"
+                      value={form.locationName}
+                      onChange={setField("locationName")}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Address"
+                      value={form.address}
+                      onChange={setField("address")}
+                      fullWidth
+                    />
                   </Stack>
 
                   <SectionTitle>Date & Time</SectionTitle>
@@ -987,7 +1327,10 @@ export default function AddTournamentPage() {
                         onChange={setField("startDate")}
                         InputLabelProps={{ shrink: true }}
                         inputProps={{ min: todayIsoDate }}
-                        error={Boolean(form.startDate) && form.startDate < todayIsoDate}
+                        error={
+                          Boolean(form.startDate) &&
+                          form.startDate < todayIsoDate
+                        }
                         helperText={
                           form.startDate && form.startDate < todayIsoDate
                             ? "Start date cannot be before today."
@@ -1002,9 +1345,15 @@ export default function AddTournamentPage() {
                         onChange={setField("endDate")}
                         InputLabelProps={{ shrink: true }}
                         inputProps={{ min: form.startDate || todayIsoDate }}
-                        error={Boolean(form.endDate) && Boolean(form.startDate) && form.endDate < form.startDate}
+                        error={
+                          Boolean(form.endDate) &&
+                          Boolean(form.startDate) &&
+                          form.endDate < form.startDate
+                        }
                         helperText={
-                          form.endDate && form.startDate && form.endDate < form.startDate
+                          form.endDate &&
+                          form.startDate &&
+                          form.endDate < form.startDate
                             ? "End date must be on or after start date."
                             : " "
                         }
@@ -1013,8 +1362,22 @@ export default function AddTournamentPage() {
                     </Stack>
 
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                      <TextField label="Start Time" type="time" value={form.startTime} onChange={setField("startTime")} InputLabelProps={{ shrink: true }} fullWidth />
-                      <TextField label="End Time" type="time" value={form.endTime} onChange={setField("endTime")} InputLabelProps={{ shrink: true }} fullWidth />
+                      <TextField
+                        label="Start Time"
+                        type="time"
+                        value={form.startTime}
+                        onChange={setField("startTime")}
+                        InputLabelProps={{ shrink: true }}
+                        fullWidth
+                      />
+                      <TextField
+                        label="End Time"
+                        type="time"
+                        value={form.endTime}
+                        onChange={setField("endTime")}
+                        InputLabelProps={{ shrink: true }}
+                        fullWidth
+                      />
                     </Stack>
 
                     <TextField
@@ -1023,7 +1386,10 @@ export default function AddTournamentPage() {
                       value={form.registrationDeadline}
                       onChange={setField("registrationDeadline")}
                       InputLabelProps={{ shrink: true }}
-                      inputProps={{ min: todayIsoDate, max: form.startDate || undefined }}
+                      inputProps={{
+                        min: todayIsoDate,
+                        max: form.startDate || undefined,
+                      }}
                       fullWidth
                     />
                   </Stack>
@@ -1037,7 +1403,10 @@ export default function AddTournamentPage() {
                       type="number"
                       value={form.capacity}
                       onChange={(e) =>
-                        setForm((p) => ({ ...p, capacity: Math.max(0, Number(e.target.value || 0)) }))
+                        setForm((p) => ({
+                          ...p,
+                          capacity: Math.max(0, Number(e.target.value || 0)),
+                        }))
                       }
                       fullWidth
                     />
@@ -1046,13 +1415,20 @@ export default function AddTournamentPage() {
                       type="number"
                       value={form.entryFee}
                       onChange={(e) =>
-                        setForm((p) => ({ ...p, entryFee: Math.max(0, Number(e.target.value || 0)) }))
+                        setForm((p) => ({
+                          ...p,
+                          entryFee: Math.max(0, Number(e.target.value || 0)),
+                        }))
                       }
                       fullWidth
                     />
                     <FormControl fullWidth>
                       <InputLabel>Currency</InputLabel>
-                      <Select label="Currency" value={form.currency} onChange={setField("currency")}>
+                      <Select
+                        label="Currency"
+                        value={form.currency}
+                        onChange={setField("currency")}
+                      >
                         <MenuItem value="">
                           <em>Select currency</em>
                         </MenuItem>
@@ -1066,12 +1442,22 @@ export default function AddTournamentPage() {
 
                   <SectionTitle>Description</SectionTitle>
                   <Divider sx={{ mb: 2 }} />
-                  <TextField label="Details" value={form.description} onChange={setField("description")} multiline minRows={4} fullWidth />
+                  <TextField
+                    label="Details"
+                    value={form.description}
+                    onChange={setField("description")}
+                    multiline
+                    minRows={4}
+                    fullWidth
+                  />
                 </CardContent>
               </SoftCard>
             </Box>
 
-            <Stack spacing={2} sx={{ width: "100%", maxWidth: 360, flexShrink: 0 }}>
+            <Stack
+              spacing={2}
+              sx={{ width: "100%", maxWidth: 360, flexShrink: 0 }}
+            >
               <SoftCard>
                 <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
                   <SectionTitle>Settings</SectionTitle>
@@ -1079,18 +1465,29 @@ export default function AddTournamentPage() {
 
                   <Stack spacing={1}>
                     <FormControlLabel
-                      control={<Switch checked={form.isPublic} onChange={setSwitch("isPublic")} />}
+                      control={
+                        <Switch
+                          checked={form.isPublic}
+                          onChange={setSwitch("isPublic")}
+                        />
+                      }
                       label="Public tournament (visible to everyone)"
                     />
                     <FormControlLabel
                       control={
-                        <Switch checked={form.allowWaitlist} onChange={setSwitch("allowWaitlist")} />
+                        <Switch
+                          checked={form.allowWaitlist}
+                          onChange={setSwitch("allowWaitlist")}
+                        />
                       }
                       label="Allow waitlist when full"
                     />
                     <FormControlLabel
                       control={
-                        <Switch checked={form.requireApproval} onChange={setSwitch("requireApproval")} />
+                        <Switch
+                          checked={form.requireApproval}
+                          onChange={setSwitch("requireApproval")}
+                        />
                       }
                       label="Require approval to join"
                     />
@@ -1100,59 +1497,165 @@ export default function AddTournamentPage() {
             </Stack>
           </Stack>
         ) : step === 2 ? (
-          <SoftCard>
-            <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
-              <SectionTitle>Categories</SectionTitle>
-              <Divider sx={{ mb: 2 }} />
-              <Alert severity="info" sx={{ mb: 2 }}>
-                Configure one category at a time, add it to the list, then go to Preview.
-              </Alert>
+          <Card
+            sx={{
+              borderRadius: 3,
+              border: "1px solid #E5E7EB",
+              boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+            }}
+          >
+            <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
+              <Stack spacing={3}>
+                {/* Header Section */}
+                <Box>
+                  <Typography
+                    variant="h2"
+                    sx={{
+                      fontWeight: 700,
+                      fontSize: "1.5rem",
+                      color: "#111827",
+                      mb: 0.5,
+                    }}
+                  >
+                    Categories
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    sx={{ color: "#6B7280", fontSize: "0.9375rem" }}
+                  >
+                    Configure one category at a time, add it to the list, then
+                    go to Preview.
+                  </Typography>
+                </Box>
 
-              <Box
-                sx={{
-                  mb: 2,
-                  p: 1.5,
-                  borderRadius: 2,
-                  border: "1px solid rgba(15,23,42,0.10)",
-                  background: "rgba(15,23,42,0.03)",
-                }}
-              >
-                <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                  {form.name || "Untitled Tournament"}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {form.sport} • {formatTournamentLevelLabel(form.level)} • {form.startDate || "TBD"}
-                </Typography>
-              </Box>
+                {/* Tournament Info Card */}
+                <Card
+                  sx={{
+                    borderRadius: 2,
+                    border: "1px solid #E9D5FF",
+                    background:
+                      "linear-gradient(135deg, #FAF5FF 0%, #FDF2F8 100%)",
+                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+                  }}
+                >
+                  <CardContent sx={{ p: 2.5 }}>
+                    <Stack spacing={0.5}>
+                      <Typography
+                        sx={{
+                          fontWeight: 700,
+                          fontSize: "1rem",
+                          color: "#111827",
+                        }}
+                      >
+                        {form.name || "Untitled Tournament"}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        sx={{ color: "#6B7280", fontSize: "0.875rem" }}
+                      >
+                        {form.sport} • {formatTournamentLevelLabel(form.level)}{" "}
+                        • {form.startDate || "TBD"}
+                      </Typography>
+                    </Stack>
+                  </CardContent>
+                </Card>
 
-              <Stack spacing={1.5}>
-                <Card sx={{ borderRadius: 2, border: "1px solid rgba(15,23,42,0.10)", boxShadow: "none" }}>
-                  <CardContent sx={{ p: 1.5 }}>
-                    <Stack spacing={1.25}>
-                      <Stack direction="row" alignItems="center" justifyContent="space-between">
-                        <Typography sx={{ fontWeight: 800 }}>New Category</Typography>
+                {/* New Category Card */}
+                <Card
+                  sx={{
+                    borderRadius: 3,
+                    border: "1px solid #E5E7EB",
+                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+                    position: "relative",
+                    overflow: "hidden",
+                    "&::before": {
+                      content: '""',
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: "4px",
+                      background:
+                        "linear-gradient(90deg, #8B5CF6 0%, #A855F7 50%, #EC4899 100%)",
+                    },
+                  }}
+                >
+                  <CardContent sx={{ p: 3 }}>
+                    <Stack spacing={3}>
+                      {/* Header with Chip */}
+                      <Stack
+                        direction="row"
+                        alignItems="center"
+                        justifyContent="space-between"
+                        spacing={2}
+                      >
+                        <Typography
+                          variant="h2"
+                          sx={{
+                            fontWeight: 700,
+                            fontSize: "1.5rem",
+                            color: "#111827",
+                          }}
+                        >
+                          New Category
+                        </Typography>
                         {draftCategory.name.trim() ? (
-                          <Chip size="small" label={`${formatCategoryLevelLabel(draftCategory.level)} • ${draftCategory.gender} • ${formatAgeRange(draftCategory)}`} variant="outlined" sx={pillChipSx("muted")} />
+                          <Chip
+                            size="small"
+                            label={`${formatCategoryLevelLabel(
+                              draftCategory.level,
+                            )} • ${draftCategory.gender} • ${formatAgeRange(
+                              draftCategory,
+                            )}`}
+                            sx={{
+                              bgcolor: "#F3E8FF",
+                              color: "#8B5CF6",
+                              fontWeight: 600,
+                              fontSize: "0.75rem",
+                              border: "1px solid #E9D5FF",
+                            }}
+                          />
                         ) : null}
                       </Stack>
 
+                      {/* Category Name Field */}
                       <Stack direction="row" spacing={1} alignItems="center">
                         <TextField
                           label="Category Name (optional)"
                           value={draftCategory.name}
-                          onChange={(e) => setDraftCategory((prev) => ({ ...prev, name: e.target.value }))}
+                          onChange={(e) =>
+                            setDraftCategory((prev) => ({
+                              ...prev,
+                              name: e.target.value,
+                            }))
+                          }
                           placeholder="e.g. U12, Open, Pro Women"
                           fullWidth
+                          sx={{
+                            "& .MuiOutlinedInput-root": {
+                              borderRadius: 2,
+                            },
+                          }}
                         />
                         <Tooltip
                           title="Optional: if empty, name is auto-generated from level + gender."
                           arrow
                         >
-                          <InfoOutlinedIcon sx={{ color: "text.secondary", fontSize: 20 }} />
+                          <InfoOutlinedIcon
+                            sx={{
+                              color: "#9CA3AF",
+                              fontSize: 20,
+                              flexShrink: 0,
+                            }}
+                          />
                         </Tooltip>
                       </Stack>
 
-                      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
+                      {/* Level & Gender Row */}
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={2}
+                      >
                         <TextField
                           select
                           label="Level"
@@ -1160,10 +1663,16 @@ export default function AddTournamentPage() {
                           onChange={(e) =>
                             setDraftCategory((prev) => ({
                               ...prev,
-                              level: e.target.value as TournamentCategoryForm["level"],
+                              level: e.target
+                                .value as TournamentCategoryForm["level"],
                             }))
                           }
                           fullWidth
+                          sx={{
+                            "& .MuiOutlinedInput-root": {
+                              borderRadius: 2,
+                            },
+                          }}
                         >
                           <MenuItem value="BEGINNER">Beginner</MenuItem>
                           <MenuItem value="INTERMEDIATE">Intermediate</MenuItem>
@@ -1178,11 +1687,20 @@ export default function AddTournamentPage() {
                           onChange={(e) =>
                             setDraftCategory((prev) => ({
                               ...prev,
-                              gender: e.target.value as TournamentCategoryForm["gender"],
+                              gender: e.target
+                                .value as TournamentCategoryForm["gender"],
                             }))
                           }
                           fullWidth
-                          disabled={draftCategory.expandToAllGenders || draftCategory.expandToMaleFemale}
+                          disabled={
+                            draftCategory.expandToAllGenders ||
+                            draftCategory.expandToMaleFemale
+                          }
+                          sx={{
+                            "& .MuiOutlinedInput-root": {
+                              borderRadius: 2,
+                            },
+                          }}
                         >
                           <MenuItem value="Open">Open</MenuItem>
                           <MenuItem value="Women">Women</MenuItem>
@@ -1191,43 +1709,198 @@ export default function AddTournamentPage() {
                         </TextField>
                       </Stack>
 
-                      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
+                      {/* Age Range Row */}
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={2}
+                      >
                         <TextField
                           label="Min Age"
                           type="number"
                           value={draftCategory.minAge}
-                          onChange={(e) => setDraftCategory((prev) => ({ ...prev, minAge: e.target.value }))}
+                          onChange={(e) =>
+                            setDraftCategory((prev) => ({
+                              ...prev,
+                              minAge: e.target.value,
+                            }))
+                          }
                           fullWidth
+                          sx={{
+                            "& .MuiOutlinedInput-root": {
+                              borderRadius: 2,
+                            },
+                          }}
                         />
                         <TextField
                           label="Max Age"
                           type="number"
                           value={draftCategory.maxAge}
-                          onChange={(e) => setDraftCategory((prev) => ({ ...prev, maxAge: e.target.value }))}
+                          onChange={(e) =>
+                            setDraftCategory((prev) => ({
+                              ...prev,
+                              maxAge: e.target.value,
+                            }))
+                          }
                           fullWidth
+                          sx={{
+                            "& .MuiOutlinedInput-root": {
+                              borderRadius: 2,
+                            },
+                          }}
                         />
                       </Stack>
 
-                      <Stack direction="row" alignItems="center" spacing={1} sx={{ alignSelf: "flex-start" }}>
-                        <Switch checked={draftCategory.expandToAllGenders} onChange={toggleGenderVariants} />
-                        <Typography variant="body2">Enable M/F/Mix variants for this category</Typography>
-                      </Stack>
-                      <Stack direction="row" alignItems="center" spacing={1} sx={{ alignSelf: "flex-start" }}>
-                        <Switch checked={draftCategory.expandToMaleFemale} onChange={toggleMaleFemaleVariants} />
-                        <Typography variant="body2">Enable M/F variants only</Typography>
-                      </Stack>
-                      <Stack direction="row" alignItems="center" spacing={1} sx={{ alignSelf: "flex-start" }}>
-                        <Switch checked={draftCategory.isKidsCategory} onChange={toggleKidsCategory} />
-                        <Typography variant="body2">Kids category (auto-sets max age to 12 when empty)</Typography>
+                      {/* Options Section */}
+                      <Stack spacing={2}>
+                        <Box
+                          sx={{
+                            p: 2.5,
+                            borderRadius: 2,
+                            bgcolor: "#F9FAFB",
+                            border: "1px solid #E5E7EB",
+                          }}
+                        >
+                          <Stack spacing={2}>
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  checked={draftCategory.expandToAllGenders}
+                                  onChange={toggleGenderVariants}
+                                  sx={{
+                                    "& .MuiSwitch-switchBase.Mui-checked": {
+                                      color: "#8B5CF6",
+                                    },
+                                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track":
+                                      {
+                                        backgroundColor: "#8B5CF6",
+                                      },
+                                  }}
+                                />
+                              }
+                              label={
+                                <Typography
+                                  sx={{
+                                    fontSize: "0.9375rem",
+                                    color: "#374151",
+                                    fontWeight: 500,
+                                  }}
+                                >
+                                  Enable M/F/Mix variants for this category
+                                </Typography>
+                              }
+                              sx={{ m: 0 }}
+                            />
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  checked={draftCategory.expandToMaleFemale}
+                                  onChange={toggleMaleFemaleVariants}
+                                  sx={{
+                                    "& .MuiSwitch-switchBase.Mui-checked": {
+                                      color: "#8B5CF6",
+                                    },
+                                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track":
+                                      {
+                                        backgroundColor: "#8B5CF6",
+                                      },
+                                  }}
+                                />
+                              }
+                              label={
+                                <Typography
+                                  sx={{
+                                    fontSize: "0.9375rem",
+                                    color: "#374151",
+                                    fontWeight: 500,
+                                  }}
+                                >
+                                  Enable M/F variants only
+                                </Typography>
+                              }
+                              sx={{ m: 0 }}
+                            />
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  checked={draftCategory.isKidsCategory}
+                                  onChange={toggleKidsCategory}
+                                  sx={{
+                                    "& .MuiSwitch-switchBase.Mui-checked": {
+                                      color: "#8B5CF6",
+                                    },
+                                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track":
+                                      {
+                                        backgroundColor: "#8B5CF6",
+                                      },
+                                  }}
+                                />
+                              }
+                              label={
+                                <Typography
+                                  sx={{
+                                    fontSize: "0.9375rem",
+                                    color: "#374151",
+                                    fontWeight: 500,
+                                  }}
+                                >
+                                  Kids category (auto-sets max age to 12 when
+                                  empty)
+                                </Typography>
+                              }
+                              sx={{ m: 0 }}
+                            />
+                          </Stack>
+                        </Box>
                       </Stack>
 
-                      <Stack direction="row" justifyContent="flex-end">
+                      {/* Action Buttons */}
+                      <Stack
+                        direction="row"
+                        spacing={2}
+                        justifyContent="flex-end"
+                      >
                         {editingCategoryId ? (
-                          <Button variant="text" onClick={cancelEditCategory} sx={{ mr: 1 }}>
+                          <Button
+                            variant="outlined"
+                            onClick={cancelEditCategory}
+                            sx={{
+                              borderRadius: 2,
+                              borderWidth: "1.5px",
+                              borderColor: "#E5E7EB",
+                              color: "#374151",
+                              fontWeight: 600,
+                              px: 3,
+                              py: 1.25,
+                              textTransform: "none",
+                              "&:hover": {
+                                borderWidth: "1.5px",
+                                borderColor: "#D1D5DB",
+                                bgcolor: "#F9FAFB",
+                              },
+                            }}
+                          >
                             Cancel Edit
                           </Button>
                         ) : null}
-                        <Button variant="outlined" onClick={addCategory} sx={{ borderRadius: 999 }}>
+                        <Button
+                          variant="contained"
+                          onClick={addCategory}
+                          sx={{
+                            borderRadius: 2,
+                            background:
+                              "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                            fontWeight: 600,
+                            px: 3,
+                            py: 1.25,
+                            textTransform: "none",
+                            boxShadow: "0 4px 6px -1px rgb(139 92 246 / 0.3)",
+                            "&:hover": {
+                              background:
+                                "linear-gradient(135deg, #7C3AED 0%, #DB2777 100%)",
+                              boxShadow: "0 6px 8px -1px rgb(139 92 246 / 0.4)",
+                            },
+                          }}
+                        >
                           {editingCategoryId ? "Save Category" : "Add Category"}
                         </Button>
                       </Stack>
@@ -1235,216 +1908,847 @@ export default function AddTournamentPage() {
                   </CardContent>
                 </Card>
 
-                <Box
+                {/* Categories List */}
+                <Card
                   sx={{
-                    p: 2,
-                    borderRadius: 2,
-                    border: "1px solid rgba(15,23,42,0.10)",
-                    background: "rgba(15,23,42,0.02)",
+                    borderRadius: 3,
+                    border: "1px solid #E5E7EB",
+                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
                   }}
                 >
-                  <Stack
-                    direction={{ xs: "column", sm: "row" }}
-                    spacing={1}
-                    alignItems={{ sm: "center" }}
-                    justifyContent="space-between"
-                    sx={{ mb: 1 }}
-                  >
-                    <Typography variant="body1" sx={{ fontWeight: 900 }}>
-                      Categories List
-                    </Typography>
-                    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                      <Chip
-                        size="small"
-                        label={`${savedCategories.length} categor${savedCategories.length === 1 ? "y" : "ies"}`}
-                        variant="outlined"
-                        sx={pillChipSx("muted")}
-                      />
-                      <Chip
-                        size="small"
-                        label={`${signupCategories.length} signup option${signupCategories.length === 1 ? "" : "s"}`}
-                        variant="outlined"
-                        sx={pillChipSx("primary")}
-                      />
-                    </Stack>
-                  </Stack>
+                  <CardContent sx={{ p: 3 }}>
+                    <Stack spacing={3}>
+                      {/* Header with Stats */}
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={2}
+                        alignItems={{ xs: "flex-start", sm: "center" }}
+                        justifyContent="space-between"
+                      >
+                        <Typography
+                          variant="h2"
+                          sx={{
+                            fontWeight: 700,
+                            fontSize: "1.5rem",
+                            color: "#111827",
+                          }}
+                        >
+                          Categories List
+                        </Typography>
+                        <Stack
+                          direction="row"
+                          spacing={1.5}
+                          flexWrap="wrap"
+                          useFlexGap
+                        >
+                          <Chip
+                            size="small"
+                            label={`${savedCategories.length} categor${savedCategories.length === 1 ? "y" : "ies"}`}
+                            sx={{
+                              bgcolor: "#F9FAFB",
+                              color: "#6B7280",
+                              fontWeight: 600,
+                              fontSize: "0.8125rem",
+                              border: "1px solid #E5E7EB",
+                            }}
+                          />
+                          <Chip
+                            size="small"
+                            label={`${signupCategories.length} signup option${signupCategories.length === 1 ? "" : "s"}`}
+                            sx={{
+                              bgcolor: "#F3E8FF",
+                              color: "#8B5CF6",
+                              fontWeight: 600,
+                              fontSize: "0.8125rem",
+                              border: "1px solid #E9D5FF",
+                            }}
+                          />
+                        </Stack>
+                      </Stack>
 
-                  <TableContainer
-                    sx={{
-                      border: "1px solid rgba(15,23,42,0.10)",
-                      borderRadius: 2,
-                      backgroundColor: "background.paper",
-                    }}
-                  >
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Name</TableCell>
-                          <TableCell>Level</TableCell>
-                          <TableCell>Ages</TableCell>
-                          <TableCell>Signup Mode</TableCell>
-                          <TableCell align="right">Actions</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {savedCategories.length > 0 ? (
-                          savedCategories.map((category) => (
-                            <TableRow key={category.id} hover>
-                              <TableCell sx={{ fontWeight: 700 }}>{category.name.trim()}</TableCell>
-                              <TableCell>{formatCategoryLevelLabel(category.level)}</TableCell>
-                              <TableCell>{formatAgeRange(category)}</TableCell>
-                              <TableCell>{getCategoryGenderSummary(category).replaceAll("/", " / ")}</TableCell>
-                              <TableCell align="right">
-                                <Button size="small" onClick={() => editCategory(category.id)} sx={{ mr: 1 }}>
-                                  Edit
-                                </Button>
-                                <Button
-                                  size="small"
-                                  color="error"
-                                  disabled={deletingCategoryIds.includes(category.id)}
-                                  onClick={() => void removeCategory(category.id)}
-                                >
-                                  {deletingCategoryIds.includes(category.id) ? "Deleting..." : "Remove"}
-                                </Button>
+                      {/* Table */}
+                      <TableContainer
+                        sx={{
+                          border: "1px solid #E5E7EB",
+                          borderRadius: 2,
+                          backgroundColor: "#FFFFFF",
+                        }}
+                      >
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow sx={{ bgcolor: "#F9FAFB" }}>
+                              <TableCell
+                                sx={{
+                                  fontWeight: 700,
+                                  color: "#374151",
+                                  fontSize: "0.875rem",
+                                }}
+                              >
+                                Name
+                              </TableCell>
+                              <TableCell
+                                sx={{
+                                  fontWeight: 700,
+                                  color: "#374151",
+                                  fontSize: "0.875rem",
+                                }}
+                              >
+                                Level
+                              </TableCell>
+                              <TableCell
+                                sx={{
+                                  fontWeight: 700,
+                                  color: "#374151",
+                                  fontSize: "0.875rem",
+                                }}
+                              >
+                                Ages
+                              </TableCell>
+                              <TableCell
+                                sx={{
+                                  fontWeight: 700,
+                                  color: "#374151",
+                                  fontSize: "0.875rem",
+                                }}
+                              >
+                                Signup Mode
+                              </TableCell>
+                              <TableCell
+                                align="right"
+                                sx={{
+                                  fontWeight: 700,
+                                  color: "#374151",
+                                  fontSize: "0.875rem",
+                                }}
+                              >
+                                Actions
                               </TableCell>
                             </TableRow>
-                          ))
-                        ) : (
-                          <TableRow>
-                            <TableCell colSpan={5}>
-                              <Typography variant="body2" color="text.secondary">
-                                Add categories and they will appear here.
-                              </Typography>
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                </Box>
-
-              </Stack>
-            </CardContent>
-          </SoftCard>
-        ) : (
-          <SoftCard>
-            <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
-              <SectionTitle>Tournament Preview</SectionTitle>
-              <Divider sx={{ mb: 2 }} />
-
-              <Typography variant="h3" sx={{ mb: 1, fontWeight: 900 }}>
-                {form.name || "Untitled Tournament"}
-              </Typography>
-
-              <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" rowGap={1}>
-                <Chip size="small" label={form.sport} variant="outlined" sx={pillChipSx("primary")} />
-                <Chip size="small" label={formatTournamentLevelLabel(form.level)} variant="outlined" sx={pillChipSx("muted")} />
-                <Chip size="small" label={form.tournamentStage} variant="outlined" sx={pillChipSx("muted")} />
-                <Chip
-                  size="small"
-                  label={form.isPublic ? "Public" : "Private"}
-                  variant="outlined"
-                  sx={form.isPublic ? pillChipSx("primary") : pillChipSx("orange")}
-                />
-              </Stack>
-
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-                {form.locationName || "Venue not set"}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                {form.address || "Address not set"}
-              </Typography>
-
-              <Divider sx={{ mb: 2 }} />
-
-              <Stack spacing={1.25}>
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                    When
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {whenText}
-                  </Typography>
-                </Box>
-
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                    Registration
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Deadline: {form.registrationDeadline || "—"}
-                  </Typography>
-                </Box>
-
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                    Capacity
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {form.capacity} players • Waitlist {form.allowWaitlist ? "enabled" : "disabled"}
-                  </Typography>
-                </Box>
-
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                    Entry Fee
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {feeText}
-                  </Typography>
-                </Box>
-
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 800 }}>
-                    Categories
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {signupCategories.length} signup option{signupCategories.length === 1 ? "" : "s"}
-                  </Typography>
-                </Box>
-              </Stack>
-
-              <Divider sx={{ my: 2 }} />
-
-              <Typography variant="body2" color="text.secondary">
-                {form.description || "Add a short description for players…"}
-              </Typography>
-
-              <Divider sx={{ my: 2 }} />
-
-              <SectionTitle>Invite Link</SectionTitle>
-              <Stack spacing={1}>
-                <Button
-                  variant="outlined"
-                  onClick={handleGenerateInviteLink}
-                  disabled={!createdTournamentId}
-                  sx={{ borderRadius: 999, width: { xs: "100%", sm: "fit-content" } }}
-                >
-                  Generate Invite Link
-                </Button>
-
-                {inviteLink ? (
-                  <>
-                    <TextField value={inviteLink} size="small" fullWidth />
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                      <Button variant="contained" onClick={handleCopyInviteLink} sx={{ borderRadius: 999 }}>
-                        Copy Link
-                      </Button>
-                      {canUseNativeShare ? (
-                        <Button variant="outlined" onClick={handleShareInviteLink} sx={{ borderRadius: 999 }}>
-                          Share
-                        </Button>
-                      ) : null}
+                          </TableHead>
+                          <TableBody>
+                            {savedCategories.length > 0 ? (
+                              savedCategories.map((category) => (
+                                <TableRow
+                                  key={category.id}
+                                  hover
+                                  sx={{ "&:hover": { bgcolor: "#F9FAFB" } }}
+                                >
+                                  <TableCell
+                                    sx={{ fontWeight: 600, color: "#111827" }}
+                                  >
+                                    {category.name.trim()}
+                                  </TableCell>
+                                  <TableCell sx={{ color: "#6B7280" }}>
+                                    {formatCategoryLevelLabel(category.level)}
+                                  </TableCell>
+                                  <TableCell sx={{ color: "#6B7280" }}>
+                                    {formatAgeRange(category)}
+                                  </TableCell>
+                                  <TableCell sx={{ color: "#6B7280" }}>
+                                    {getCategoryGenderSummary(
+                                      category,
+                                    ).replaceAll("/", " / ")}
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Stack
+                                      direction="row"
+                                      spacing={1}
+                                      justifyContent="flex-end"
+                                    >
+                                      <Button
+                                        size="small"
+                                        onClick={() =>
+                                          editCategory(category.id)
+                                        }
+                                        sx={{
+                                          borderRadius: 1.5,
+                                          color: "#8B5CF6",
+                                          fontWeight: 600,
+                                          textTransform: "none",
+                                          px: 2,
+                                          "&:hover": {
+                                            bgcolor: "#F3E8FF",
+                                          },
+                                        }}
+                                      >
+                                        Edit
+                                      </Button>
+                                      <Button
+                                        size="small"
+                                        onClick={() =>
+                                          void removeCategory(category.id)
+                                        }
+                                        disabled={deletingCategoryIds.includes(
+                                          category.id,
+                                        )}
+                                        sx={{
+                                          borderRadius: 1.5,
+                                          color: "#DC2626",
+                                          fontWeight: 600,
+                                          textTransform: "none",
+                                          px: 2,
+                                          "&:hover": {
+                                            bgcolor: "#FEF2F2",
+                                          },
+                                          "&:disabled": {
+                                            color: "#9CA3AF",
+                                          },
+                                        }}
+                                      >
+                                        {deletingCategoryIds.includes(
+                                          category.id,
+                                        )
+                                          ? "Deleting..."
+                                          : "Remove"}
+                                      </Button>
+                                    </Stack>
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            ) : (
+                              <TableRow>
+                                <TableCell
+                                  colSpan={5}
+                                  sx={{ textAlign: "center", py: 4 }}
+                                >
+                                  <Typography
+                                    variant="body2"
+                                    sx={{
+                                      color: "#9CA3AF",
+                                      fontSize: "0.9375rem",
+                                    }}
+                                  >
+                                    Add categories and they will appear here.
+                                  </Typography>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
                     </Stack>
-                  </>
-                ) : (
-                  <Typography variant="caption" color="text.secondary">
-                    Create the tournament first, then generate a shareable invite link.
-                  </Typography>
-                )}
+                  </CardContent>
+                </Card>
               </Stack>
             </CardContent>
-          </SoftCard>
+          </Card>
+        ) : (
+          <Card
+            sx={{
+              borderRadius: 3,
+              border: "1px solid #E5E7EB",
+              boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+            }}
+          >
+            <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
+              <Stack spacing={4}>
+                {/* Header */}
+                <Box>
+                  <Typography
+                    sx={{
+                      fontWeight: 600,
+                      fontSize: "0.875rem",
+                      color: "#6A7282",
+                      mb: 2,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.2px",
+                    }}
+                  >
+                    Tournament Preview
+                  </Typography>
+
+                  {/* Tournament Name */}
+                  <Typography
+                    variant="h3"
+                    sx={{
+                      fontWeight: 700,
+                      fontSize: "2.25rem",
+                      color: "#0A0A0A",
+                      mb: 2,
+                    }}
+                  >
+                    {form.name || "Untitled Tournament"}
+                  </Typography>
+
+                  {/* Chips Row */}
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    <Chip
+                      size="small"
+                      label={form.sport}
+                      sx={{
+                        bgcolor: "#F3E8FF",
+                        color: "#8200DB",
+                        fontWeight: 500,
+                        fontSize: "0.875rem",
+                        border: "none",
+                        height: 32,
+                        borderRadius: "999px",
+                        px: 0.5,
+                      }}
+                    />
+                    <Chip
+                      size="small"
+                      label={formatTournamentLevelLabel(form.level)}
+                      sx={{
+                        bgcolor: "#F3F4F6",
+                        color: "#364153",
+                        fontWeight: 500,
+                        fontSize: "0.875rem",
+                        border: "none",
+                        height: 32,
+                        borderRadius: "999px",
+                        px: 0.5,
+                      }}
+                    />
+                    <Chip
+                      size="small"
+                      label={form.tournamentStage}
+                      sx={{
+                        bgcolor: "#DCFCE7",
+                        color: "#008236",
+                        fontWeight: 500,
+                        fontSize: "0.875rem",
+                        border: "none",
+                        height: 32,
+                        borderRadius: "999px",
+                        px: 0.5,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.2px",
+                      }}
+                    />
+                    <Chip
+                      size="small"
+                      label={form.isPublic ? "Public" : "Private"}
+                      sx={{
+                        bgcolor: form.isPublic ? "#DBEAFE" : "#FEF2F2",
+                        color: form.isPublic ? "#1447E6" : "#DC2626",
+                        fontWeight: 500,
+                        fontSize: "0.875rem",
+                        border: "none",
+                        height: 32,
+                        borderRadius: "999px",
+                        px: 0.5,
+                      }}
+                    />
+                  </Stack>
+                </Box>
+
+                {/* Location */}
+                <Stack
+                  direction="row"
+                  spacing={2}
+                  sx={{
+                    pb: 2,
+                    borderBottom: "1px solid #E5E7EB",
+                  }}
+                >
+                  <Box
+                    sx={{
+                      width: 20,
+                      height: 20,
+                      color: "#9810FA",
+                      mt: 0.25,
+                    }}
+                  >
+                    📍
+                  </Box>
+                  <Box>
+                    <Typography
+                      sx={{
+                        fontWeight: 500,
+                        fontSize: "1rem",
+                        color: "#364153",
+                        mb: 0.25,
+                      }}
+                    >
+                      {form.locationName || "Venue not set"}
+                    </Typography>
+                    <Typography sx={{ fontSize: "0.875rem", color: "#6A7282" }}>
+                      {form.address || "Address not set"}
+                    </Typography>
+                  </Box>
+                </Stack>
+
+                {/* Tournament Details Grid */}
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: {
+                      xs: "1fr",
+                      sm: "repeat(2, 1fr)",
+                    },
+                    gap: 3,
+                  }}
+                >
+                  {/* When */}
+                  <Stack direction="row" spacing={1.5}>
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "10px",
+                        bgcolor: "#F3E8FF",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Box sx={{ fontSize: "1.25rem" }}>🗓️</Box>
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: "1.125rem",
+                          color: "#101828",
+                          mb: 0.5,
+                        }}
+                      >
+                        When
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontSize: "0.875rem",
+                          color: "#364153",
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {whenText}
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  {/* Registration */}
+                  <Stack direction="row" spacing={1.5}>
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "10px",
+                        bgcolor: "#F3E8FF",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Box sx={{ fontSize: "1.25rem" }}>⏰</Box>
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: "1.125rem",
+                          color: "#101828",
+                          mb: 0.5,
+                        }}
+                      >
+                        Registration
+                      </Typography>
+                      <Typography
+                        sx={{ fontSize: "0.875rem", color: "#6A7282" }}
+                      >
+                        Deadline: {form.registrationDeadline || "—"}
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  {/* Capacity */}
+                  <Stack direction="row" spacing={1.5}>
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "10px",
+                        bgcolor: "#F3E8FF",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Box sx={{ fontSize: "1.25rem" }}>👥</Box>
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: "1.125rem",
+                          color: "#101828",
+                          mb: 0.5,
+                        }}
+                      >
+                        Capacity
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontSize: "0.875rem",
+                          color: "#364153",
+                          mb: 0.25,
+                        }}
+                      >
+                        {form.capacity} players
+                      </Typography>
+                      <Typography
+                        sx={{ fontSize: "0.875rem", color: "#6A7282" }}
+                      >
+                        Waitlist {form.allowWaitlist ? "enabled" : "disabled"}
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  {/* Entry Fee */}
+                  <Stack direction="row" spacing={1.5}>
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "10px",
+                        bgcolor: "#F3E8FF",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Box sx={{ fontSize: "1.25rem" }}>💰</Box>
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: "1.125rem",
+                          color: "#101828",
+                          mb: 0.5,
+                        }}
+                      >
+                        Entry Fee
+                      </Typography>
+                      <Typography
+                        sx={{ fontSize: "0.875rem", color: "#364153" }}
+                      >
+                        {feeText}
+                      </Typography>
+                    </Box>
+                  </Stack>
+                </Box>
+
+                {/* Categories Section */}
+                <Box>
+                  <Stack direction="row" spacing={1.5} sx={{ mb: 2 }}>
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "10px",
+                        bgcolor: "#F3E8FF",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Box sx={{ fontSize: "1.25rem" }}>🏆</Box>
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: "1.125rem",
+                          color: "#101828",
+                          mb: 0.5,
+                        }}
+                      >
+                        Categories
+                      </Typography>
+                      <Typography
+                        sx={{ fontSize: "0.875rem", color: "#364153" }}
+                      >
+                        {signupCategories.length} signup option
+                        {signupCategories.length === 1 ? "" : "s"}
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  {/* Category Cards Grid */}
+                  {signupCategories.length > 0 && (
+                    <Box
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: {
+                          xs: "1fr",
+                          sm: "repeat(2, 1fr)",
+                        },
+                        gap: 2,
+                      }}
+                    >
+                      {signupCategories.map((category, index) => {
+                        // Determine color based on gender
+                        const getGenderColor = (gender: string) => {
+                          if (gender === "Men") {
+                            return {
+                              bg: "linear-gradient(169.355deg, #FAF5FF 0%, #F3E8FF 100%)",
+                              border: "#E9D4FF",
+                              textColor: "#59168B",
+                              badgeBg: "#9810FA",
+                              ageColor: "#8200DB",
+                            };
+                          } else if (gender === "Women") {
+                            return {
+                              bg: "linear-gradient(169.355deg, #FDF2F8 0%, #FCE7F3 100%)",
+                              border: "#FCCEE8",
+                              textColor: "#861043",
+                              badgeBg: "#E60076",
+                              ageColor: "#C6005C",
+                            };
+                          } else if (gender === "Mixed") {
+                            return {
+                              bg: "linear-gradient(169.355deg, #ECFDF5 0%, #D1FAE5 100%)",
+                              border: "#A7F3D0",
+                              textColor: "#0D542B",
+                              badgeBg: "#00A63E",
+                              ageColor: "#008236",
+                            };
+                          } else {
+                            // Open or default
+                            return {
+                              bg: "linear-gradient(169.355deg, #EFF6FF 0%, #DBEAFE 100%)",
+                              border: "#BEDBFF",
+                              textColor: "#1C398E",
+                              badgeBg: "#155DFC",
+                              ageColor: "#1447E6",
+                            };
+                          }
+                        };
+
+                        const colors = getGenderColor(category.gender);
+
+                        return (
+                          <Box
+                            key={index}
+                            sx={{
+                              p: 2,
+                              borderRadius: "10px",
+                              background: colors.bg,
+                              border: `1px solid ${colors.border}`,
+                            }}
+                          >
+                            <Stack spacing={1}>
+                              <Stack
+                                direction="row"
+                                justifyContent="space-between"
+                                alignItems="center"
+                              >
+                                <Typography
+                                  sx={{
+                                    fontWeight: 600,
+                                    fontSize: "0.875rem",
+                                    color: colors.textColor,
+                                  }}
+                                >
+                                  {formatCategoryLevelLabel(category.level)}
+                                </Typography>
+                                <Chip
+                                  size="small"
+                                  label={category.gender}
+                                  sx={{
+                                    bgcolor: colors.badgeBg,
+                                    color: "#FFFFFF",
+                                    fontWeight: 400,
+                                    fontSize: "0.75rem",
+                                    height: 20,
+                                    borderRadius: "999px",
+                                    "& .MuiChip-label": {
+                                      px: 1,
+                                      py: 0.25,
+                                    },
+                                  }}
+                                />
+                              </Stack>
+                              <Typography
+                                sx={{
+                                  fontSize: "0.75rem",
+                                  color: colors.ageColor,
+                                }}
+                              >
+                                {formatAgeRange(category)}
+                              </Typography>
+                            </Stack>
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  )}
+                </Box>
+
+                {/* Description */}
+                {form.description && (
+                  <Box
+                    sx={{
+                      pt: 3,
+                      borderTop: "1px solid #E5E7EB",
+                    }}
+                  >
+                    <Typography
+                      sx={{
+                        fontWeight: 600,
+                        fontSize: "1.125rem",
+                        color: "#101828",
+                        mb: 1,
+                      }}
+                    >
+                      Description
+                    </Typography>
+                    <Typography
+                      sx={{
+                        fontSize: "0.875rem",
+                        color: "#6A7282",
+                        fontStyle: form.description ? "normal" : "italic",
+                      }}
+                    >
+                      {form.description ||
+                        "Add a short description for players…"}
+                    </Typography>
+                  </Box>
+                )}
+
+                {/* Invite Link Section */}
+                <Box
+                  sx={{
+                    pt: 3,
+                    borderTop: "1px solid #E5E7EB",
+                  }}
+                >
+                  <Stack direction="row" spacing={1.5} sx={{ mb: 2.5 }}>
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "10px",
+                        bgcolor: "#F3E8FF",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Box sx={{ fontSize: "1.25rem" }}>🔗</Box>
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: "1.125rem",
+                          color: "#101828",
+                          mb: 0.5,
+                        }}
+                      >
+                        Invite Link
+                      </Typography>
+                      <Typography
+                        sx={{ fontSize: "0.875rem", color: "#6A7282" }}
+                      >
+                        {createdTournamentId
+                          ? "Create the tournament first, then generate a shareable invite link."
+                          : "Create the tournament first, then generate a shareable invite link."}
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  <Button
+                    variant="outlined"
+                    onClick={handleGenerateInviteLink}
+                    disabled={!createdTournamentId}
+                    sx={{
+                      borderRadius: "10px",
+                      border: "1px solid #9810FA",
+                      color: "#9810FA",
+                      fontWeight: 500,
+                      px: 3,
+                      py: 1.25,
+                      textTransform: "none",
+                      mb: 2,
+                      "&:hover": {
+                        border: "1px solid #8200DB",
+                        bgcolor: "#FAF5FF",
+                      },
+                      "&:disabled": {
+                        border: "1px solid #D1D5DC",
+                        color: "#9CA3AF",
+                      },
+                    }}
+                  >
+                    Generate Invite Link
+                  </Button>
+
+                  {inviteLink && (
+                    <Stack spacing={2}>
+                      <TextField
+                        value={inviteLink}
+                        size="small"
+                        fullWidth
+                        InputProps={{
+                          readOnly: true,
+                          sx: {
+                            borderRadius: "10px",
+                            bgcolor: "#F9FAFB",
+                            fontFamily: "monospace",
+                            fontSize: "0.875rem",
+                          },
+                        }}
+                      />
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={2}
+                      >
+                        <Button
+                          variant="contained"
+                          onClick={handleCopyInviteLink}
+                          sx={{
+                            borderRadius: "10px",
+                            background: "#9810FA",
+                            fontWeight: 500,
+                            px: 3,
+                            py: 1.25,
+                            textTransform: "none",
+                            flex: 1,
+                            "&:hover": {
+                              background: "#8200DB",
+                            },
+                          }}
+                        >
+                          Copy Link
+                        </Button>
+                        {canUseNativeShare && (
+                          <Button
+                            variant="outlined"
+                            onClick={handleShareInviteLink}
+                            sx={{
+                              borderRadius: "10px",
+                              border: "1px solid #D1D5DC",
+                              color: "#364153",
+                              fontWeight: 500,
+                              px: 3,
+                              py: 1.25,
+                              textTransform: "none",
+                              flex: 1,
+                              "&:hover": {
+                                border: "1px solid #D1D5DC",
+                                bgcolor: "#F9FAFB",
+                              },
+                            }}
+                          >
+                            Share
+                          </Button>
+                        )}
+                      </Stack>
+                    </Stack>
+                  )}
+                </Box>
+              </Stack>
+            </CardContent>
+          </Card>
         )}
       </Box>
     </Box>

@@ -6,22 +6,31 @@ import {
   Typography,
   Chip,
   Alert,
-  Card,
-  CardContent,
-  Divider,
+  Tooltip,
 } from "@mui/material";
 import { useNavigate } from "react-router";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
+import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
+import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import {
   getLoggedInRole,
   getToken,
   hasCreatorAccess,
   isParticipantRole,
 } from "../auth/tokens";
-import SelectActionCard from "../Components/Shared/SelectActionCard";
-import WeeklyScheduleCard, {
-  type WeeklyClass,
-} from "../Components/Shared/WeeklyScheduleCard";
+import { type WeeklyClass } from "../Components/Shared/WeeklyScheduleCard";
+import CoachWeeklyScheduleBoard, {
+  type CoachScheduleDay,
+} from "../Components/Shared/CoachWeeklyScheduleBoard";
+import {
+  NavigateSummaryCard,
+  RevenueMiniBars,
+  SectionCard,
+} from "../Components/Shared/DashboardDesign";
+import { UI_FEATURE_FLAGS } from "../config/featureFlags";
+import { coachDashboardMock } from "../mocks/ui";
+import { designTokens } from "../Theme/designTokens";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
 type DashboardState = {
@@ -40,6 +49,9 @@ type DashboardViewData = {
   weekRangeLabel: string;
   weekSessions: number;
   weekStudents: number;
+  weekRevenue: number;
+  previousWeekRevenue: number;
+  revenueByDay: Array<{ label: string; value: number }>;
   weeklyClasses: WeeklyClass[];
   openTournaments: Array<{
     id: string;
@@ -84,6 +96,7 @@ type ApiEvent = {
   eventType?: string;
   startDate?: string;
   status?: string;
+  entryFee?: number | string;
 };
 
 type ApiClass = {
@@ -174,6 +187,24 @@ function formatShortDate(date: Date): string {
   });
 }
 
+function parseDateOnly(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function isDateInRange(dateStr: string, start: Date, end: Date): boolean {
+  const target = parseDateOnly(dateStr);
+  return target >= start && target <= end;
+}
+
+function toMoney(value: number): string {
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "AUD",
+    maximumFractionDigits: 0,
+  });
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
 
@@ -196,6 +227,9 @@ export default function Dashboard() {
       weekRangeLabel: "This week",
       weekSessions: 0,
       weekStudents: 0,
+      weekRevenue: 0,
+      previousWeekRevenue: 0,
+      revenueByDay: [],
       weeklyClasses: [],
       openTournaments: [],
       joinedTournaments: [],
@@ -205,7 +239,9 @@ export default function Dashboard() {
       upcomingClasses: [],
     },
   });
-  const [withdrawingEventId, setWithdrawingEventId] = React.useState<number | null>(null);
+  const [withdrawingEventId, setWithdrawingEventId] = React.useState<
+    number | null
+  >(null);
   const viewData = state.viewData;
   const joinedTournamentIds = React.useMemo(
     () => new Set(viewData.joinedTournaments.map((item) => item.id)),
@@ -216,12 +252,15 @@ export default function Dashboard() {
 
   const handleWithdrawJoinedTournament = async (eventId: number) => {
     if (!token) return;
-      setWithdrawingEventId(eventId);
+    setWithdrawingEventId(eventId);
     try {
-      const res = await fetch(`${API_URL}/events/${eventId}/subscriptions/me/withdraw`, {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `${API_URL}/events/${eventId}/subscriptions/me/withdraw`,
+        {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         const msg =
@@ -290,7 +329,9 @@ export default function Dashboard() {
 
         const currentUserId = Number(user?.id);
         const payload: DashboardApiResp =
-          dashboardBody && typeof dashboardBody === "object" ? dashboardBody : {};
+          dashboardBody && typeof dashboardBody === "object"
+            ? dashboardBody
+            : {};
         const scopedEvents: ApiEvent[] = Array.isArray(payload.events)
           ? payload.events
           : [];
@@ -302,13 +343,19 @@ export default function Dashboard() {
         const weekStart = getMonday(new Date());
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekStart.getDate() + 6);
+        const previousWeekStart = new Date(weekStart);
+        previousWeekStart.setDate(weekStart.getDate() - 7);
+        const previousWeekEnd = new Date(weekEnd);
+        previousWeekEnd.setDate(weekEnd.getDate() - 7);
         const weekRangeLabel = `${formatShortDate(weekStart)} - ${formatShortDate(weekEnd)}`;
         const tournaments = scopedEvents.filter(
           (e) => String(e.eventType ?? "").toUpperCase() === "TOURNAMENT",
         );
         const joinedTournaments = tournaments
           .filter((t) => Number(t.createdBy) !== currentUserId)
-          .sort((a, b) => toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)))
+          .sort((a, b) =>
+            toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)),
+          )
           .map((t) => ({
             id: String(t.id),
             eventId: Number(t.id),
@@ -317,7 +364,9 @@ export default function Dashboard() {
           }));
         const myTournaments = tournaments
           .filter((t) => Number(t.createdBy) === currentUserId)
-          .sort((a, b) => toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)))
+          .sort((a, b) =>
+            toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)),
+          )
           .map((t) => ({
             id: String(t.id),
             name: String(t.name ?? t.title ?? "Tournament"),
@@ -328,7 +377,9 @@ export default function Dashboard() {
             const date = toDateOnly(e.startDate);
             return !!date && date >= todayStr;
           })
-          .sort((a, b) => toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)))[0];
+          .sort((a, b) =>
+            toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)),
+          )[0];
 
         const todayClasses = scopedClasses.filter(
           (c) => toDateOnly(c.monthDate) === todayStr,
@@ -344,6 +395,19 @@ export default function Dashboard() {
           const date = toDateOnly(t.startDate);
           return !!date && date >= todayStr;
         }).length;
+        const weekRevenue = tournaments.reduce((sum, t) => {
+          const date = toDateOnly(t.startDate);
+          if (!date || !isDateInRange(date, weekStart, weekEnd)) return sum;
+          const fee = Number(t.entryFee ?? 0);
+          return sum + (Number.isFinite(fee) ? Math.max(0, fee) : 0);
+        }, 0);
+        const previousWeekRevenue = tournaments.reduce((sum, t) => {
+          const date = toDateOnly(t.startDate);
+          if (!date || !isDateInRange(date, previousWeekStart, previousWeekEnd))
+            return sum;
+          const fee = Number(t.entryFee ?? 0);
+          return sum + (Number.isFinite(fee) ? Math.max(0, fee) : 0);
+        }, 0);
 
         const weeklyClasses: WeeklyClass[] = scopedClasses
           .filter((c) => !!c.monthDate)
@@ -358,7 +422,9 @@ export default function Dashboard() {
               toDateOnly(b.monthDate),
             );
             if (dateCompare !== 0) return dateCompare;
-            return String(a.startTime ?? "").localeCompare(String(b.startTime ?? ""));
+            return String(a.startTime ?? "").localeCompare(
+              String(b.startTime ?? ""),
+            );
           })
           .slice(0, 12)
           .map((c, idx) => ({
@@ -380,6 +446,21 @@ export default function Dashboard() {
           const source = scopedClasses.find((c) => String(c.id) === w.id);
           return sum + Math.max(0, Number(source?.students ?? 0) || 0);
         }, 0);
+        const revenueByDay = Array.from({ length: 7 }).map((_, idx) => {
+          const current = new Date(weekStart);
+          current.setDate(weekStart.getDate() + idx);
+          const dayLabel = current.toLocaleDateString("en-US", {
+            weekday: "short",
+          });
+          const dayIso = current.toISOString().slice(0, 10);
+          const dayValue = tournaments.reduce((sum, t) => {
+            const date = toDateOnly(t.startDate);
+            if (date !== dayIso) return sum;
+            const fee = Number(t.entryFee ?? 0);
+            return sum + (Number.isFinite(fee) ? Math.max(0, fee) : 0);
+          }, 0);
+          return { label: dayLabel, value: dayValue };
+        });
 
         const openTournaments = tournaments
           .filter((t) => {
@@ -388,7 +469,9 @@ export default function Dashboard() {
             const date = toDateOnly(t.startDate);
             return !!date && date >= todayStr;
           })
-          .sort((a, b) => toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)))
+          .sort((a, b) =>
+            toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)),
+          )
           .slice(0, 4)
           .map((t) => ({
             id: String(t.id),
@@ -403,7 +486,9 @@ export default function Dashboard() {
             const status = String(c.status ?? "").toUpperCase();
             return !status || status === "ACTIVE" || status === "OPEN";
           })
-          .sort((a, b) => toDateOnly(a.monthDate).localeCompare(toDateOnly(b.monthDate)))
+          .sort((a, b) =>
+            toDateOnly(a.monthDate).localeCompare(toDateOnly(b.monthDate)),
+          )
           .slice(0, 4)
           .map((c) => ({
             id: String(c.id),
@@ -416,7 +501,9 @@ export default function Dashboard() {
             const date = toDateOnly(c.monthDate);
             return !!date && date < todayStr;
           })
-          .sort((a, b) => toDateOnly(b.monthDate).localeCompare(toDateOnly(a.monthDate)))
+          .sort((a, b) =>
+            toDateOnly(b.monthDate).localeCompare(toDateOnly(a.monthDate)),
+          )
           .slice(0, 4)
           .map((c) => ({
             id: String(c.id),
@@ -429,7 +516,9 @@ export default function Dashboard() {
             const date = toDateOnly(c.monthDate);
             return !!date && date >= todayStr;
           })
-          .sort((a, b) => toDateOnly(a.monthDate).localeCompare(toDateOnly(b.monthDate)))
+          .sort((a, b) =>
+            toDateOnly(a.monthDate).localeCompare(toDateOnly(b.monthDate)),
+          )
           .slice(0, 4)
           .map((c) => ({
             id: String(c.id),
@@ -438,7 +527,11 @@ export default function Dashboard() {
           }));
 
         const upcomingTitle = upcomingTournament
-          ? String(upcomingTournament.name ?? upcomingTournament.title ?? "Tournament")
+          ? String(
+              upcomingTournament.name ??
+                upcomingTournament.title ??
+                "Tournament",
+            )
           : "No upcoming events";
         const upcomingSubtitle = upcomingTournament
           ? (() => {
@@ -462,6 +555,9 @@ export default function Dashboard() {
             weekRangeLabel,
             weekSessions: weeklyClasses.length,
             weekStudents,
+            weekRevenue,
+            previousWeekRevenue,
+            revenueByDay,
             weeklyClasses,
             openTournaments,
             joinedTournaments,
@@ -488,6 +584,47 @@ export default function Dashboard() {
     };
   }, [token, user?.id]);
 
+  const userDisplayName =
+    String(user?.fullName ?? user?.email ?? "user")
+      .split("@")[0]
+      .trim() || "user";
+  const managedTournamentsCount = viewData.myTournaments.length;
+  const registeredTournamentsCount = viewData.joinedTournaments.length;
+  const derivedCoachScheduleDays = buildCoachScheduleDaysFromWeeklyClasses(
+    viewData.weeklyClasses,
+  );
+  const hasRealCoachScheduleItems = derivedCoachScheduleDays.some(
+    (day) => day.items.length > 0,
+  );
+  const shouldUseCoachMock =
+    UI_FEATURE_FLAGS.enableMockData &&
+    !isParticipant &&
+    !hasRealCoachScheduleItems;
+  const coachData = shouldUseCoachMock ? coachDashboardMock : null;
+  const coachWeekRangeLabel =
+    coachData?.weekRangeLabel ?? viewData.weekRangeLabel;
+  const coachWeekSessions = coachData?.weekSessions ?? viewData.weekSessions;
+  const coachWeekStudents = coachData?.weekStudents ?? viewData.weekStudents;
+  const coachActiveTournaments =
+    coachData?.activeTournaments ?? viewData.activeTournaments;
+  const coachWeekRevenue = coachData?.weekRevenue ?? viewData.weekRevenue;
+  const coachPreviousWeekRevenue =
+    coachData?.previousWeekRevenue ?? viewData.previousWeekRevenue;
+  const coachRevenueByDay = coachData?.revenueByDay ?? viewData.revenueByDay;
+  const coachManagedTournamentsCount =
+    coachData?.tournamentsManagingCount ?? managedTournamentsCount;
+  const coachRegisteredCount =
+    coachData?.registeredCount ?? registeredTournamentsCount;
+  const coachTodaySessions = coachData?.todaySessions ?? viewData.todaySessions;
+  const revenueGrowthPct =
+    coachPreviousWeekRevenue > 0
+      ? ((coachWeekRevenue - coachPreviousWeekRevenue) /
+          coachPreviousWeekRevenue) *
+        100
+      : null;
+  const coachScheduleDays: CoachScheduleDay[] =
+    coachData?.scheduleDays ?? derivedCoachScheduleDays;
+
   return (
     <Box
       component="main"
@@ -495,9 +632,7 @@ export default function Dashboard() {
         flex: 1,
         minWidth: 0,
         p: { xs: 2, md: 3 },
-        // match AppShell’s “premium” background vibe
-        background:
-          "linear-gradient(180deg, rgba(139,92,246,0.06) 0%, rgba(255,255,255,0) 35%)",
+        background: designTokens.gray[50],
       }}
     >
       {/* Header row */}
@@ -514,7 +649,14 @@ export default function Dashboard() {
         }}
       >
         <Stack spacing={0.75}>
-          <Typography variant="h2" sx={{ fontSize: 22, fontWeight: 800 }}>
+          <Typography
+            variant="h2"
+            sx={{
+              fontSize: { xs: 38, md: 44 },
+              lineHeight: 1.05,
+              fontWeight: 900,
+            }}
+          >
             Dashboard
           </Typography>
 
@@ -527,43 +669,59 @@ export default function Dashboard() {
             <Typography variant="body2" color="text.secondary">
               Welcome back
             </Typography>
+            <Typography
+              variant="body2"
+              sx={{ fontWeight: 700, color: "primary.main" }}
+            >
+              {userDisplayName}
+            </Typography>
 
             {role ? (
               <Chip
                 size="small"
                 label={String(role)}
                 sx={{
-                  bgcolor: "rgba(139, 92, 246, 0.10)",
+                  bgcolor: "#FAF5FF",
                   color: "primary.main",
                   fontWeight: 700,
                 }}
               />
             ) : null}
-
           </Stack>
         </Stack>
 
-        {canCreate ? (
-          <Button
-            variant="contained"
-            size="large"
-            startIcon={<AddRoundedIcon />}
-            onClick={handleRedirect}
-            sx={{
-              width: { xs: "100%", sm: "auto" },
-              minWidth: { xs: 0, sm: 200 },
-              borderRadius: 2,
-              background:
-                "linear-gradient(90deg, #8B5CF6 0%, #A855F7 55%, #7C3AED 100%)",
-              "&:hover": {
-                background:
-                  "linear-gradient(90deg, #7C3AED 0%, #9333EA 55%, #6D28D9 100%)",
-              },
-            }}
-          >
-            Create Event
-          </Button>
-        ) : null}
+        <Tooltip
+          title={
+            canCreate ? "" : "Upgrade your account to create and manage events."
+          }
+          disableHoverListener={canCreate}
+        >
+          <span>
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<AddRoundedIcon />}
+              onClick={handleRedirect}
+              disabled={!canCreate}
+              sx={{
+                width: { xs: "100%", sm: "auto" },
+                minWidth: { xs: 0, sm: 200 },
+                borderRadius: 2,
+                background: canCreate
+                  ? designTokens.purple[600]
+                  : designTokens.gray[300],
+                color: canCreate ? "#FFFFFF" : designTokens.gray[500],
+                "&:hover": {
+                  background: canCreate
+                    ? designTokens.purple[700]
+                    : designTokens.gray[300],
+                },
+              }}
+            >
+              Create Event
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
 
       {/* Auth/API feedback */}
@@ -590,231 +748,186 @@ export default function Dashboard() {
         }}
       >
         {isParticipant ? (
-          <Stack spacing={2}>
-            <Card sx={{ borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="h5" sx={{ fontWeight: 900, mb: 0.5 }}>
-                  Welcome back, {user?.fullName || "Player"}
+          <>
+            <SectionCard>
+              <Stack spacing={0.25} sx={{ mb: 2.25 }}>
+                <Typography variant="h6" sx={{ fontWeight: 900 }}>
+                  Weekly Overview
                 </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Track your latest classes, see what is coming next, and
-                  explore open tournaments to participate.
+                <Typography variant="body2" color="text.secondary">
+                  {viewData.weekRangeLabel}
                 </Typography>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
-                  <Button
-                    variant="contained"
-                    onClick={() => navigate("/classes")}
-                    sx={{ borderRadius: 999 }}
+              </Stack>
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: {
+                    xs: "1fr 1fr",
+                    md: "repeat(4, minmax(0,1fr))",
+                  },
+                  gap: { xs: 1.25, md: 2.25 },
+                }}
+              >
+                <Box>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 0.25 }}
                   >
-                    Browse Classes
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    onClick={() => navigate("/tournaments")}
-                    sx={{ borderRadius: 999 }}
+                    Joined Tournaments
+                  </Typography>
+                  <Typography
+                    sx={{ fontSize: 42, lineHeight: 1.05, fontWeight: 900 }}
                   >
-                    Explore Tournaments
-                  </Button>
-                </Stack>
-              </CardContent>
-            </Card>
-
-            <Stack direction={{ xs: "column", lg: "row" }} spacing={2}>
-              <Card sx={{ flex: 1, borderRadius: 2 }}>
-                <CardContent>
-                  <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
-                    Your Joined Tournaments
+                    {viewData.joinedTournaments.length}
                   </Typography>
-                  <Stack spacing={1.25}>
-                    {viewData.joinedTournaments.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        No tournament subscriptions yet.
-                      </Typography>
-                    ) : (
-                      viewData.joinedTournaments.map((item) => (
-                        <Box
-                          key={item.id}
-                          sx={{
-                            p: 1.25,
-                            border: "1px solid rgba(15,23,42,0.08)",
-                            borderRadius: 1.5,
-                            display: "flex",
-                            flexDirection: { xs: "column", sm: "row" },
-                            alignItems: { xs: "flex-start", sm: "center" },
-                            justifyContent: "space-between",
-                            gap: 1.5,
-                          }}
-                        >
-                          <Box>
-                            <Typography sx={{ fontWeight: 700 }}>{item.name}</Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {item.when}
-                            </Typography>
-                          </Box>
-                          <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={() =>
-                                navigate(
-                                  `/events/upcoming?eventId=${encodeURIComponent(String(item.eventId))}`
-                                )
-                              }
-                              sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
-                            >
-                              View
-                            </Button>
-                            <Button
-                              size="small"
-                              color="warning"
-                              variant="contained"
-                              disabled={withdrawingEventId === item.eventId}
-                              onClick={() =>
-                                handleWithdrawJoinedTournament(item.eventId)
-                              }
-                              sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
-                            >
-                              {withdrawingEventId === item.eventId
-                                ? "Withdrawing..."
-                                : "Withdraw"}
-                            </Button>
-                          </Stack>
-                        </Box>
-                      ))
-                    )}
-                  </Stack>
-                </CardContent>
-              </Card>
-
-              <Card sx={{ flex: 1, borderRadius: 2 }}>
-                <CardContent>
-                  <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
-                    Your Latest Classes
+                </Box>
+                <Box>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 0.25 }}
+                  >
+                    Latest Classes
                   </Typography>
-                  <Stack spacing={1.25}>
-                    {viewData.latestClasses.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        No previous classes yet.
-                      </Typography>
-                    ) : (
-                      viewData.latestClasses.map((item) => (
-                        <Box
-                          key={item.id}
-                          sx={{
-                            p: 1.25,
-                            border: "1px solid rgba(15,23,42,0.08)",
-                            borderRadius: 1.5,
-                          }}
-                        >
-                          <Typography sx={{ fontWeight: 700 }}>
-                            {item.title}
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {item.when}
-                          </Typography>
-                        </Box>
-                      ))
-                    )}
-                  </Stack>
-                </CardContent>
-              </Card>
-
-              <Card sx={{ flex: 1, borderRadius: 2 }}>
-                <CardContent>
-                  <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
-                    Upcoming Classes For You
+                  <Typography
+                    sx={{ fontSize: 42, lineHeight: 1.05, fontWeight: 900 }}
+                  >
+                    {viewData.latestClasses.length}
                   </Typography>
-                  <Stack spacing={1.25}>
-                    {viewData.upcomingClasses.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        No upcoming classes right now.
-                      </Typography>
-                    ) : (
-                      viewData.upcomingClasses.map((item) => (
-                        <Box
-                          key={item.id}
-                          sx={{
-                            p: 1.25,
-                            border: "1px solid rgba(15,23,42,0.08)",
-                            borderRadius: 1.5,
-                            display: "flex",
-                            flexDirection: { xs: "column", sm: "row" },
-                            alignItems: { xs: "flex-start", sm: "center" },
-                            justifyContent: "space-between",
-                            gap: 2,
-                          }}
-                        >
-                          <Box>
-                            <Typography sx={{ fontWeight: 700 }}>
-                              {item.title}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {item.when}
-                            </Typography>
-                          </Box>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            onClick={() => navigate("/classes")}
-                            sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
-                          >
-                            Participate
-                          </Button>
-                        </Box>
-                      ))
-                    )}
-                  </Stack>
-                </CardContent>
-              </Card>
+                </Box>
+                <Box>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 0.25 }}
+                  >
+                    Upcoming Classes
+                  </Typography>
+                  <Typography
+                    sx={{ fontSize: 42, lineHeight: 1.05, fontWeight: 900 }}
+                  >
+                    {viewData.upcomingClasses.length}
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 0.25 }}
+                  >
+                    Open Tournaments
+                  </Typography>
+                  <Typography
+                    sx={{
+                      fontSize: 42,
+                      lineHeight: 1.05,
+                      fontWeight: 900,
+                      color: "primary.main",
+                    }}
+                  >
+                    {viewData.openTournaments.length}
+                  </Typography>
+                </Box>
+              </Box>
+            </SectionCard>
+
+            <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+              <NavigateSummaryCard
+                title="Explore Classes"
+                count={viewData.openClasses.length}
+                subtitle="Open sessions"
+                icon={<CalendarMonthRoundedIcon fontSize="small" />}
+                color="default"
+                onClick={() => navigate("/classes")}
+              />
+              <NavigateSummaryCard
+                title="Explore Tournaments"
+                count={viewData.openTournaments.length}
+                subtitle="Available now"
+                icon={<EmojiEventsRoundedIcon fontSize="small" />}
+                color="primary"
+                onClick={() => navigate("/tournaments")}
+              />
+              <NavigateSummaryCard
+                title="My Tournaments"
+                count={viewData.joinedTournaments.length}
+                subtitle="Registered"
+                icon={<EmojiEventsRoundedIcon fontSize="small" />}
+                color="warning"
+                onClick={() => navigate("/events/upcoming")}
+              />
             </Stack>
 
-            <Card sx={{ borderRadius: 2 }}>
-              <CardContent>
-                <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
-                  Explore Open Tournaments
-                </Typography>
-                <Stack spacing={1.25}>
-                  {viewData.openTournaments.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary">
-                      No open tournaments right now.
-                    </Typography>
-                  ) : (
-                    viewData.openTournaments.map((item) => (
-                      <Box
-                        key={item.id}
-                        sx={{
-                          p: 1.25,
-                          border: "1px solid rgba(15,23,42,0.08)",
-                          borderRadius: 1.5,
-                          display: "flex",
-                          flexDirection: { xs: "column", sm: "row" },
-                          alignItems: { xs: "flex-start", sm: "center" },
-                          justifyContent: "space-between",
-                          gap: 2,
-                        }}
-                      >
-                        <Box>
-                          <Typography sx={{ fontWeight: 700 }}>
-                            {item.name}
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {item.when}
-                          </Typography>
-                        </Box>
-                        {joinedTournamentIds.has(item.id) ? (
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={() =>
-                              navigate(
-                                `/events/upcoming?eventId=${encodeURIComponent(item.id)}`,
-                              )
-                            }
-                            sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
-                          >
-                            Joined
-                          </Button>
-                        ) : (
+            <SectionCard>
+              <Stack
+                direction={{ xs: "column", md: "row" }}
+                alignItems={{ md: "center" }}
+                justifyContent="space-between"
+                spacing={1}
+                sx={{ mb: 1.5 }}
+              >
+                <Box>
+                  <Typography variant="h6" sx={{ fontWeight: 900 }}>
+                    Explore Open Tournaments
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Join upcoming events and manage your registrations.
+                  </Typography>
+                </Box>
+                <Button
+                  variant="outlined"
+                  sx={{ borderRadius: 999 }}
+                  onClick={() => navigate("/tournaments")}
+                >
+                  View All Open Tournaments
+                </Button>
+              </Stack>
+              <Stack spacing={1.25}>
+                {viewData.openTournaments.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No open tournaments right now.
+                  </Typography>
+                ) : (
+                  viewData.openTournaments.map((item) => (
+                    <Box
+                      key={item.id}
+                      sx={{
+                        p: 1.25,
+                        border: "1px solid rgba(15,23,42,0.08)",
+                        borderRadius: 1.5,
+                        display: "flex",
+                        flexDirection: { xs: "column", sm: "row" },
+                        alignItems: { xs: "flex-start", sm: "center" },
+                        justifyContent: "space-between",
+                        gap: 2,
+                      }}
+                    >
+                      <Box>
+                        <Typography sx={{ fontWeight: 700 }}>
+                          {item.name}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {item.when}
+                        </Typography>
+                      </Box>
+                      {joinedTournamentIds.has(item.id) ? (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() =>
+                            navigate(
+                              `/events/upcoming?eventId=${encodeURIComponent(item.id)}`,
+                            )
+                          }
+                          sx={{
+                            borderRadius: 999,
+                            width: { xs: "100%", sm: "auto" },
+                          }}
+                        >
+                          Joined
+                        </Button>
+                      ) : (
                         <Button
                           size="small"
                           variant="contained"
@@ -823,64 +936,438 @@ export default function Dashboard() {
                               `/tournaments/invite?inviteTournamentId=${encodeURIComponent(item.id)}`,
                             )
                           }
-                          sx={{ borderRadius: 999, width: { xs: "100%", sm: "auto" } }}
+                          sx={{
+                            borderRadius: 999,
+                            width: { xs: "100%", sm: "auto" },
+                          }}
                         >
                           Join
                         </Button>
-                        )}
+                      )}
+                    </Box>
+                  ))
+                )}
+              </Stack>
+            </SectionCard>
+
+            <SectionCard>
+              <Typography variant="h6" sx={{ fontWeight: 900, mb: 1 }}>
+                Your Joined Tournaments
+              </Typography>
+              <Stack spacing={1.25}>
+                {viewData.joinedTournaments.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No tournament subscriptions yet.
+                  </Typography>
+                ) : (
+                  viewData.joinedTournaments.map((item) => (
+                    <Box
+                      key={item.id}
+                      sx={{
+                        p: 1.25,
+                        border: "1px solid rgba(15,23,42,0.08)",
+                        borderRadius: 1.5,
+                        display: "flex",
+                        flexDirection: { xs: "column", sm: "row" },
+                        alignItems: { xs: "flex-start", sm: "center" },
+                        justifyContent: "space-between",
+                        gap: 1.5,
+                      }}
+                    >
+                      <Box>
+                        <Typography sx={{ fontWeight: 700 }}>
+                          {item.name}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {item.when}
+                        </Typography>
                       </Box>
-                    ))
-                  )}
-                </Stack>
-                <Button
-                  variant="outlined"
-                  sx={{ mt: 1.5, borderRadius: 999 }}
-                  onClick={() => navigate("/tournaments")}
-                >
-                  View All Open Tournaments
-                </Button>
-              </CardContent>
-            </Card>
-          </Stack>
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={1}
+                      >
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() =>
+                            navigate(
+                              `/events/upcoming?eventId=${encodeURIComponent(String(item.eventId))}`,
+                            )
+                          }
+                          sx={{
+                            borderRadius: 999,
+                            width: { xs: "100%", sm: "auto" },
+                          }}
+                        >
+                          View
+                        </Button>
+                        <Button
+                          size="small"
+                          color="warning"
+                          variant="contained"
+                          disabled={withdrawingEventId === item.eventId}
+                          onClick={() =>
+                            handleWithdrawJoinedTournament(item.eventId)
+                          }
+                          sx={{
+                            borderRadius: 999,
+                            width: { xs: "100%", sm: "auto" },
+                          }}
+                        >
+                          {withdrawingEventId === item.eventId
+                            ? "Withdrawing..."
+                            : "Withdraw"}
+                        </Button>
+                      </Stack>
+                    </Box>
+                  ))
+                )}
+              </Stack>
+            </SectionCard>
+          </>
         ) : (
           <>
-            <Card sx={{ borderRadius: 2 }}>
-              <CardContent>
+            <SectionCard
+              sx={{
+                position: "relative",
+                overflow: "hidden",
+                p: 3,
+                "&::before": {
+                  content: '""',
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: "4px",
+                  background:
+                    "linear-gradient(90deg, #8B5CF6 0%, #A855F7 50%, #EC4899 100%)",
+                },
+              }}
+            >
+              <Stack spacing={3}>
+                {/* Header Section */}
                 <Stack
                   direction={{ xs: "column", md: "row" }}
-                  spacing={1.5}
                   justifyContent="space-between"
-                  alignItems={{ md: "center" }}
-                  sx={{ mb: 1 }}
+                  alignItems={{ xs: "flex-start", md: "center" }}
+                  spacing={2}
                 >
-                  <Box>
-                    <Typography variant="h6" sx={{ fontWeight: 900 }}>
+                  <Stack spacing={0.5}>
+                    <Typography
+                      variant="h2"
+                      sx={{ fontWeight: 700, fontSize: "1.5rem" }}
+                    >
                       Weekly Overview
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {viewData.weekRangeLabel}
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      sx={{ fontSize: "0.875rem" }}
+                    >
+                      {coachWeekRangeLabel}
                     </Typography>
+                  </Stack>
+                  <Button
+                    variant="outlined"
+                    onClick={() => navigate("/revenue")}
+                    sx={{
+                      borderRadius: 2,
+                      borderWidth: "1.5px",
+                      fontWeight: 600,
+                      "&:hover": {
+                        borderWidth: "1.5px",
+                      },
+                    }}
+                  >
+                    View Analytics
+                  </Button>
+                </Stack>
+
+                {/* Stats Grid */}
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: {
+                      xs: "1fr 1fr",
+                      md: "repeat(4, minmax(0,1fr))",
+                    },
+                    gap: { xs: 2, md: 3 },
+                  }}
+                >
+                  {/* Sessions Card */}
+                  <Box
+                    sx={{
+                      p: 2.5,
+                      borderRadius: 2,
+                      backgroundColor: "#FFFFFF",
+                      border: "1px solid #E5E7EB",
+                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                      "&:hover": {
+                        borderColor: "#D1D5DB",
+                        boxShadow: "0 2px 4px 0 rgb(0 0 0 / 0.05)",
+                      },
+                    }}
+                  >
+                    <Stack spacing={1}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontSize: "0.75rem",
+                          fontWeight: 500,
+                          color: "#6B7280",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Sessions
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontSize: "2rem",
+                          lineHeight: 1,
+                          fontWeight: 700,
+                          color: "#111827",
+                        }}
+                      >
+                        {coachWeekSessions}
+                      </Typography>
+                    </Stack>
                   </Box>
-                </Stack>
-                <Divider sx={{ mb: 1.5 }} />
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
-                  <MetricCard label="Sessions This Week" value={viewData.weekSessions} />
-                  <MetricCard label="Students This Week" value={viewData.weekStudents} />
-                  <MetricCard
-                    label="Active Tournaments"
-                    value={viewData.activeTournaments}
+
+                  {/* Students Card */}
+                  <Box
+                    sx={{
+                      p: 2.5,
+                      borderRadius: 2,
+                      backgroundColor: "#FFFFFF",
+                      border: "1px solid #E5E7EB",
+                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                      "&:hover": {
+                        borderColor: "#D1D5DB",
+                        boxShadow: "0 2px 4px 0 rgb(0 0 0 / 0.05)",
+                      },
+                    }}
+                  >
+                    <Stack spacing={1}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontSize: "0.75rem",
+                          fontWeight: 500,
+                          color: "#6B7280",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Students
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontSize: "2rem",
+                          lineHeight: 1,
+                          fontWeight: 700,
+                          color: "#111827",
+                        }}
+                      >
+                        {coachWeekStudents}
+                      </Typography>
+                    </Stack>
+                  </Box>
+
+                  {/* Tournaments Card */}
+                  <Box
+                    sx={{
+                      p: 2.5,
+                      borderRadius: 2,
+                      backgroundColor: "#FFFFFF",
+                      border: "1px solid #E5E7EB",
+                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                      "&:hover": {
+                        borderColor: "#D1D5DB",
+                        boxShadow: "0 2px 4px 0 rgb(0 0 0 / 0.05)",
+                      },
+                    }}
+                  >
+                    <Stack spacing={1}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontSize: "0.75rem",
+                          fontWeight: 500,
+                          color: "#6B7280",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Tournaments
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontSize: "2rem",
+                          lineHeight: 1,
+                          fontWeight: 700,
+                          color: "#111827",
+                        }}
+                      >
+                        {coachActiveTournaments}
+                      </Typography>
+                    </Stack>
+                  </Box>
+
+                  {/* Revenue Card */}
+                  <Box
+                    sx={{
+                      p: 2.5,
+                      borderRadius: 2,
+                      background:
+                        "linear-gradient(135deg, #FAF5FF 0%, #FDF2F8 100%)",
+                      border: "1px solid #E9D5FF",
+                      position: "relative",
+                      overflow: "hidden",
+                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                      "&:hover": {
+                        transform: "translateY(-2px)",
+                        boxShadow: "0 10px 15px -3px rgb(139 92 246 / 0.2)",
+                      },
+                      "&::before": {
+                        content: '""',
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: "3px",
+                        background: "linear-gradient(90deg, #8B5CF6, #EC4899)",
+                      },
+                    }}
+                  >
+                    <Stack spacing={1}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontSize: "0.75rem",
+                          fontWeight: 500,
+                          color: "#6B7280",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Revenue
+                      </Typography>
+                      <Stack direction="row" spacing={1} alignItems="flex-end">
+                        <Typography
+                          sx={{
+                            fontSize: "2rem",
+                            lineHeight: 1,
+                            fontWeight: 700,
+                            background:
+                              "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                            WebkitBackgroundClip: "text",
+                            WebkitTextFillColor: "transparent",
+                            backgroundClip: "text",
+                          }}
+                        >
+                          {toMoney(coachWeekRevenue)}
+                        </Typography>
+                        {typeof revenueGrowthPct === "number" ? (
+                          <Box
+                            sx={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 0.25,
+                              px: 1,
+                              py: 0.25,
+                              borderRadius: 1,
+                              backgroundColor:
+                                revenueGrowthPct >= 0 ? "#DCFCE7" : "#FEE2E2",
+                              mb: 0.25,
+                            }}
+                          >
+                            <Typography
+                              sx={{
+                                fontSize: "0.6875rem",
+                                fontWeight: 700,
+                                color:
+                                  revenueGrowthPct >= 0 ? "#16A34A" : "#DC2626",
+                              }}
+                            >
+                              {revenueGrowthPct >= 0 ? "↗" : "↘"}{" "}
+                              {Math.abs(revenueGrowthPct).toFixed(0)}%
+                            </Typography>
+                          </Box>
+                        ) : null}
+                      </Stack>
+                    </Stack>
+                  </Box>
+                </Box>
+
+                {/* Daily Breakdown Chart */}
+                <Box
+                  sx={{
+                    pt: 3,
+                    borderTop: "1px solid #E5E7EB",
+                  }}
+                >
+                  <Stack
+                    direction="row"
+                    alignItems="center"
+                    spacing={1}
+                    sx={{ mb: 2 }}
+                  >
+                    <Box
+                      sx={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "linear-gradient(135deg, #8B5CF6, #EC4899)",
+                      }}
+                    />
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontWeight: 600,
+                        fontSize: "0.8125rem",
+                        color: "#6B7280",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.05em",
+                      }}
+                    >
+                      Daily Breakdown
+                    </Typography>
+                  </Stack>
+                  <RevenueMiniBars
+                    items={coachRevenueByDay}
+                    formatValue={toMoney}
                   />
-                </Stack>
-              </CardContent>
-            </Card>
-            <SelectActionCard
-              upcomingTitle={viewData.upcomingTitle}
-              upcomingSubtitle={viewData.upcomingSubtitle}
-              todaySessions={viewData.todaySessions}
-              todayStudents={viewData.todayStudents}
-              activeTournaments={viewData.activeTournaments}
-            />
-            <WeeklyScheduleCard classes={viewData.weeklyClasses} />
+                </Box>
+              </Stack>
+            </SectionCard>
+
+            <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+              <NavigateSummaryCard
+                title="Tournaments I'm Managing"
+                count={coachManagedTournamentsCount}
+                subtitle="Active Events"
+                icon={<SettingsRoundedIcon fontSize="small" />}
+                color="warning"
+                onClick={() => navigate("/events/upcoming")}
+              />
+              <NavigateSummaryCard
+                title="My Tournaments"
+                count={coachRegisteredCount}
+                subtitle="Registered"
+                icon={<EmojiEventsRoundedIcon fontSize="small" />}
+                color="primary"
+                onClick={() => navigate("/events/upcoming")}
+              />
+              <NavigateSummaryCard
+                title="Today's Classes"
+                count={coachTodaySessions}
+                subtitle="Sessions"
+                icon={<CalendarMonthRoundedIcon fontSize="small" />}
+                color="default"
+              />
+            </Stack>
+            <CoachWeeklyScheduleBoard days={coachScheduleDays} />
           </>
         )}
       </Box>
@@ -888,24 +1375,52 @@ export default function Dashboard() {
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: number }) {
-  return (
-    <Box
-      sx={{
-        p: 1.25,
-        borderRadius: 1.5,
-        border: "1px solid rgba(15,23,42,0.08)",
-        bgcolor: "background.paper",
-        minWidth: 0,
-        flex: 1,
-      }}
-    >
-      <Typography variant="body2" color="text.secondary">
-        {label}
-      </Typography>
-      <Typography sx={{ fontWeight: 900, fontSize: 24, lineHeight: 1.1 }}>
-        {value}
-      </Typography>
-    </Box>
-  );
+function buildCoachScheduleDaysFromWeeklyClasses(
+  classes: WeeklyClass[],
+): CoachScheduleDay[] {
+  const dayOrder = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+  ];
+  const shortByDay: Record<string, string> = {
+    Monday: "Mon",
+    Tuesday: "Tue",
+    Wednesday: "Wed",
+    Thursday: "Thu",
+    Friday: "Fri",
+    Saturday: "Sat",
+    Sunday: "Sun",
+  };
+
+  const groups = dayOrder.map((dayName, idx) => {
+    const dayClasses = classes.filter((c) => c.date === dayName).slice(0, 3);
+    return {
+      day: shortByDay[dayName] ?? dayName.slice(0, 3),
+      dateLabel: String(23 + idx),
+      items: dayClasses.map((item) => ({
+        id: item.id,
+        time: item.startAt,
+        title: `${capitalize(item.level)} Class`,
+        students: Number(item.students ?? 0),
+        capacity: item.capacity ?? null,
+        isClosed:
+          typeof item.isFull === "boolean"
+            ? item.isFull
+            : item.capacity != null &&
+              Number(item.students ?? 0) >= Number(item.capacity),
+        type: "class" as const,
+      })),
+    };
+  });
+  return groups;
+}
+
+function capitalize(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }

@@ -19,6 +19,7 @@ import {
   TextField,
   Tooltip,
   Typography,
+  Button,
   useMediaQuery,
   useTheme,
 } from "@mui/material";
@@ -30,15 +31,25 @@ import EmojiEventsIcon from "@mui/icons-material/EmojiEventsRounded";
 import EventAvailableRoundedIcon from "@mui/icons-material/EventAvailableRounded";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonthRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
+import PaidRoundedIcon from "@mui/icons-material/PaidRounded";
+import CreditCardRoundedIcon from "@mui/icons-material/CreditCardRounded";
 import SettingsIcon from "@mui/icons-material/SettingsRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
+import StarRateIcon from "@mui/icons-material/StarRate";
 import { useLocation, useNavigate } from "react-router-dom";
 import Logo from "../../../assets/onora.png";
-import { clearToken, getLoggedInRole, getToken, hasCreatorAccess } from "../../../auth/tokens";
+import {
+  clearToken,
+  getLoggedInRole,
+  getToken,
+  hasCreatorAccess,
+} from "../../../auth/tokens";
+import { designTokens } from "../../../Theme/designTokens";
 
-const drawerWidth = 272;
+const drawerWidth = 256;
 
 type NavItem = {
   label: string;
@@ -61,6 +72,12 @@ const baseNavItems: NavItem[] = [
     match: "prefix",
   },
   {
+    label: "Revenue & Analytics",
+    to: "/revenue",
+    icon: <PaidRoundedIcon />,
+    match: "prefix",
+  },
+  {
     label: "Upcoming Events",
     to: "/events/upcoming",
     icon: <EventAvailableRoundedIcon />,
@@ -70,6 +87,12 @@ const baseNavItems: NavItem[] = [
     label: "Classes",
     to: "/classes",
     icon: <CalendarMonthIcon />,
+    match: "prefix",
+  },
+  {
+    label: "Account & Billing",
+    to: "/account",
+    icon: <CreditCardRoundedIcon />,
     match: "prefix",
   },
 ];
@@ -97,7 +120,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               match: "prefix" as const,
             },
           ]
-        : baseNavItems,
+        : baseNavItems.filter((item) => item.to !== "/revenue"),
     [canManageTeams],
   );
   const userName = React.useMemo(() => {
@@ -146,9 +169,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <Box
       sx={{
         minHeight: "100vh",
-        // subtle brand wash (premium SaaS vibe)
-        background:
-          "linear-gradient(180deg, #FAF7FF 0%, #F7F7FB 55%, #F7F7FB 100%)",
+        background: designTokens.gray[50],
       }}
     >
       <CssBaseline />
@@ -174,8 +195,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             color="inherit"
             elevation={0}
             sx={{
-              bgcolor: "#FAF7FF",
-              borderBottom: "1px solid rgba(139, 92, 246, 0.12)",
+              bgcolor: "#FFFFFF",
+              borderBottom: "1px solid #E5E7EB",
               color: "text.primary",
             }}
           >
@@ -207,7 +228,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   sx={{
                     mr: 0.5,
                     borderRadius: 2,
-                    "&:hover": { bgcolor: "rgba(139, 92, 246, 0.08)" },
+                    "&:hover": { bgcolor: "#F3F4F6" },
                   }}
                 >
                   <MenuIcon />
@@ -245,7 +266,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   maxWidth: 380,
                   mr: 1,
                   "& .MuiOutlinedInput-root": {
-                    bgcolor: "rgba(255,255,255,0.75)",
+                    bgcolor: "#F9FAFB",
                     borderRadius: 999,
                   },
                 }}
@@ -262,6 +283,39 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               />
 
               <Stack direction="row" spacing={1.25} alignItems="center">
+                {canManageTeams ? (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    onClick={() => navigate("/account")}
+                    startIcon={<StarRateIcon sx={{ fontSize: 18 }} />}
+                    sx={{
+                      display: { xs: "none", sm: "inline-flex" },
+                      borderRadius: 2,
+                      px: 1.5,
+                      minHeight: 30,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <strong>Pro</strong>
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<AutoAwesomeRoundedIcon sx={{ fontSize: 16 }} />}
+                    onClick={() => navigate("/account")}
+                    sx={{
+                      display: { xs: "none", sm: "inline-flex" },
+                      borderRadius: 2,
+                      px: 1.5,
+                      minHeight: 30,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Upgrade
+                  </Button>
+                )}
                 <Box
                   role="button"
                   onClick={(e) => setMenuAnchor(e.currentTarget)}
@@ -273,15 +327,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     py: 0.5,
                     borderRadius: 999,
                     cursor: "pointer",
-                    "&:hover": { bgcolor: "rgba(139,92,246,0.08)" },
+                    "&:hover": { bgcolor: "#F3F4F6" },
                   }}
                 >
                   <Avatar
                     sx={{
                       width: 34,
                       height: 34,
-                      bgcolor: "rgba(139, 92, 246, 0.18)",
-                      color: "primary.main",
+                      bgcolor: "#F3E8FF",
+                      color: "#7C3AED",
                       fontWeight: 700,
                       fontSize: 14,
                     }}
@@ -339,7 +393,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   position: isMobile ? "fixed" : "relative",
                   height: "100%",
                   bgcolor: "#FFFFFF",
-                  borderRight: "1px solid rgba(139, 92, 246, 0.10)",
+                  borderRight: `1px solid ${designTokens.gray[200]}`,
                 },
               }}
             >
@@ -360,10 +414,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
                 <Tooltip title="Collapse" arrow>
                   <IconButton
-                    onClick={() => (isMobile ? setMobileOpen(false) : setOpen(false))}
+                    onClick={() =>
+                      isMobile ? setMobileOpen(false) : setOpen(false)
+                    }
                     sx={{
                       borderRadius: 2,
-                      "&:hover": { bgcolor: "rgba(139, 92, 246, 0.08)" },
+                      "&:hover": { bgcolor: "#F3F4F6" },
                     }}
                   >
                     <ChevronLeftIcon />
@@ -387,34 +443,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                           borderRadius: 2,
                           px: 1.25,
                           py: 1.05,
-                          position: "relative",
                           gap: 0.75,
 
                           "&:hover": {
-                            bgcolor: "rgba(139, 92, 246, 0.06)",
+                            bgcolor: "#F9FAFB",
                           },
 
                           "&.Mui-selected": {
-                            bgcolor: "rgba(139, 92, 246, 0.08)",
-                            "&:hover": { bgcolor: "rgba(139, 92, 246, 0.10)" },
-
-                            // strong identity: left rail
-                            "&::before": {
-                              content: '""',
-                              position: "absolute",
-                              left: 6,
-                              top: 8,
-                              bottom: 8,
-                              width: 3,
-                              borderRadius: 999,
-                              background:
-                                "linear-gradient(180deg, #8B5CF6 0%, #A855F7 100%)",
-                            },
+                            bgcolor: "#FAF5FF",
+                            "&:hover": { bgcolor: "#F3E8FF" },
 
                             "& .MuiListItemIcon-root": {
-                              color: "primary.main",
+                              color: "#8B5CF6",
                             },
-                            "& .MuiListItemText-primary": { fontWeight: 700 },
+                            "& .MuiListItemText-primary": {
+                              fontWeight: 700,
+                              color: "#7C3AED",
+                            },
                           },
                         }}
                       >
@@ -452,7 +497,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       borderRadius: 2,
                       px: 1.25,
                       py: 1.05,
-                      "&:hover": { bgcolor: "rgba(139, 92, 246, 0.06)" },
+                      "&:hover": { bgcolor: "#F9FAFB" },
                     }}
                   >
                     <ListItemIcon

@@ -18,6 +18,9 @@ import TeamsPage from "./pages/TeamsPage";
 import PlayerTournamentInvitePage from "./pages/PlayerTournamentInvitePage";
 import TournamentPaymentPage from "./pages/TournamentPaymentPage";
 import UpcomingEventsPage from "./pages/UpcomingEventsPage";
+import RevenueAnalyticsPage from "./pages/RevenueAnalyticsPage";
+import AccountBillingPage from "./pages/AccountBillingPage";
+import SettingsPage from "./pages/SettingsPage";
 
 function Layout() {
   return (
@@ -45,6 +48,9 @@ function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/tournaments" element={<TournamentsListPage />} />
             <Route path="/events/upcoming" element={<UpcomingEventsPage />} />
+            <Route path="/revenue" element={<RevenueAnalyticsPage />} />
+            <Route path="/account" element={<AccountBillingPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/tournaments/invite" element={<PlayerTournamentInvitePage />} />
             <Route path="/tournaments/payment" element={<TournamentPaymentPage />} />
             <Route
