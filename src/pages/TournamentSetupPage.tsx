@@ -7,14 +7,13 @@ import {
   CardContent,
   Chip,
   Divider,
-  Paper,
   Stack,
   Tab,
   Tabs,
   TextField,
   Typography,
 } from "@mui/material";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { getLoggedInUserId, getToken } from "../auth/tokens";
 import {
   type GroupBucket,
@@ -83,16 +82,6 @@ type CategorySetupConfig = {
   bracketMatches?: BuilderBracketMatch[];
 };
 
-const FORMAT_OPTIONS: Array<{
-  id: TournamentFormat;
-  title: string;
-  subtitle: string;
-}> = [
-  { id: "Singles", title: "Singles", subtitle: "1 vs 1 matches" },
-  { id: "Doubles", title: "Doubles", subtitle: "2 vs 2 matches" },
-  { id: "Teams", title: "Teams", subtitle: "Team fixtures" },
-];
-
 const STRUCTURE_OPTIONS: Array<{
   id: StructureMode;
   title: string;
@@ -134,10 +123,12 @@ function inferDisciplineFromCategory(
   return "Singles";
 }
 
-function normalizeTournamentFormat(value: string): TournamentFormat | null {
-  if (value === "Teams" || value === "Doubles" || value === "Singles")
-    return value;
-  return null;
+function inferFormatFromCategoryName(name?: string): TournamentFormat {
+  const normalized = String(name ?? "").toLowerCase();
+  if (normalized.includes("team")) return "Teams";
+  if (normalized.includes("double") || normalized.includes("mixed"))
+    return "Doubles";
+  return "Singles";
 }
 
 function groupLetter(index: number): string {
@@ -151,7 +142,6 @@ function entryLabelFromFormat(format?: TournamentFormat): string {
 }
 
 export default function TournamentSetupPage() {
-  const navigate = useNavigate();
   const { id } = useParams();
 
   const [loading, setLoading] = React.useState(true);
@@ -171,7 +161,6 @@ export default function TournamentSetupPage() {
     Record<string, CategorySetupConfig>
   >({});
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
-  const [formatAppliedToAll, setFormatAppliedToAll] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState<SetupTab>("overview");
   const [groupsByCategory, setGroupsByCategory] = React.useState<
     Record<string, GroupBucket[]>
@@ -407,11 +396,8 @@ export default function TournamentSetupPage() {
               : saved.categories;
           sourceCategories.forEach((cat) => {
             const current = savedConfigs[String(cat.id)];
-            const normalizedFormat = normalizeTournamentFormat(
-              String(current?.formats?.[0] ?? ""),
-            );
             computedConfigs[String(cat.id)] = {
-              formats: normalizedFormat ? [normalizedFormat] : [],
+              formats: [inferFormatFromCategoryName(cat.name)],
               structureMode: (current?.structureMode as StructureMode) ?? "",
               groupCount:
                 typeof current?.groupCount === "number"
@@ -449,7 +435,7 @@ export default function TournamentSetupPage() {
           const computedConfigs: Record<string, CategorySetupConfig> = {};
           backendMappedCategories.forEach((cat) => {
             computedConfigs[String(cat.id)] = {
-              formats: [],
+              formats: [inferFormatFromCategoryName(cat.name)],
               structureMode: "",
               bracketMatches: [],
             };
@@ -533,9 +519,14 @@ export default function TournamentSetupPage() {
         const key = String(cat.id);
         if (!next[key]) {
           next[key] = {
-            formats: [],
+            formats: [inferFormatFromCategoryName(cat.name)],
             structureMode: "",
             bracketMatches: [],
+          };
+        } else if (!next[key].formats || next[key].formats.length === 0) {
+          next[key] = {
+            ...next[key],
+            formats: [inferFormatFromCategoryName(cat.name)],
           };
         }
       });
@@ -564,11 +555,10 @@ export default function TournamentSetupPage() {
   const canSaveSelectedCategorySetup = Boolean(
     selectedCategory &&
     selectedConfig &&
-    selectedConfig.formats.length > 0 &&
     selectedConfig.structureMode &&
     (!requiresGroupStructure || hasGroupStructureConfig),
   );
-  const selectedFormat = selectedConfig?.formats?.[0];
+  const selectedFormat = inferFormatFromCategoryName(selectedCategory?.name);
   const selectedEntryLabel = entryLabelFromFormat(selectedFormat);
   const categoriesOverview = React.useMemo(
     () =>
@@ -584,7 +574,7 @@ export default function TournamentSetupPage() {
         return {
           id: cat.id,
           name: cat.name,
-          format: cfg?.formats?.[0] ?? "",
+          format: inferFormatFromCategoryName(cat.name),
           structure: cfg?.structureMode ?? "",
           hasGroups,
           hasBracket,
@@ -604,27 +594,69 @@ export default function TournamentSetupPage() {
     setStatusMessage("Category setup saved.");
   };
 
-  const applySelectedFormatToAllCategories = () => {
+  const applySelectedStructureToAllCategories = () => {
     if (!selectedCategory || !selectedConfig) return;
-    const selectedFormat = selectedConfig.formats[0];
-    if (!selectedFormat) return;
+    const selectedStructure = selectedConfig.structureMode;
+    if (!selectedStructure) return;
+    const confirmed = window.confirm(
+      `Apply "${selectedStructure}" structure to all ${categories.length} categories?`,
+    );
+    if (!confirmed) return;
     setCategoryConfigs((prev) => {
       const next = { ...prev };
       categories.forEach((cat) => {
         next[cat.id] = {
           ...(next[cat.id] ?? {
+            formats: [inferFormatFromCategoryName(cat.name)],
             structureMode: "",
           }),
-          formats: [selectedFormat],
-          structureMode: (next[cat.id]?.structureMode ?? "") as
-            | StructureMode
-            | "",
+          structureMode: selectedStructure,
         };
       });
       return next;
     });
-    setFormatAppliedToAll(true);
-    setStatusMessage(`Applied ${selectedFormat} format to all categories.`);
+    setStatusMessage(`Applied ${selectedStructure} structure to all categories.`);
+  };
+
+  const applySelectedGroupInputsToAllCategories = () => {
+    if (!selectedCategory || !selectedConfig) return;
+    if (selectedConfig.structureMode !== "groups_knockout") return;
+    const groupCount = Number(selectedConfig.groupCount ?? 0);
+    const teamsPerGroup = Number(selectedConfig.teamsPerGroup ?? 0);
+    const qualifiedPerGroup = Number(selectedConfig.qualifiedPerGroup ?? 0);
+    if (
+      groupCount <= 0 ||
+      teamsPerGroup < 4 ||
+      qualifiedPerGroup <= 0 ||
+      qualifiedPerGroup > teamsPerGroup
+    ) {
+      setError(
+        "Invalid group inputs. Use: groups > 0, teams/group >= 4, qualified between 1 and teams/group.",
+      );
+      return;
+    }
+    const confirmed = window.confirm(
+      `Apply group inputs (${groupCount} groups, ${teamsPerGroup} teams/group, ${qualifiedPerGroup} qualified/group) to all categories?`,
+    );
+    if (!confirmed) return;
+    setCategoryConfigs((prev) => {
+      const next = { ...prev };
+      categories.forEach((cat) => {
+        next[cat.id] = {
+          ...(next[cat.id] ?? {
+            formats: [inferFormatFromCategoryName(cat.name)],
+            structureMode: "groups_knockout",
+          }),
+          structureMode: "groups_knockout",
+          groupCount,
+          teamsPerGroup,
+          qualifiedPerGroup,
+        };
+      });
+      return next;
+    });
+    setError(null);
+    setStatusMessage("Applied group inputs to all categories.");
   };
 
   const generateGroupsAndBracketForSelectedCategory = () => {
@@ -978,7 +1010,7 @@ export default function TournamentSetupPage() {
             }}
           >
             <Tab value="overview" label="Overview" />
-            <Tab value="categories" label="Categories" />
+            <Tab value="categories" label="Structure" />
             <Tab value="teams" label="Teams" />
             <Tab value="drawing" label="Drawing" />
             <Tab value="groups" label="Groups & Brackets" />
@@ -1028,15 +1060,15 @@ export default function TournamentSetupPage() {
                         fontSize: "0.875rem",
                       }}
                     >
-                      Use tabs to configure this tournament without leaving this
-                      page.
+                      Setup flow: Category List to Structure to Teams to Groups
+                      and Brackets.
                     </Typography>
                     <Typography
                       variant="caption"
                       sx={{ color: "#1447E6", fontSize: "0.75rem" }}
                     >
-                      Complete all category setups to enable participant
-                      registration.
+                      Open Category List from Overview, pick a category, set
+                      structure, then continue with teams and groups.
                     </Typography>
                   </Alert>
 
@@ -1123,7 +1155,7 @@ export default function TournamentSetupPage() {
 
                   {/* Status Cards Grid */}
                   <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                    {/* Format Status Card */}
+                    {/* Category List Status Card */}
                     <Box
                       sx={{
                         flex: 1,
@@ -1178,7 +1210,7 @@ export default function TournamentSetupPage() {
                             color: "#101828",
                           }}
                         >
-                          Format
+                          Category List
                         </Typography>
                       </Stack>
                       <Typography
@@ -1186,9 +1218,9 @@ export default function TournamentSetupPage() {
                         sx={{ color: "#4A5565", fontSize: "0.875rem" }}
                       >
                         <strong style={{ color: "#101828" }}>
-                          {categoriesOverview.filter((c) => c.format).length}
+                          {categories.length}
                         </strong>{" "}
-                        of {categories.length} configured
+                        categories available
                       </Typography>
                     </Box>
 
@@ -1337,7 +1369,7 @@ export default function TournamentSetupPage() {
 
                   <Divider sx={{ my: 3 }} />
 
-                  {/* Category Setup Status - Updated Heading Size */}
+                  {/* Category List */}
                   <Typography
                     sx={{
                       fontWeight: 700,
@@ -1346,12 +1378,16 @@ export default function TournamentSetupPage() {
                       fontSize: "1.25rem",
                     }}
                   >
-                    Category Setup Status
+                    Category List
                   </Typography>
                   <Stack spacing={1.5}>
                     {categoriesOverview.map((item) => (
                       <Box
                         key={item.id}
+                        onClick={() => {
+                          setSelectedCategoryId(item.id);
+                          setActiveTab("categories");
+                        }}
                         sx={{
                           p: 2,
                           borderRadius: "14px",
@@ -1362,6 +1398,7 @@ export default function TournamentSetupPage() {
                           alignItems: { md: "center" },
                           gap: 2,
                           transition: "all 120ms ease",
+                          cursor: "pointer",
                           "&:hover": {
                             borderColor: "#8B5CF6",
                             boxShadow: "0 2px 8px rgba(139,92,246,0.1)",
@@ -1491,10 +1528,10 @@ export default function TournamentSetupPage() {
                                 sx={{ fontSize: "16px !important" }}
                               />
                             }
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setSelectedCategoryId(item.id);
-                              setFormatAppliedToAll(false);
-                              setActiveTab("groups");
+                              setActiveTab("categories");
                             }}
                             sx={{
                               bgcolor: "#FF6900",
@@ -1512,7 +1549,7 @@ export default function TournamentSetupPage() {
                               },
                             }}
                           >
-                            Configure
+                            Edit Structure
                           </Button>
                         </Stack>
                       </Box>
@@ -2479,11 +2516,11 @@ export default function TournamentSetupPage() {
               <Card>
                 <CardContent sx={{ p: 3 }}>
                   <Alert severity="info" sx={{ mb: 2 }}>
-                    1. Select a category. 2. Select a format. 3. Select a
-                    structure. Save is enabled only after all 3.
+                    1. Select a category from Category List. 2. Select a
+                    structure. 3. Save and continue to Teams/Groups.
                   </Alert>
                   <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
-                    Tournament Categories
+                    Structure
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
                   <Typography
@@ -2491,143 +2528,65 @@ export default function TournamentSetupPage() {
                     color="text.secondary"
                     sx={{ mb: 2 }}
                   >
-                    Select a category and configure its format and structure.
+                    Configure structure for the selected category.
                   </Typography>
-
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    useFlexGap
-                    flexWrap="wrap"
-                    sx={{ mb: 2 }}
-                  >
-                    {categories.length > 0 ? (
-                      categories.map((cat) => {
-                        const selected =
-                          formatAppliedToAll || selectedCategoryId === cat.id;
-                        return (
-                          <Chip
-                            key={cat.id}
-                            label={cat.name}
-                            clickable
-                            onClick={() => {
-                              setSelectedCategoryId(cat.id);
-                              setFormatAppliedToAll(false);
-                            }}
-                            variant={selected ? "filled" : "outlined"}
-                            sx={{
-                              borderRadius: 999,
-                              borderColor: selected
-                                ? "rgba(139,92,246,0.45)"
-                                : "rgba(15,23,42,0.16)",
-                              bgcolor: selected
-                                ? "rgba(139,92,246,0.16)"
-                                : "transparent",
-                              color: selected ? "primary.main" : "text.primary",
-                              fontWeight: 700,
-                            }}
-                          />
-                        );
-                      })
-                    ) : (
-                      <Typography variant="body2" color="text.secondary">
-                        No categories found for this tournament yet.
-                      </Typography>
-                    )}
-                  </Stack>
-
-                  <Divider sx={{ mb: 2 }} />
-                  <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
-                    Tournament Format
-                  </Typography>
-                  <Stack
-                    direction="row"
-                    justifyContent="flex-end"
-                    sx={{ mb: 1 }}
-                  >
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={applySelectedFormatToAllCategories}
-                      disabled={
-                        !selectedCategory ||
-                        !selectedConfig ||
-                        selectedConfig.formats.length === 0
-                      }
-                      sx={{ borderRadius: 999 }}
+                  {selectedCategory ? (
+                    <Box
+                      sx={{
+                        mb: 2,
+                        p: 2,
+                        borderRadius: "12px",
+                        bgcolor: "#F3E8FF",
+                        border: "1px solid #E9D5FF",
+                      }}
                     >
-                      Apply format to all categories
-                    </Button>
-                  </Stack>
-                  <Stack
-                    direction={{ xs: "column", md: "row" }}
-                    spacing={1.25}
-                    sx={{ mb: 2 }}
-                  >
-                    {FORMAT_OPTIONS.map((opt) => {
-                      const isSelected = Boolean(
-                        selectedConfig?.formats.includes(opt.id),
-                      );
-                      return (
-                        <Card
-                          key={opt.id}
-                          onClick={() => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            const previousFormat = selectedConfig.formats[0];
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                formats: [opt.id],
-                                bracketMatches:
-                                  previousFormat && previousFormat !== opt.id
-                                    ? []
-                                    : selectedConfig.bracketMatches,
-                              },
-                            }));
-                            if (previousFormat && previousFormat !== opt.id) {
-                              persistGroups({
-                                ...groupsByCategory,
-                                [selectedCategory.id]: [],
-                              });
-                              setStatusMessage(
-                                `Format changed to ${opt.id}. Groups and bracket were reset for this category.`,
-                              );
-                            }
-                            setFormatAppliedToAll(false);
-                          }}
-                          sx={{
-                            cursor: selectedCategory
-                              ? "pointer"
-                              : "not-allowed",
-                            flex: 1,
-                            borderRadius: 2,
-                            border: "1px solid",
-                            borderColor: isSelected
-                              ? "rgba(139,92,246,0.45)"
-                              : "rgba(15,23,42,0.10)",
-                            bgcolor: isSelected
-                              ? "rgba(139,92,246,0.08)"
-                              : "background.paper",
-                            opacity: selectedCategory ? 1 : 0.6,
-                          }}
-                        >
-                          <CardContent sx={{ p: 1.5 }}>
-                            <Typography sx={{ fontWeight: 800 }}>
-                              {opt.title}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {opt.subtitle}
-                            </Typography>
-                          </CardContent>
-                        </Card>
-                      );
-                    })}
-                  </Stack>
+                      <Typography
+                        sx={{
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          color: "#7C3AED",
+                          textTransform: "uppercase",
+                          letterSpacing: 0.6,
+                          mb: 0.5,
+                        }}
+                      >
+                        Editing Category
+                      </Typography>
+                      <Typography
+                        variant="h5"
+                        sx={{ fontWeight: 800, color: "#4C1D95" }}
+                      >
+                        {selectedCategory.name}
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Alert severity="warning" sx={{ mb: 2 }}>
+                      Select a category from Category List first.
+                    </Alert>
+                  )}
 
                   <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
                     Structure
                   </Typography>
+                  <Stack
+                    direction="row"
+                    justifyContent="flex-end"
+                    sx={{ mb: 1.5 }}
+                  >
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={applySelectedStructureToAllCategories}
+                      disabled={
+                        !selectedCategory ||
+                        !selectedConfig ||
+                        !selectedConfig.structureMode
+                      }
+                      sx={{ borderRadius: 999 }}
+                    >
+                      Apply structure to all categories
+                    </Button>
+                  </Stack>
                   <Stack
                     direction={{ xs: "column", md: "row" }}
                     spacing={1.25}
@@ -2688,6 +2647,20 @@ export default function TournamentSetupPage() {
                       >
                         Group Phase Inputs
                       </Typography>
+                      <Stack
+                        direction="row"
+                        justifyContent="flex-end"
+                        sx={{ mb: 1.25 }}
+                      >
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={applySelectedGroupInputsToAllCategories}
+                          sx={{ borderRadius: 999 }}
+                        >
+                          Apply group inputs to all categories
+                        </Button>
+                      </Stack>
                       <Stack
                         direction={{ xs: "column", md: "row" }}
                         spacing={1.25}
@@ -2800,20 +2773,42 @@ export default function TournamentSetupPage() {
                 <CardContent sx={{ p: 3 }}>
                   {!selectedCategory ? (
                     <Alert severity="info">
-                      Select a category in the Categories tab first.
+                      Select a category in the Structure tab first.
                     </Alert>
                   ) : (
                     <Stack spacing={1.25}>
-                      <Alert severity="info">
-                        Editing category:{" "}
-                        <strong>{selectedCategory.name}</strong>
-                        {selectedConfig?.formats?.[0]
-                          ? ` • ${selectedConfig.formats[0]}`
-                          : ""}
-                        {selectedConfig?.structureMode
-                          ? ` • ${selectedConfig.structureMode}`
-                          : ""}
-                      </Alert>
+                      <Box
+                        sx={{
+                          p: 2,
+                          borderRadius: "12px",
+                          bgcolor: "#F3E8FF",
+                          border: "1px solid #E9D5FF",
+                        }}
+                      >
+                        <Typography
+                          sx={{
+                            fontSize: "0.75rem",
+                            fontWeight: 700,
+                            color: "#7C3AED",
+                            textTransform: "uppercase",
+                            letterSpacing: 0.6,
+                            mb: 0.5,
+                          }}
+                        >
+                          Editing Category
+                        </Typography>
+                        <Typography
+                          variant="h5"
+                          sx={{ fontWeight: 800, color: "#4C1D95" }}
+                        >
+                          {selectedCategory.name}
+                        </Typography>
+                        <Typography sx={{ fontSize: "0.875rem", color: "#6B21A8" }}>
+                          {selectedConfig?.structureMode
+                            ? `Structure: ${selectedConfig.structureMode}`
+                            : "Structure not selected yet"}
+                        </Typography>
+                      </Box>
                       <TournamentPhaseBuilder
                         groups={groupsByCategory[selectedCategory.id] ?? []}
                         bracketMatches={selectedConfig?.bracketMatches ?? []}

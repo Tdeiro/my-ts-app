@@ -5,7 +5,12 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Divider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControl,
   FormControlLabel,
   InputLabel,
@@ -20,15 +25,14 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
   Chip,
 } from "@mui/material";
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useNavigate, useParams } from "react-router-dom";
 import { getToken } from "../auth/tokens";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const ENABLE_SPECIAL_PRICING_RULE_MOCK = true;
 
 type TournamentForm = {
   name: string;
@@ -57,12 +61,15 @@ type TournamentCategoryForm = {
   backendId?: number;
   name: string;
   level: "BEGINNER" | "INTERMEDIATE" | "ADVANCED" | "ALL_LEVELS";
-  minAge: string;
-  maxAge: string;
-  gender: "Women" | "Men" | "Mixed" | "Open";
-  expandToAllGenders: boolean;
-  expandToMaleFemale: boolean;
-  isKidsCategory: boolean;
+  format: "SINGLES" | "DOUBLES" | "MIXED";
+  gender: "Women" | "Men";
+  price: number;
+};
+
+type CategoryPricingRule = {
+  enabled: boolean;
+  specialPricePerCategory: number;
+  currency: "" | "AUD" | "USD" | "EUR" | "BRL";
 };
 
 const initialForm: TournamentForm = {
@@ -101,21 +108,10 @@ function newCategory(): TournamentCategoryForm {
     id: crypto.randomUUID(),
     name: "",
     level: "INTERMEDIATE",
-    minAge: "",
-    maxAge: "",
-    gender: "Open",
-    expandToAllGenders: false,
-    expandToMaleFemale: false,
-    isKidsCategory: false,
+    format: "DOUBLES",
+    gender: "Men",
+    price: 0,
   };
-}
-
-function formatAgeRange(category: TournamentCategoryForm): string {
-  if (category.minAge && category.maxAge)
-    return `${category.minAge}-${category.maxAge}`;
-  if (category.minAge) return `${category.minAge}+`;
-  if (category.maxAge) return `up to ${category.maxAge}`;
-  return "All ages";
 }
 
 function formatTournamentLevelLabel(level?: string): string {
@@ -134,14 +130,16 @@ function formatCategoryLevelLabel(
   return normalized.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function getCategoryGenderSummary(category: TournamentCategoryForm): string {
-  if (category.expandToAllGenders) return "Men/Women/Mixed";
-  if (category.expandToMaleFemale) return "Men/Women";
-  return category.gender;
+function formatCategoryFormatLabel(
+  format: TournamentCategoryForm["format"],
+): string {
+  if (format === "SINGLES") return "Singles";
+  if (format === "DOUBLES") return "Doubles";
+  return "Mixed";
 }
 
 function buildAutoCategoryName(category: TournamentCategoryForm): string {
-  return formatCategoryLevelLabel(category.level);
+  return `${category.gender} - ${formatCategoryLevelLabel(category.level)} - ${formatCategoryFormatLabel(category.format)}`;
 }
 
 function mapApiTournamentLevel(level?: string): TournamentForm["level"] {
@@ -167,7 +165,6 @@ function validateTournamentBasics(form: TournamentForm): string | null {
   const today = getTodayIsoDate();
   if (!form.name.trim()) return "Tournament name is required.";
   if (!form.sport) return "Sport is required.";
-  if (!form.level) return "Level is required.";
   if (!form.timezone) return "Timezone is required.";
   if (!form.startDate) return "Start date is required.";
   if (form.startDate < today) return "Start date cannot be before today.";
@@ -181,6 +178,12 @@ function validateTournamentBasics(form: TournamentForm): string | null {
   }
   return null;
 }
+
+const initialCategoryPricingRule: CategoryPricingRule = {
+  enabled: false,
+  specialPricePerCategory: 0,
+  currency: "AUD",
+};
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
@@ -220,6 +223,15 @@ export default function AddTournamentPage() {
   >([]);
   const [draftCategory, setDraftCategory] =
     React.useState<TournamentCategoryForm>(newCategory());
+  const [draftFormats, setDraftFormats] = React.useState<
+    TournamentCategoryForm["format"][]
+  >(["DOUBLES"]);
+  const [draftGenders, setDraftGenders] = React.useState<
+    TournamentCategoryForm["gender"][]
+  >(["Men"]);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = React.useState(false);
+  const [categoryPricingRule, setCategoryPricingRule] =
+    React.useState<CategoryPricingRule>(initialCategoryPricingRule);
   const [editingCategoryId, setEditingCategoryId] = React.useState<
     string | null
   >(null);
@@ -322,6 +334,12 @@ export default function AddTournamentPage() {
           requireApproval: Boolean(selected.requireApproval ?? false),
           tournamentStage: "REGISTRATION",
         }));
+        setCategoryPricingRule((prev) => ({
+          ...prev,
+          currency: String(
+            selected.currency ?? prev.currency,
+          ) as CategoryPricingRule["currency"],
+        }));
         setCreatedTournamentId(Number(id));
         const rawCategories = Array.isArray(categoriesBody)
           ? categoriesBody
@@ -334,14 +352,12 @@ export default function AddTournamentPage() {
             level: String(
               c.level ?? "INTERMEDIATE",
             ) as TournamentCategoryForm["level"],
-            minAge: c.minAge == null ? "" : String(c.minAge),
-            maxAge: c.maxAge == null ? "" : String(c.maxAge),
-            gender: String(
-              c.gender ?? "Open",
-            ) as TournamentCategoryForm["gender"],
-            expandToAllGenders: false,
-            expandToMaleFemale: false,
-            isKidsCategory: false,
+            format: "DOUBLES",
+            gender: String(c.gender ?? "Men") === "Women" ? "Women" : "Men",
+            price: Math.max(
+              0,
+              Number(c.price ?? c.entryFee ?? c.fee ?? 0) || 0,
+            ),
           }),
         );
         setSavedCategories(mappedCategories);
@@ -395,40 +411,13 @@ export default function AddTournamentPage() {
     setStep(2);
   };
 
-  const toggleGenderVariants = () => {
-    setDraftCategory((prev) => ({
-      ...prev,
-      expandToAllGenders: !prev.expandToAllGenders,
-      expandToMaleFemale: prev.expandToAllGenders
-        ? prev.expandToMaleFemale
-        : false,
-    }));
-  };
-
-  const toggleMaleFemaleVariants = () => {
-    setDraftCategory((prev) => ({
-      ...prev,
-      expandToMaleFemale: !prev.expandToMaleFemale,
-      expandToAllGenders: prev.expandToMaleFemale
-        ? prev.expandToAllGenders
-        : false,
-    }));
-  };
-
-  const toggleKidsCategory = () => {
-    setDraftCategory((prev) => ({
-      ...prev,
-      isKidsCategory: !prev.isKidsCategory,
-      maxAge: prev.isKidsCategory ? "" : "12",
-    }));
-  };
-
   const addCategory = () => {
     const cleanName = draftCategory.name.trim();
     setErrorMessage(null);
-    const normalizedDraft = draftCategory.isKidsCategory
-      ? { ...draftCategory, maxAge: draftCategory.maxAge || "12" }
-      : draftCategory;
+    const normalizedDraft = {
+      ...draftCategory,
+      price: Math.max(0, Number(draftCategory.price || 0)),
+    };
     const finalName = cleanName || buildAutoCategoryName(normalizedDraft);
 
     if (editingCategoryId) {
@@ -441,18 +430,49 @@ export default function AddTournamentPage() {
       );
       setStatusMessage("Category updated.");
     } else {
-      setSavedCategories((prev) => [
-        ...prev,
-        {
-          ...normalizedDraft,
-          id: crypto.randomUUID(),
-          name: finalName,
-        },
-      ]);
-      setStatusMessage("Category added to the list.");
+      if (draftGenders.length === 0) {
+        setErrorMessage("Select at least one gender.");
+        return;
+      }
+      if (draftFormats.length === 0) {
+        setErrorMessage("Select at least one format.");
+        return;
+      }
+      const targetGenders = draftGenders;
+      const targetFormats =
+        draftFormats.length > 0 ? draftFormats : [normalizedDraft.format];
+      const categoriesToAdd = targetGenders.flatMap((gender) =>
+        targetFormats.map((format) => {
+          const generatedName = cleanName
+            ? targetFormats.length > 1 || targetGenders.length > 1
+              ? `${cleanName} - ${gender} - ${formatCategoryLevelLabel(normalizedDraft.level)} - ${formatCategoryFormatLabel(format)}`
+              : cleanName
+            : buildAutoCategoryName({
+                ...normalizedDraft,
+                gender,
+                format,
+              });
+          return {
+            ...normalizedDraft,
+            id: crypto.randomUUID(),
+            gender,
+            format,
+            name: generatedName,
+          };
+        }),
+      );
+      setSavedCategories((prev) => [...prev, ...categoriesToAdd]);
+      setStatusMessage(
+        categoriesToAdd.length > 1
+          ? `${categoriesToAdd.length} categories added to the list.`
+          : "Category added to the list.",
+      );
     }
 
     setDraftCategory(newCategory());
+    setDraftFormats(["DOUBLES"]);
+    setDraftGenders(["Men"]);
+    setIsCategoryModalOpen(false);
     setEditingCategoryId(null);
   };
 
@@ -513,6 +533,9 @@ export default function AddTournamentPage() {
     const selected = savedCategories.find((c) => c.id === id);
     if (!selected) return;
     setDraftCategory(selected);
+    setDraftFormats([selected.format]);
+    setDraftGenders([selected.gender]);
+    setIsCategoryModalOpen(true);
     setEditingCategoryId(id);
     setStatusMessage("Editing category. Save to update.");
   };
@@ -520,30 +543,32 @@ export default function AddTournamentPage() {
   const cancelEditCategory = () => {
     setEditingCategoryId(null);
     setDraftCategory(newCategory());
+    setDraftFormats(["DOUBLES"]);
+    setDraftGenders(["Men"]);
+    setIsCategoryModalOpen(false);
   };
 
   const signupCategories = React.useMemo(
     () =>
-      savedCategories.flatMap((category) => {
-        const baseName = category.name.trim();
-        if (!baseName) return [];
-        if (!category.expandToAllGenders && !category.expandToMaleFemale) {
-          return [{ ...category, name: baseName }];
-        }
-        const targetGenders: Array<TournamentCategoryForm["gender"]> =
-          category.expandToAllGenders
-            ? ["Men", "Women", "Mixed"]
-            : ["Men", "Women"];
-        return targetGenders.map((gender) => ({
-          ...category,
-          name: `${baseName} - ${gender}`,
-          gender,
-        }));
-      }),
+      savedCategories
+        .map((category) => {
+          const baseName = category.name.trim();
+          if (!baseName) return null;
+          return { ...category, name: baseName };
+        })
+        .filter((category): category is TournamentCategoryForm =>
+          Boolean(category),
+        ),
     [savedCategories],
   );
 
   const hasValidCategories = signupCategories.length > 0;
+  const defaultCategoryFee = React.useMemo(() => {
+    const first = signupCategories[0];
+    if (!first) return 0;
+    const value = Number(first.price ?? 0);
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
+  }, [signupCategories]);
 
   const handleSubmit = async () => {
     const token = getToken();
@@ -568,7 +593,7 @@ export default function AddTournamentPage() {
         name: form.name.trim(),
         eventType: "TOURNAMENT",
         sport: SPORT_TO_API_VALUE[form.sport],
-        level: form.level || undefined,
+        level: (form.level || "All levels").toUpperCase().replaceAll(" ", "_"),
         timezone: form.timezone,
         locationName: form.locationName,
         address: form.address,
@@ -578,8 +603,8 @@ export default function AddTournamentPage() {
         endTime: `${form.endTime}:00`,
         registrationDeadline: form.registrationDeadline,
         capacity: form.capacity,
-        entryFee: form.entryFee,
-        currency: form.currency || undefined,
+        entryFee: defaultCategoryFee,
+        currency: categoryPricingRule.currency || "AUD",
         description: form.description,
         isPublic: form.isPublic,
         allowWaitlist: form.allowWaitlist,
@@ -618,38 +643,30 @@ export default function AddTournamentPage() {
         throw new Error("Tournament created, but no valid id was returned.");
       }
 
-      const expandedCategories = savedCategories
-        .flatMap((source) => {
-          const baseName = source.name.trim();
-          if (!baseName) return [];
-
-          if (!source.expandToAllGenders && !source.expandToMaleFemale) {
-            return [
-              {
-                backendId: source.backendId,
-                name: baseName,
-                level: source.level,
-                minAge: source.minAge ? Number(source.minAge) : undefined,
-                maxAge: source.maxAge ? Number(source.maxAge) : undefined,
-                gender: source.gender,
-              },
-            ];
-          }
-
-          const genders: Array<TournamentCategoryForm["gender"]> =
-            source.expandToAllGenders
-              ? ["Men", "Women", "Mixed"]
-              : ["Men", "Women"];
-          return genders.map((gender, index) => ({
-            backendId: index === 0 ? source.backendId : undefined,
-            name: `${baseName} - ${gender}`,
-            level: source.level,
-            minAge: source.minAge ? Number(source.minAge) : undefined,
-            maxAge: source.maxAge ? Number(source.maxAge) : undefined,
-            gender,
-          }));
-        })
-        .filter((c) => c.name);
+      const expandedCategories: Array<{
+        backendId?: number;
+        name: string;
+        level: TournamentCategoryForm["level"];
+        gender: TournamentCategoryForm["gender"];
+        price: number;
+      }> = savedCategories.reduce((acc, source) => {
+        const baseName = source.name.trim();
+        if (!baseName) return acc;
+        acc.push({
+          backendId: source.backendId,
+          name: baseName,
+          level: source.level,
+          gender: source.gender,
+          price: Math.max(0, Number(source.price || 0)),
+        });
+        return acc;
+      }, [] as Array<{
+        backendId?: number;
+        name: string;
+        level: TournamentCategoryForm["level"];
+        gender: TournamentCategoryForm["gender"];
+        price: number;
+      }>);
 
       if (isEditMode) {
         const usedBackendIds = new Set<number>();
@@ -671,9 +688,11 @@ export default function AddTournamentPage() {
                   eventId: createdId,
                   name: category.name,
                   level: category.level,
-                  minAge: category.minAge,
-                  maxAge: category.maxAge,
                   gender: category.gender,
+                  price: category.price,
+                  entryFee: category.price,
+                  fee: category.price,
+                  categoryFee: category.price,
                 }),
               },
             );
@@ -694,9 +713,11 @@ export default function AddTournamentPage() {
                 eventId: createdId,
                 name: category.name,
                 level: category.level,
-                minAge: category.minAge,
-                maxAge: category.maxAge,
                 gender: category.gender,
+                price: category.price,
+                entryFee: category.price,
+                fee: category.price,
+                categoryFee: category.price,
               }),
             });
             const body = await resCreate.json().catch(() => null);
@@ -735,9 +756,11 @@ export default function AddTournamentPage() {
             eventId: createdId,
             name: c.name,
             level: c.level,
-            minAge: c.minAge ? Number(c.minAge) : undefined,
-            maxAge: c.maxAge ? Number(c.maxAge) : undefined,
             gender: c.gender,
+            price: Math.max(0, Number(c.price || 0)),
+            entryFee: Math.max(0, Number(c.price || 0)),
+            fee: Math.max(0, Number(c.price || 0)),
+            categoryFee: Math.max(0, Number(c.price || 0)),
           }))
           .filter((c) => c.name);
 
@@ -824,7 +847,11 @@ export default function AddTournamentPage() {
   const whenText = `${form.startDate || "—"} → ${form.endDate || "—"} • ${
     form.startTime || "—"
   }–${form.endTime || "—"}`;
-  const feeText = `${Number(form.entryFee || 0)} ${form.currency}`;
+  const categoryBaseTotal = signupCategories.reduce(
+    (sum, item) => sum + Number(item.price || 0),
+    0,
+  );
+  const feeText = `${categoryPricingRule.currency || "AUD"} ${categoryBaseTotal}`;
   const canUseNativeShare =
     typeof navigator !== "undefined" && "share" in navigator;
 
@@ -962,7 +989,6 @@ export default function AddTournamentPage() {
                       <Button
                         variant="contained"
                         onClick={handleStepOneNext}
-                        disabled={Boolean(basicsValidationError)}
                         sx={{
                           borderRadius: 2,
                           background:
@@ -1236,42 +1262,23 @@ export default function AddTournamentPage() {
                       fullWidth
                     />
 
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                      <FormControl fullWidth>
-                        <InputLabel>Sport</InputLabel>
-                        <Select
-                          label="Sport"
-                          value={form.sport}
-                          onChange={setField("sport")}
-                        >
-                          <MenuItem value="">
-                            <em>Select sport</em>
-                          </MenuItem>
-                          <MenuItem value="Tennis">Tennis</MenuItem>
-                          <MenuItem value="Beach Tennis">Beach Tennis</MenuItem>
-                          <MenuItem value="Padel">Padel</MenuItem>
-                          <MenuItem value="Pickleball">Pickleball</MenuItem>
-                          <MenuItem value="Other">Other</MenuItem>
-                        </Select>
-                      </FormControl>
-
-                      <FormControl fullWidth>
-                        <InputLabel>Level</InputLabel>
-                        <Select
-                          label="Level"
-                          value={form.level}
-                          onChange={setField("level")}
-                        >
-                          <MenuItem value="">
-                            <em>Select level</em>
-                          </MenuItem>
-                          <MenuItem value="Beginner">Beginner</MenuItem>
-                          <MenuItem value="Intermediate">Intermediate</MenuItem>
-                          <MenuItem value="Advanced">Advanced</MenuItem>
-                          <MenuItem value="All levels">All levels</MenuItem>
-                        </Select>
-                      </FormControl>
-                    </Stack>
+                    <FormControl fullWidth>
+                      <InputLabel>Sport</InputLabel>
+                      <Select
+                        label="Sport"
+                        value={form.sport}
+                        onChange={setField("sport")}
+                      >
+                        <MenuItem value="">
+                          <em>Select sport</em>
+                        </MenuItem>
+                        <MenuItem value="Tennis">Tennis</MenuItem>
+                        <MenuItem value="Beach Tennis">Beach Tennis</MenuItem>
+                        <MenuItem value="Padel">Padel</MenuItem>
+                        <MenuItem value="Pickleball">Pickleball</MenuItem>
+                        <MenuItem value="Other">Other</MenuItem>
+                      </Select>
+                    </FormControl>
 
                     <FormControl fullWidth>
                       <InputLabel>Timezone</InputLabel>
@@ -1394,51 +1401,21 @@ export default function AddTournamentPage() {
                     />
                   </Stack>
 
-                  <SectionTitle>Capacity & Fees</SectionTitle>
+                  <SectionTitle>Capacity</SectionTitle>
                   <Divider sx={{ mb: 2 }} />
 
-                  <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                    <TextField
-                      label="Capacity"
-                      type="number"
-                      value={form.capacity}
-                      onChange={(e) =>
-                        setForm((p) => ({
-                          ...p,
-                          capacity: Math.max(0, Number(e.target.value || 0)),
-                        }))
-                      }
-                      fullWidth
-                    />
-                    <TextField
-                      label="Entry Fee"
-                      type="number"
-                      value={form.entryFee}
-                      onChange={(e) =>
-                        setForm((p) => ({
-                          ...p,
-                          entryFee: Math.max(0, Number(e.target.value || 0)),
-                        }))
-                      }
-                      fullWidth
-                    />
-                    <FormControl fullWidth>
-                      <InputLabel>Currency</InputLabel>
-                      <Select
-                        label="Currency"
-                        value={form.currency}
-                        onChange={setField("currency")}
-                      >
-                        <MenuItem value="">
-                          <em>Select currency</em>
-                        </MenuItem>
-                        <MenuItem value="AUD">AUD</MenuItem>
-                        <MenuItem value="USD">USD</MenuItem>
-                        <MenuItem value="EUR">EUR</MenuItem>
-                        <MenuItem value="BRL">BRL</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Stack>
+                  <TextField
+                    label="Capacity"
+                    type="number"
+                    value={form.capacity}
+                    onChange={(e) =>
+                      setForm((p) => ({
+                        ...p,
+                        capacity: Math.max(0, Number(e.target.value || 0)),
+                      }))
+                    }
+                    fullWidth
+                  />
 
                   <SectionTitle>Description</SectionTitle>
                   <Divider sx={{ mb: 2 }} />
@@ -1506,7 +1483,6 @@ export default function AddTournamentPage() {
           >
             <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
               <Stack spacing={3}>
-                {/* Header Section */}
                 <Box>
                   <Typography
                     variant="h2"
@@ -1523,12 +1499,25 @@ export default function AddTournamentPage() {
                     variant="body2"
                     sx={{ color: "#6B7280", fontSize: "0.9375rem" }}
                   >
-                    Configure one category at a time, add it to the list, then
-                    go to Preview.
+                    Add categories and pricing for each one. You can create as
+                    many combinations as needed.
                   </Typography>
                 </Box>
 
-                {/* Tournament Info Card */}
+                {ENABLE_SPECIAL_PRICING_RULE_MOCK ? (
+                  <Alert
+                    severity="info"
+                    sx={{
+                      borderRadius: 2,
+                      border: "1px solid #BFDBFE",
+                      bgcolor: "#EFF6FF",
+                    }}
+                  >
+                    Special pricing rule is currently UI-only (mocked). Category
+                    base price is persisted per category.
+                  </Alert>
+                ) : null}
+
                 <Card
                   sx={{
                     borderRadius: 2,
@@ -1553,362 +1542,12 @@ export default function AddTournamentPage() {
                         variant="body2"
                         sx={{ color: "#6B7280", fontSize: "0.875rem" }}
                       >
-                        {form.sport} • {formatTournamentLevelLabel(form.level)}{" "}
-                        • {form.startDate || "TBD"}
+                        {form.sport} • {form.startDate || "TBD"}
                       </Typography>
                     </Stack>
                   </CardContent>
                 </Card>
 
-                {/* New Category Card */}
-                <Card
-                  sx={{
-                    borderRadius: 3,
-                    border: "1px solid #E5E7EB",
-                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-                    position: "relative",
-                    overflow: "hidden",
-                    "&::before": {
-                      content: '""',
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      height: "4px",
-                      background:
-                        "linear-gradient(90deg, #8B5CF6 0%, #A855F7 50%, #EC4899 100%)",
-                    },
-                  }}
-                >
-                  <CardContent sx={{ p: 3 }}>
-                    <Stack spacing={3}>
-                      {/* Header with Chip */}
-                      <Stack
-                        direction="row"
-                        alignItems="center"
-                        justifyContent="space-between"
-                        spacing={2}
-                      >
-                        <Typography
-                          variant="h2"
-                          sx={{
-                            fontWeight: 700,
-                            fontSize: "1.5rem",
-                            color: "#111827",
-                          }}
-                        >
-                          New Category
-                        </Typography>
-                        {draftCategory.name.trim() ? (
-                          <Chip
-                            size="small"
-                            label={`${formatCategoryLevelLabel(
-                              draftCategory.level,
-                            )} • ${draftCategory.gender} • ${formatAgeRange(
-                              draftCategory,
-                            )}`}
-                            sx={{
-                              bgcolor: "#F3E8FF",
-                              color: "#8B5CF6",
-                              fontWeight: 600,
-                              fontSize: "0.75rem",
-                              border: "1px solid #E9D5FF",
-                            }}
-                          />
-                        ) : null}
-                      </Stack>
-
-                      {/* Category Name Field */}
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <TextField
-                          label="Category Name (optional)"
-                          value={draftCategory.name}
-                          onChange={(e) =>
-                            setDraftCategory((prev) => ({
-                              ...prev,
-                              name: e.target.value,
-                            }))
-                          }
-                          placeholder="e.g. U12, Open, Pro Women"
-                          fullWidth
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              borderRadius: 2,
-                            },
-                          }}
-                        />
-                        <Tooltip
-                          title="Optional: if empty, name is auto-generated from level + gender."
-                          arrow
-                        >
-                          <InfoOutlinedIcon
-                            sx={{
-                              color: "#9CA3AF",
-                              fontSize: 20,
-                              flexShrink: 0,
-                            }}
-                          />
-                        </Tooltip>
-                      </Stack>
-
-                      {/* Level & Gender Row */}
-                      <Stack
-                        direction={{ xs: "column", sm: "row" }}
-                        spacing={2}
-                      >
-                        <TextField
-                          select
-                          label="Level"
-                          value={draftCategory.level}
-                          onChange={(e) =>
-                            setDraftCategory((prev) => ({
-                              ...prev,
-                              level: e.target
-                                .value as TournamentCategoryForm["level"],
-                            }))
-                          }
-                          fullWidth
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              borderRadius: 2,
-                            },
-                          }}
-                        >
-                          <MenuItem value="BEGINNER">Beginner</MenuItem>
-                          <MenuItem value="INTERMEDIATE">Intermediate</MenuItem>
-                          <MenuItem value="ADVANCED">Advanced</MenuItem>
-                          <MenuItem value="ALL_LEVELS">Open</MenuItem>
-                        </TextField>
-
-                        <TextField
-                          select
-                          label="Gender"
-                          value={draftCategory.gender}
-                          onChange={(e) =>
-                            setDraftCategory((prev) => ({
-                              ...prev,
-                              gender: e.target
-                                .value as TournamentCategoryForm["gender"],
-                            }))
-                          }
-                          fullWidth
-                          disabled={
-                            draftCategory.expandToAllGenders ||
-                            draftCategory.expandToMaleFemale
-                          }
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              borderRadius: 2,
-                            },
-                          }}
-                        >
-                          <MenuItem value="Open">Open</MenuItem>
-                          <MenuItem value="Women">Women</MenuItem>
-                          <MenuItem value="Men">Men</MenuItem>
-                          <MenuItem value="Mixed">Mixed</MenuItem>
-                        </TextField>
-                      </Stack>
-
-                      {/* Age Range Row */}
-                      <Stack
-                        direction={{ xs: "column", sm: "row" }}
-                        spacing={2}
-                      >
-                        <TextField
-                          label="Min Age"
-                          type="number"
-                          value={draftCategory.minAge}
-                          onChange={(e) =>
-                            setDraftCategory((prev) => ({
-                              ...prev,
-                              minAge: e.target.value,
-                            }))
-                          }
-                          fullWidth
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              borderRadius: 2,
-                            },
-                          }}
-                        />
-                        <TextField
-                          label="Max Age"
-                          type="number"
-                          value={draftCategory.maxAge}
-                          onChange={(e) =>
-                            setDraftCategory((prev) => ({
-                              ...prev,
-                              maxAge: e.target.value,
-                            }))
-                          }
-                          fullWidth
-                          sx={{
-                            "& .MuiOutlinedInput-root": {
-                              borderRadius: 2,
-                            },
-                          }}
-                        />
-                      </Stack>
-
-                      {/* Options Section */}
-                      <Stack spacing={2}>
-                        <Box
-                          sx={{
-                            p: 2.5,
-                            borderRadius: 2,
-                            bgcolor: "#F9FAFB",
-                            border: "1px solid #E5E7EB",
-                          }}
-                        >
-                          <Stack spacing={2}>
-                            <FormControlLabel
-                              control={
-                                <Switch
-                                  checked={draftCategory.expandToAllGenders}
-                                  onChange={toggleGenderVariants}
-                                  sx={{
-                                    "& .MuiSwitch-switchBase.Mui-checked": {
-                                      color: "#8B5CF6",
-                                    },
-                                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track":
-                                      {
-                                        backgroundColor: "#8B5CF6",
-                                      },
-                                  }}
-                                />
-                              }
-                              label={
-                                <Typography
-                                  sx={{
-                                    fontSize: "0.9375rem",
-                                    color: "#374151",
-                                    fontWeight: 500,
-                                  }}
-                                >
-                                  Enable M/F/Mix variants for this category
-                                </Typography>
-                              }
-                              sx={{ m: 0 }}
-                            />
-                            <FormControlLabel
-                              control={
-                                <Switch
-                                  checked={draftCategory.expandToMaleFemale}
-                                  onChange={toggleMaleFemaleVariants}
-                                  sx={{
-                                    "& .MuiSwitch-switchBase.Mui-checked": {
-                                      color: "#8B5CF6",
-                                    },
-                                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track":
-                                      {
-                                        backgroundColor: "#8B5CF6",
-                                      },
-                                  }}
-                                />
-                              }
-                              label={
-                                <Typography
-                                  sx={{
-                                    fontSize: "0.9375rem",
-                                    color: "#374151",
-                                    fontWeight: 500,
-                                  }}
-                                >
-                                  Enable M/F variants only
-                                </Typography>
-                              }
-                              sx={{ m: 0 }}
-                            />
-                            <FormControlLabel
-                              control={
-                                <Switch
-                                  checked={draftCategory.isKidsCategory}
-                                  onChange={toggleKidsCategory}
-                                  sx={{
-                                    "& .MuiSwitch-switchBase.Mui-checked": {
-                                      color: "#8B5CF6",
-                                    },
-                                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track":
-                                      {
-                                        backgroundColor: "#8B5CF6",
-                                      },
-                                  }}
-                                />
-                              }
-                              label={
-                                <Typography
-                                  sx={{
-                                    fontSize: "0.9375rem",
-                                    color: "#374151",
-                                    fontWeight: 500,
-                                  }}
-                                >
-                                  Kids category (auto-sets max age to 12 when
-                                  empty)
-                                </Typography>
-                              }
-                              sx={{ m: 0 }}
-                            />
-                          </Stack>
-                        </Box>
-                      </Stack>
-
-                      {/* Action Buttons */}
-                      <Stack
-                        direction="row"
-                        spacing={2}
-                        justifyContent="flex-end"
-                      >
-                        {editingCategoryId ? (
-                          <Button
-                            variant="outlined"
-                            onClick={cancelEditCategory}
-                            sx={{
-                              borderRadius: 2,
-                              borderWidth: "1.5px",
-                              borderColor: "#E5E7EB",
-                              color: "#374151",
-                              fontWeight: 600,
-                              px: 3,
-                              py: 1.25,
-                              textTransform: "none",
-                              "&:hover": {
-                                borderWidth: "1.5px",
-                                borderColor: "#D1D5DB",
-                                bgcolor: "#F9FAFB",
-                              },
-                            }}
-                          >
-                            Cancel Edit
-                          </Button>
-                        ) : null}
-                        <Button
-                          variant="contained"
-                          onClick={addCategory}
-                          sx={{
-                            borderRadius: 2,
-                            background:
-                              "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
-                            fontWeight: 600,
-                            px: 3,
-                            py: 1.25,
-                            textTransform: "none",
-                            boxShadow: "0 4px 6px -1px rgb(139 92 246 / 0.3)",
-                            "&:hover": {
-                              background:
-                                "linear-gradient(135deg, #7C3AED 0%, #DB2777 100%)",
-                              boxShadow: "0 6px 8px -1px rgb(139 92 246 / 0.4)",
-                            },
-                          }}
-                        >
-                          {editingCategoryId ? "Save Category" : "Add Category"}
-                        </Button>
-                      </Stack>
-                    </Stack>
-                  </CardContent>
-                </Card>
-
-                {/* Categories List */}
                 <Card
                   sx={{
                     borderRadius: 3,
@@ -1918,7 +1557,6 @@ export default function AddTournamentPage() {
                 >
                   <CardContent sx={{ p: 3 }}>
                     <Stack spacing={3}>
-                      {/* Header with Stats */}
                       <Stack
                         direction={{ xs: "column", sm: "row" }}
                         spacing={2}
@@ -1935,12 +1573,7 @@ export default function AddTournamentPage() {
                         >
                           Categories List
                         </Typography>
-                        <Stack
-                          direction="row"
-                          spacing={1.5}
-                          flexWrap="wrap"
-                          useFlexGap
-                        >
+                        <Stack direction="row" spacing={1.5} useFlexGap>
                           <Chip
                             size="small"
                             label={`${savedCategories.length} categor${savedCategories.length === 1 ? "y" : "ies"}`}
@@ -1952,21 +1585,29 @@ export default function AddTournamentPage() {
                               border: "1px solid #E5E7EB",
                             }}
                           />
-                          <Chip
-                            size="small"
-                            label={`${signupCategories.length} signup option${signupCategories.length === 1 ? "" : "s"}`}
+                          <Button
+                            variant="outlined"
+                            onClick={() => {
+                              setDraftCategory(newCategory());
+                              setDraftFormats(["DOUBLES"]);
+                              setDraftGenders(["Men"]);
+                              setEditingCategoryId(null);
+                              setIsCategoryModalOpen(true);
+                            }}
                             sx={{
-                              bgcolor: "#F3E8FF",
+                              borderRadius: 2,
+                              borderColor: "#8B5CF6",
                               color: "#8B5CF6",
                               fontWeight: 600,
-                              fontSize: "0.8125rem",
-                              border: "1px solid #E9D5FF",
+                              textTransform: "none",
+                              "&:hover": { borderColor: "#7C3AED", bgcolor: "#FAF5FF" },
                             }}
-                          />
+                          >
+                            Add Category
+                          </Button>
                         </Stack>
                       </Stack>
 
-                      {/* Table */}
                       <TableContainer
                         sx={{
                           border: "1px solid #E5E7EB",
@@ -1977,50 +1618,22 @@ export default function AddTournamentPage() {
                         <Table size="small">
                           <TableHead>
                             <TableRow sx={{ bgcolor: "#F9FAFB" }}>
-                              <TableCell
-                                sx={{
-                                  fontWeight: 700,
-                                  color: "#374151",
-                                  fontSize: "0.875rem",
-                                }}
-                              >
-                                Name
+                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
+                                Category
                               </TableCell>
-                              <TableCell
-                                sx={{
-                                  fontWeight: 700,
-                                  color: "#374151",
-                                  fontSize: "0.875rem",
-                                }}
-                              >
+                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
+                                Gender
+                              </TableCell>
+                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
                                 Level
                               </TableCell>
-                              <TableCell
-                                sx={{
-                                  fontWeight: 700,
-                                  color: "#374151",
-                                  fontSize: "0.875rem",
-                                }}
-                              >
-                                Ages
+                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
+                                Format
                               </TableCell>
-                              <TableCell
-                                sx={{
-                                  fontWeight: 700,
-                                  color: "#374151",
-                                  fontSize: "0.875rem",
-                                }}
-                              >
-                                Signup Mode
+                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
+                                Price
                               </TableCell>
-                              <TableCell
-                                align="right"
-                                sx={{
-                                  fontWeight: 700,
-                                  color: "#374151",
-                                  fontSize: "0.875rem",
-                                }}
-                              >
+                              <TableCell align="right" sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
                                 Actions
                               </TableCell>
                             </TableRow>
@@ -2028,78 +1641,51 @@ export default function AddTournamentPage() {
                           <TableBody>
                             {savedCategories.length > 0 ? (
                               savedCategories.map((category) => (
-                                <TableRow
-                                  key={category.id}
-                                  hover
-                                  sx={{ "&:hover": { bgcolor: "#F9FAFB" } }}
-                                >
-                                  <TableCell
-                                    sx={{ fontWeight: 600, color: "#111827" }}
-                                  >
+                                <TableRow key={category.id} hover sx={{ "&:hover": { bgcolor: "#F9FAFB" } }}>
+                                  <TableCell sx={{ fontWeight: 600, color: "#111827" }}>
                                     {category.name.trim()}
                                   </TableCell>
+                                  <TableCell sx={{ color: "#6B7280" }}>{category.gender}</TableCell>
                                   <TableCell sx={{ color: "#6B7280" }}>
                                     {formatCategoryLevelLabel(category.level)}
                                   </TableCell>
                                   <TableCell sx={{ color: "#6B7280" }}>
-                                    {formatAgeRange(category)}
+                                    {formatCategoryFormatLabel(category.format)}
                                   </TableCell>
                                   <TableCell sx={{ color: "#6B7280" }}>
-                                    {getCategoryGenderSummary(
-                                      category,
-                                    ).replaceAll("/", " / ")}
+                                    {categoryPricingRule.currency} {Number(category.price || 0)}
                                   </TableCell>
                                   <TableCell align="right">
-                                    <Stack
-                                      direction="row"
-                                      spacing={1}
-                                      justifyContent="flex-end"
-                                    >
+                                    <Stack direction="row" spacing={1} justifyContent="flex-end">
                                       <Button
                                         size="small"
-                                        onClick={() =>
-                                          editCategory(category.id)
-                                        }
+                                        onClick={() => editCategory(category.id)}
                                         sx={{
                                           borderRadius: 1.5,
                                           color: "#8B5CF6",
                                           fontWeight: 600,
                                           textTransform: "none",
                                           px: 2,
-                                          "&:hover": {
-                                            bgcolor: "#F3E8FF",
-                                          },
+                                          "&:hover": { bgcolor: "#F3E8FF" },
                                         }}
                                       >
                                         Edit
                                       </Button>
                                       <Button
                                         size="small"
-                                        onClick={() =>
-                                          void removeCategory(category.id)
-                                        }
-                                        disabled={deletingCategoryIds.includes(
-                                          category.id,
-                                        )}
+                                        onClick={() => void removeCategory(category.id)}
+                                        disabled={deletingCategoryIds.includes(category.id)}
                                         sx={{
                                           borderRadius: 1.5,
                                           color: "#DC2626",
                                           fontWeight: 600,
                                           textTransform: "none",
                                           px: 2,
-                                          "&:hover": {
-                                            bgcolor: "#FEF2F2",
-                                          },
-                                          "&:disabled": {
-                                            color: "#9CA3AF",
-                                          },
+                                          "&:hover": { bgcolor: "#FEF2F2" },
+                                          "&:disabled": { color: "#9CA3AF" },
                                         }}
                                       >
-                                        {deletingCategoryIds.includes(
-                                          category.id,
-                                        )
-                                          ? "Deleting..."
-                                          : "Remove"}
+                                        {deletingCategoryIds.includes(category.id) ? "Deleting..." : "Remove"}
                                       </Button>
                                     </Stack>
                                   </TableCell>
@@ -2107,19 +1693,31 @@ export default function AddTournamentPage() {
                               ))
                             ) : (
                               <TableRow>
-                                <TableCell
-                                  colSpan={5}
-                                  sx={{ textAlign: "center", py: 4 }}
-                                >
-                                  <Typography
-                                    variant="body2"
-                                    sx={{
-                                      color: "#9CA3AF",
-                                      fontSize: "0.9375rem",
-                                    }}
-                                  >
-                                    Add categories and they will appear here.
-                                  </Typography>
+                                <TableCell colSpan={6} sx={{ textAlign: "center", py: 4 }}>
+                                  <Stack spacing={1.5} alignItems="center">
+                                    <Typography variant="body2" sx={{ color: "#6B7280", fontSize: "0.9375rem" }}>
+                                      You currently don&apos;t have any category.
+                                    </Typography>
+                                    <Button
+                                      variant="contained"
+                                      onClick={() => {
+                                        setDraftCategory(newCategory());
+                                        setDraftFormats(["DOUBLES"]);
+                                        setDraftGenders(["Men"]);
+                                        setEditingCategoryId(null);
+                                        setIsCategoryModalOpen(true);
+                                      }}
+                                      sx={{
+                                        borderRadius: 2,
+                                        background:
+                                          "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                                        fontWeight: 600,
+                                        textTransform: "none",
+                                      }}
+                                    >
+                                      Add Category
+                                    </Button>
+                                  </Stack>
                                 </TableCell>
                               </TableRow>
                             )}
@@ -2129,6 +1727,85 @@ export default function AddTournamentPage() {
                     </Stack>
                   </CardContent>
                 </Card>
+
+                <Card
+                  sx={{
+                    borderRadius: 3,
+                    border: "1px solid #E5E7EB",
+                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+                  }}
+                >
+                  <CardContent sx={{ p: 3 }}>
+                    <Stack spacing={2}>
+                      <Typography sx={{ fontWeight: 700, fontSize: "1.125rem", color: "#111827" }}>
+                        Category Pricing Rules
+                      </Typography>
+
+                      <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                        <FormControl fullWidth>
+                          <InputLabel>Currency</InputLabel>
+                          <Select
+                            label="Currency"
+                            value={categoryPricingRule.currency}
+                            onChange={(e) =>
+                              setCategoryPricingRule((prev) => ({
+                                ...prev,
+                                currency: e.target.value as CategoryPricingRule["currency"],
+                              }))
+                            }
+                          >
+                            <MenuItem value="AUD">AUD</MenuItem>
+                            <MenuItem value="USD">USD</MenuItem>
+                            <MenuItem value="EUR">EUR</MenuItem>
+                            <MenuItem value="BRL">BRL</MenuItem>
+                          </Select>
+                        </FormControl>
+                        <FormControlLabel
+                          sx={{ m: 0, px: 1 }}
+                          control={
+                            <Switch
+                              checked={categoryPricingRule.enabled}
+                              onChange={(_, checked) =>
+                                setCategoryPricingRule((prev) => ({
+                                  ...prev,
+                                  enabled: checked,
+                                }))
+                              }
+                            />
+                          }
+                          label="Special price for 2+ categories"
+                        />
+                      </Stack>
+
+                      {categoryPricingRule.enabled ? (
+                        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                          <TextField
+                            label="Applies when player registers at least"
+                            value="2 categories"
+                            InputProps={{ readOnly: true }}
+                            fullWidth
+                          />
+                          <TextField
+                            label="Price per category"
+                            type="number"
+                            value={categoryPricingRule.specialPricePerCategory}
+                            onChange={(e) =>
+                              setCategoryPricingRule((prev) => ({
+                                ...prev,
+                                specialPricePerCategory: Math.max(
+                                  0,
+                                  Number(e.target.value || 0),
+                                ),
+                              }))
+                            }
+                            fullWidth
+                          />
+                        </Stack>
+                      ) : null}
+                    </Stack>
+                  </CardContent>
+                </Card>
+
               </Stack>
             </CardContent>
           </Card>
@@ -2398,7 +2075,7 @@ export default function AddTournamentPage() {
                     </Box>
                   </Stack>
 
-                  {/* Entry Fee */}
+                  {/* Category Total */}
                   <Stack direction="row" spacing={1.5}>
                     <Box
                       sx={{
@@ -2423,13 +2100,22 @@ export default function AddTournamentPage() {
                           mb: 0.5,
                         }}
                       >
-                        Entry Fee
+                        Category Base Total
                       </Typography>
                       <Typography
                         sx={{ fontSize: "0.875rem", color: "#364153" }}
                       >
                         {feeText}
                       </Typography>
+                      {categoryPricingRule.enabled ? (
+                        <Typography
+                          sx={{ fontSize: "0.8125rem", color: "#6A7282", mt: 0.25 }}
+                        >
+                          Special price per category (2+ categories):{" "}
+                          {categoryPricingRule.currency}{" "}
+                          {categoryPricingRule.specialPricePerCategory}
+                        </Typography>
+                      ) : null}
                     </Box>
                   </Stack>
                 </Box>
@@ -2484,7 +2170,6 @@ export default function AddTournamentPage() {
                       }}
                     >
                       {signupCategories.map((category, index) => {
-                        // Determine color based on gender
                         const getGenderColor = (gender: string) => {
                           if (gender === "Men") {
                             return {
@@ -2492,7 +2177,7 @@ export default function AddTournamentPage() {
                               border: "#E9D4FF",
                               textColor: "#59168B",
                               badgeBg: "#9810FA",
-                              ageColor: "#8200DB",
+                              metaColor: "#8200DB",
                             };
                           } else if (gender === "Women") {
                             return {
@@ -2500,24 +2185,15 @@ export default function AddTournamentPage() {
                               border: "#FCCEE8",
                               textColor: "#861043",
                               badgeBg: "#E60076",
-                              ageColor: "#C6005C",
-                            };
-                          } else if (gender === "Mixed") {
-                            return {
-                              bg: "linear-gradient(169.355deg, #ECFDF5 0%, #D1FAE5 100%)",
-                              border: "#A7F3D0",
-                              textColor: "#0D542B",
-                              badgeBg: "#00A63E",
-                              ageColor: "#008236",
+                              metaColor: "#C6005C",
                             };
                           } else {
-                            // Open or default
                             return {
                               bg: "linear-gradient(169.355deg, #EFF6FF 0%, #DBEAFE 100%)",
                               border: "#BEDBFF",
                               textColor: "#1C398E",
                               badgeBg: "#155DFC",
-                              ageColor: "#1447E6",
+                              metaColor: "#1447E6",
                             };
                           }
                         };
@@ -2547,7 +2223,7 @@ export default function AddTournamentPage() {
                                     color: colors.textColor,
                                   }}
                                 >
-                                  {formatCategoryLevelLabel(category.level)}
+                                  {category.name}
                                 </Typography>
                                 <Chip
                                   size="small"
@@ -2569,10 +2245,13 @@ export default function AddTournamentPage() {
                               <Typography
                                 sx={{
                                   fontSize: "0.75rem",
-                                  color: colors.ageColor,
+                                  color: colors.metaColor,
                                 }}
                               >
-                                {formatAgeRange(category)}
+                                {formatCategoryLevelLabel(category.level)} •{" "}
+                                {formatCategoryFormatLabel(category.format)} •{" "}
+                                {categoryPricingRule.currency}{" "}
+                                {Number(category.price || 0)}
                               </Typography>
                             </Stack>
                           </Box>
@@ -2750,6 +2429,262 @@ export default function AddTournamentPage() {
             </CardContent>
           </Card>
         )}
+
+        <Dialog
+          open={isCategoryModalOpen}
+          onClose={cancelEditCategory}
+          fullWidth
+          maxWidth="md"
+        >
+          <DialogTitle sx={{ fontWeight: 700 }}>
+            {editingCategoryId ? "Edit Category" : "New Category"}
+          </DialogTitle>
+          <DialogContent dividers>
+            <Stack spacing={3} sx={{ pt: 1 }}>
+              <TextField
+                label="Category Name (optional)"
+                value={draftCategory.name}
+                onChange={(e) =>
+                  setDraftCategory((prev) => ({
+                    ...prev,
+                    name: e.target.value,
+                  }))
+                }
+                placeholder="Auto-generated if left empty"
+                fullWidth
+              />
+
+              {editingCategoryId ? (
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                  <TextField
+                    select
+                    label="Level"
+                    value={draftCategory.level}
+                    onChange={(e) =>
+                      setDraftCategory((prev) => ({
+                        ...prev,
+                        level: e.target
+                          .value as TournamentCategoryForm["level"],
+                      }))
+                    }
+                    fullWidth
+                  >
+                    <MenuItem value="BEGINNER">Beginner</MenuItem>
+                    <MenuItem value="INTERMEDIATE">Intermediate</MenuItem>
+                    <MenuItem value="ADVANCED">Advanced</MenuItem>
+                    <MenuItem value="ALL_LEVELS">Open</MenuItem>
+                  </TextField>
+                  <TextField
+                    select
+                    label="Gender"
+                    value={draftCategory.gender}
+                    onChange={(e) =>
+                      setDraftCategory((prev) => ({
+                        ...prev,
+                        gender: e.target
+                          .value as TournamentCategoryForm["gender"],
+                      }))
+                    }
+                    fullWidth
+                  >
+                    <MenuItem value="Men">Men</MenuItem>
+                    <MenuItem value="Women">Women</MenuItem>
+                  </TextField>
+                </Stack>
+              ) : (
+                <TextField
+                  select
+                  label="Level"
+                  value={draftCategory.level}
+                  onChange={(e) =>
+                    setDraftCategory((prev) => ({
+                      ...prev,
+                      level: e.target.value as TournamentCategoryForm["level"],
+                    }))
+                  }
+                  fullWidth
+                >
+                  <MenuItem value="BEGINNER">Beginner</MenuItem>
+                  <MenuItem value="INTERMEDIATE">Intermediate</MenuItem>
+                  <MenuItem value="ADVANCED">Advanced</MenuItem>
+                  <MenuItem value="ALL_LEVELS">Open</MenuItem>
+                </TextField>
+              )}
+
+              {!editingCategoryId ? (
+                <Box
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    bgcolor: "#F9FAFB",
+                    border: "1px solid #E5E7EB",
+                  }}
+                >
+                  <Typography
+                    sx={{
+                      fontSize: "0.875rem",
+                      fontWeight: 600,
+                      color: "#374151",
+                      mb: 1,
+                    }}
+                  >
+                    Genders
+                  </Typography>
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                    {(["Men", "Women"] as const).map((gender) => (
+                      <FormControlLabel
+                        key={gender}
+                        sx={{ m: 0 }}
+                        control={
+                          <Checkbox
+                            checked={draftGenders.includes(gender)}
+                            onChange={(_, checked) => {
+                              setDraftGenders((prev) => {
+                                if (checked) {
+                                  return prev.includes(gender)
+                                    ? prev
+                                    : [...prev, gender];
+                                }
+                                return prev.filter((item) => item !== gender);
+                              });
+                            }}
+                          />
+                        }
+                        label={gender}
+                      />
+                    ))}
+                  </Stack>
+                  <Typography sx={{ mt: 1, fontSize: "0.75rem", color: "#6B7280" }}>
+                    Choose one or more genders to create all combinations in one
+                    go.
+                  </Typography>
+                </Box>
+              ) : null}
+
+              {editingCategoryId ? (
+                <TextField
+                  select
+                  label="Format"
+                  value={draftCategory.format}
+                  onChange={(e) =>
+                    setDraftCategory((prev) => ({
+                      ...prev,
+                      format: e.target.value as TournamentCategoryForm["format"],
+                    }))
+                  }
+                  fullWidth
+                >
+                  <MenuItem value="SINGLES">Singles</MenuItem>
+                  <MenuItem value="DOUBLES">Doubles</MenuItem>
+                  <MenuItem value="MIXED">Mixed</MenuItem>
+                </TextField>
+              ) : (
+                <Box
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    bgcolor: "#F9FAFB",
+                    border: "1px solid #E5E7EB",
+                  }}
+                >
+                  <Typography
+                    sx={{
+                      fontSize: "0.875rem",
+                      fontWeight: 600,
+                      color: "#374151",
+                      mb: 1,
+                    }}
+                  >
+                    Formats
+                  </Typography>
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                    {(["SINGLES", "DOUBLES", "MIXED"] as const).map((format) => (
+                      <FormControlLabel
+                        key={format}
+                        sx={{ m: 0 }}
+                        control={
+                          <Checkbox
+                            checked={draftFormats.includes(format)}
+                            onChange={(_, checked) => {
+                              setDraftFormats((prev) => {
+                                if (checked) {
+                                  return prev.includes(format)
+                                    ? prev
+                                    : [...prev, format];
+                                }
+                                return prev.filter((item) => item !== format);
+                              });
+                            }}
+                          />
+                        }
+                        label={formatCategoryFormatLabel(format)}
+                      />
+                    ))}
+                  </Stack>
+                  <Typography sx={{ mt: 1, fontSize: "0.75rem", color: "#6B7280" }}>
+                    Choose one or more formats to create multiple categories at
+                    once.
+                  </Typography>
+                </Box>
+              )}
+
+              <TextField
+                label={`Category Price (${categoryPricingRule.currency || "AUD"})`}
+                type="number"
+                value={draftCategory.price}
+                onChange={(e) =>
+                  setDraftCategory((prev) => ({
+                    ...prev,
+                    price: Math.max(0, Number(e.target.value || 0)),
+                  }))
+                }
+                fullWidth
+              />
+            </Stack>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 2 }}>
+            <Button
+              variant="outlined"
+              onClick={cancelEditCategory}
+              sx={{
+                borderRadius: 2,
+                borderWidth: "1.5px",
+                borderColor: "#E5E7EB",
+                color: "#374151",
+                fontWeight: 600,
+                textTransform: "none",
+                "&:hover": {
+                  borderWidth: "1.5px",
+                  borderColor: "#D1D5DB",
+                  bgcolor: "#F9FAFB",
+                },
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={addCategory}
+              sx={{
+                borderRadius: 2,
+                background: "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
+                fontWeight: 600,
+                textTransform: "none",
+              }}
+            >
+              {editingCategoryId
+                ? "Save Category"
+                : `Add ${
+                    draftFormats.length * draftGenders.length > 1
+                      ? `${
+                          draftFormats.length *
+                          draftGenders.length
+                        } Categories`
+                      : "Category"
+                  }`}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </Box>
   );

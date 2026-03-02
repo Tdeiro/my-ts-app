@@ -136,14 +136,52 @@ function formatMoney(value: number | string | undefined, currency: string | unde
   return `${amount} ${cleanCurrency}`;
 }
 
+function getCategoryPrice(
+  category: InvitedTournamentCategoryDto,
+  fallbackFee?: number | string,
+): number {
+  const fallback = Number(fallbackFee ?? 0);
+  if (Number.isFinite(fallback) && fallback >= 0) {
+    return fallback;
+  }
+
+  const raw = category as InvitedTournamentCategoryDto & {
+    entryFee?: number | string;
+    fee?: number | string;
+    categoryFee?: number | string;
+    pricePerCategory?: number | string;
+  };
+  const candidates = [
+    raw.price,
+    raw.entryFee,
+    raw.fee,
+    raw.categoryFee,
+    raw.pricePerCategory,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+  }
+  return 0;
+}
+
 type CategoryTileProps = {
   category: InvitedTournamentCategoryDto;
   selected: boolean;
   currency?: string;
+  fallbackFee?: number | string;
   onToggle: (id: number) => void;
 };
 
-function CategoryTile({ category, selected, currency, onToggle }: CategoryTileProps) {
+function CategoryTile({
+  category,
+  selected,
+  currency,
+  fallbackFee,
+  onToggle,
+}: CategoryTileProps) {
   return (
     <Card
       variant="outlined"
@@ -180,7 +218,7 @@ function CategoryTile({ category, selected, currency, onToggle }: CategoryTilePr
               <Chip size="small" variant="outlined" label={formatAgeRange(category)} />
             </Stack>
             <Typography variant="body2" color="text.secondary">
-              Fee: {formatMoney(category.price, currency)}
+              Fee: {formatMoney(getCategoryPrice(category, fallbackFee), currency)}
             </Typography>
           </Stack>
         </CardContent>
@@ -192,6 +230,7 @@ function CategoryTile({ category, selected, currency, onToggle }: CategoryTilePr
 type SelectedCategoryRowProps = {
   category: InvitedTournamentCategoryDto;
   currency?: string;
+  fallbackFee?: number | string;
   pref: PartnerPref;
   expanded: boolean;
   partnerOptions: string[];
@@ -203,6 +242,7 @@ type SelectedCategoryRowProps = {
 function SelectedCategoryRow({
   category,
   currency,
+  fallbackFee,
   pref,
   expanded,
   partnerOptions,
@@ -226,7 +266,7 @@ function SelectedCategoryRow({
             <Chip
               size="small"
               variant="outlined"
-              label={`Fee ${formatMoney(category.price, currency)}`}
+              label={`Fee ${formatMoney(getCategoryPrice(category, fallbackFee), currency)}`}
               sx={{ width: "fit-content" }}
             />
           </Stack>
@@ -497,7 +537,7 @@ export default function PlayerTournamentInvitePage() {
   const liveTotalAmount = React.useMemo(() => {
     const feePerCategory = Number(tournamentInfo?.entryFee ?? 0);
     if (!Number.isFinite(feePerCategory)) return 0;
-    return feePerCategory * selectedCategoryIds.length;
+    return Math.max(0, feePerCategory) * selectedCategoryIds.length;
   }, [tournamentInfo?.entryFee, selectedCategoryIds.length]);
 
   const mergePartnerPrefFromApi = React.useCallback((category: SelectedCategoryDto) => {
@@ -535,9 +575,37 @@ export default function PlayerTournamentInvitePage() {
         const infoRes = await api.get<InvitedTournamentInfoDto>(
           `/events/${eventId}/subscriptions/me/tournament-info`
         );
-        setTournamentInfo(infoRes.data);
+        let mergedTournamentInfo: InvitedTournamentInfoDto = infoRes.data;
+        try {
+          const categoriesRes = await api.get<
+            InvitedTournamentCategoryDto[] | { data?: InvitedTournamentCategoryDto[] }
+          >(`/tournament-categories?eventId=${eventId}`);
+          const backendCategories = Array.isArray(categoriesRes.data)
+            ? categoriesRes.data
+            : (categoriesRes.data?.data ?? []);
 
-        const selectedFromInfo = (infoRes.data.categories ?? [])
+          if (backendCategories.length > 0) {
+            const backendById = new Map(
+              backendCategories.map((item) => [Number(item.id), item]),
+            );
+            mergedTournamentInfo = {
+              ...infoRes.data,
+              categories: (infoRes.data.categories ?? []).map((category) => {
+                const fromBackend = backendById.get(Number(category.id));
+                if (!fromBackend) return category;
+                const backendPrice = getCategoryPrice(fromBackend);
+                if (backendPrice <= 0) return category;
+                return { ...category, price: backendPrice };
+              }),
+            };
+          }
+        } catch {
+          // best effort only
+        }
+
+        setTournamentInfo(mergedTournamentInfo);
+
+        const selectedFromInfo = (mergedTournamentInfo.categories ?? [])
           .filter((category) => category.selected)
           .map((category) => category.id);
 
@@ -674,7 +742,33 @@ export default function PlayerTournamentInvitePage() {
       const infoRes = await api.get<InvitedTournamentInfoDto>(
         `/events/${inviteTournamentId}/subscriptions/me/tournament-info`,
       );
-      setTournamentInfo(infoRes.data);
+      try {
+        const categoriesRes = await api.get<
+          InvitedTournamentCategoryDto[] | { data?: InvitedTournamentCategoryDto[] }
+        >(`/tournament-categories?eventId=${inviteTournamentId}`);
+        const backendCategories = Array.isArray(categoriesRes.data)
+          ? categoriesRes.data
+          : (categoriesRes.data?.data ?? []);
+        if (backendCategories.length > 0) {
+          const backendById = new Map(
+            backendCategories.map((item) => [Number(item.id), item]),
+          );
+          setTournamentInfo({
+            ...infoRes.data,
+            categories: (infoRes.data.categories ?? []).map((category) => {
+              const fromBackend = backendById.get(Number(category.id));
+              if (!fromBackend) return category;
+              const backendPrice = getCategoryPrice(fromBackend);
+              if (backendPrice <= 0) return category;
+              return { ...category, price: backendPrice };
+            }),
+          });
+        } else {
+          setTournamentInfo(infoRes.data);
+        }
+      } catch {
+        setTournamentInfo(infoRes.data);
+      }
 
       navigate("/tournaments/payment", {
         state: {
@@ -776,6 +870,7 @@ export default function PlayerTournamentInvitePage() {
                               category={category}
                               selected={selectedCategoryIds.includes(category.id)}
                               currency={tournamentInfo.currency}
+                              fallbackFee={tournamentInfo.entryFee}
                               onToggle={toggleCategory}
                             />
                           </Box>
@@ -849,6 +944,7 @@ export default function PlayerTournamentInvitePage() {
                               key={`selected-${category.id}`}
                               category={category}
                               currency={tournamentInfo.currency}
+                              fallbackFee={tournamentInfo.entryFee}
                               pref={pref}
                               expanded={Boolean(expandedPartnerRows[key])}
                               partnerOptions={partnerOptions}
