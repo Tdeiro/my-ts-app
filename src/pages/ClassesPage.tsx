@@ -210,7 +210,8 @@ export default function ClassesPage() {
       setLoading(false);
       return;
     }
-    const participant = isParticipantRole(getLoggedInRole());
+    const role = getLoggedInRole();
+    const participant = isParticipantRole(role) && !hasCreatorAccess(role);
     if (!participant && currentUserId === null) {
       setError("Invalid session. Please sign in again.");
       setClasses([]);

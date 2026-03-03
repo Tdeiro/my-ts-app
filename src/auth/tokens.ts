@@ -1,7 +1,9 @@
 const TOKEN_KEY = "pp_token";
+const PLAN_OVERRIDE_KEY = "pp_plan_override";
 
 export function setToken(token: string) {
   localStorage.setItem(TOKEN_KEY, token);
+  localStorage.removeItem(PLAN_OVERRIDE_KEY);
 }
 
 export function getToken(): string | null {
@@ -10,6 +12,7 @@ export function getToken(): string | null {
 
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(PLAN_OVERRIDE_KEY);
 }
 
 export function isLoggedIn(): boolean {
@@ -24,6 +27,12 @@ function parseJwtPayload(token: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function normalizeText(value: unknown): string | null {
+  if (value == null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized || null;
 }
 
 export function getLoggedInUserId(): number | null {
@@ -54,8 +63,29 @@ export function getLoggedInRole(): string | null {
       ? "participant"
       : rolesArray[0];
   const rawRole = payload.role ?? payload.roleName ?? roleFromArray ?? null;
-  if (rawRole == null) return null;
-  return String(rawRole).trim().toLowerCase();
+  return normalizeText(rawRole);
+}
+
+export function getLoggedInPlan(): string | null {
+  const planOverride = normalizeText(localStorage.getItem(PLAN_OVERRIDE_KEY));
+  if (planOverride) return planOverride;
+
+  const token = getToken();
+  if (!token) return null;
+
+  const payload = parseJwtPayload(token);
+  if (!payload) return null;
+
+  return normalizeText(payload.plan ?? payload.subscriptionPlan ?? null);
+}
+
+export function setLoggedInPlanOverride(plan: string | null) {
+  const normalized = normalizeText(plan);
+  if (!normalized) {
+    localStorage.removeItem(PLAN_OVERRIDE_KEY);
+    return;
+  }
+  localStorage.setItem(PLAN_OVERRIDE_KEY, normalized);
 }
 
 export function isPlayerRole(role: string | null): boolean {
@@ -67,6 +97,16 @@ export function isParticipantRole(role: string | null): boolean {
 }
 
 export function hasCreatorAccess(role: string | null): boolean {
-  if (!role) return false;
-  return ["coach", "school", "organization", "club", "admin"].includes(role);
+  const normalizedRole = normalizeText(role);
+  if (
+    normalizedRole &&
+    ["coach", "school", "organization", "club", "admin"].includes(
+      normalizedRole,
+    )
+  ) {
+    return true;
+  }
+
+  const normalizedPlan = getLoggedInPlan();
+  return normalizedPlan === "pro";
 }

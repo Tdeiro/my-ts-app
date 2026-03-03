@@ -20,6 +20,7 @@ import TournamentPaymentPage from "./pages/TournamentPaymentPage";
 import UpcomingEventsPage from "./pages/UpcomingEventsPage";
 import RevenueAnalyticsPage from "./pages/RevenueAnalyticsPage";
 import AccountBillingPage from "./pages/AccountBillingPage";
+import AccountCheckoutPage from "./pages/AccountCheckoutPage";
 import SettingsPage from "./pages/SettingsPage";
 
 function Layout() {
@@ -50,6 +51,7 @@ function App() {
             <Route path="/events/upcoming" element={<UpcomingEventsPage />} />
             <Route path="/revenue" element={<RevenueAnalyticsPage />} />
             <Route path="/account" element={<AccountBillingPage />} />
+            <Route path="/account/checkout" element={<AccountCheckoutPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/tournaments/invite" element={<PlayerTournamentInvitePage />} />
             <Route path="/tournaments/payment" element={<TournamentPaymentPage />} />

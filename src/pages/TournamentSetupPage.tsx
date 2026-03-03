@@ -6,7 +6,10 @@ import {
   Card,
   CardContent,
   Chip,
+  Collapse,
   Divider,
+  IconButton,
+  Slide,
   Stack,
   Tab,
   Tabs,
@@ -31,9 +34,8 @@ import TournamentPhaseBuilder, {
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 import LocationOnOutlinedIcon from "@mui/icons-material/LocationOnOutlined";
 import CalendarMonthOutlinedIcon from "@mui/icons-material/CalendarMonthOutlined";
-import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import ShuffleOutlinedIcon from "@mui/icons-material/ShuffleOutlined";
-import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
+import NavigateNextRoundedIcon from "@mui/icons-material/NavigateNextRounded";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -66,13 +68,66 @@ type ApiTournamentGroup = {
   name: string;
 };
 
+type ApiGroupTeamAssignment = {
+  groupId?: number | string;
+  teamId?: number | string;
+};
+
+type ApiEventSubscriptionCategory = {
+  id?: number | string;
+  suggestedPlayer?: string | null;
+  note?: string | null;
+};
+
+type ApiEventSubscription = {
+  eventId?: number | string;
+  userId?: number | string;
+  userFullName?: string;
+  userEmail?: string;
+  status?: string;
+  source?: string;
+  categories?: ApiEventSubscriptionCategory[];
+  joinedAt?: string;
+};
+
+type TeamMemberDto = {
+  userId: number;
+  userFullName?: string;
+  role?: string;
+  joinedAt?: string;
+};
+
+type TeamDto = {
+  id: number;
+  categoryId: number;
+  name?: string;
+  autoNameFromMembers?: boolean;
+  createdAt?: string;
+  members?: TeamMemberDto[];
+};
+
+type RegisteredPlayer = {
+  id: string;
+  name: string;
+  email: string;
+  preferredPartner: string | null;
+  categoryIds: string[];
+};
+
+type TeamEditorState = {
+  name: string;
+  memberUserIds: string[];
+  autoNameFromMembers: boolean;
+  editingTeamId: number | null;
+};
+
 type StructureMode =
   | "groups_knockout"
   | "knockout_only"
   | "group_phase_only"
   | "swiss";
 type TournamentFormat = "Singles" | "Doubles" | "Teams";
-type SetupTab = "overview" | "categories" | "teams" | "drawing" | "groups";
+type SetupTab = "overview" | "categories" | "teams" | "groups";
 type CategorySetupConfig = {
   formats: TournamentFormat[];
   structureMode: StructureMode | "";
@@ -135,10 +190,72 @@ function groupLetter(index: number): string {
   return String.fromCharCode(65 + index);
 }
 
+function getTeamDisplayName(team: TeamDto): string {
+  const explicitName = String(team.name ?? "").trim();
+  if (explicitName) return explicitName;
+  const memberNames = (team.members ?? [])
+    .map((member) => String(member.userFullName ?? "").trim())
+    .filter(Boolean);
+  if (memberNames.length > 0) return memberNames.join(" / ");
+  return `Team #${team.id}`;
+}
+
 function entryLabelFromFormat(format?: TournamentFormat): string {
   if (format === "Singles") return "Player";
   if (format === "Doubles") return "Pair";
   return "Team";
+}
+
+function extractLevelFromCategoryName(name?: string): string | null {
+  const normalized = String(name ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("advanced")) return "Advanced";
+  if (normalized.includes("intermediate")) return "Intermediate";
+  if (normalized.includes("beginner")) return "Beginner";
+  if (normalized.includes("open")) return "Open";
+  return null;
+}
+
+function stripLevelPrefixFromCategoryName(
+  name: string,
+  sectionLevel: string,
+): string {
+  const source = String(name ?? "").trim();
+  if (!source) return "";
+
+  const normalizedSection = String(sectionLevel).trim().toLowerCase();
+  if (!normalizedSection || normalizedSection === "other") return source;
+
+  const levelPattern =
+    normalizedSection === "advanced"
+      ? /\badvanced\b/gi
+      : normalizedSection === "intermediate"
+        ? /\bintermediate\b/gi
+        : normalizedSection === "beginner"
+          ? /\bbeginner\b/gi
+          : normalizedSection === "open"
+            ? /\bopen\b/gi
+            : null;
+
+  if (!levelPattern) return source;
+
+  // Remove level token even when separators are inconsistent, then normalize label.
+  const withoutLevel = source
+    .replace(levelPattern, "")
+    .replace(/\s*[-–—:]\s*/g, " - ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s*-\s*-\s*/g, " - ")
+    .replace(/^\s*-\s*|\s*-\s*$/g, "")
+    .trim();
+
+  if (!withoutLevel) return source;
+
+  const parts = withoutLevel
+    .split(/\s*-\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return parts.length > 0 ? parts.join(" - ") : source;
 }
 
 export default function TournamentSetupPage() {
@@ -162,6 +279,34 @@ export default function TournamentSetupPage() {
   >({});
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [activeTab, setActiveTab] = React.useState<SetupTab>("overview");
+  const [expandedOverviewCategoryId, setExpandedOverviewCategoryId] =
+    React.useState<string | null>(null);
+  const [overviewStepByCategory, setOverviewStepByCategory] = React.useState<
+    Record<string, "structure" | "teams" | "groups">
+  >({});
+  const [confirmedStructureByCategory, setConfirmedStructureByCategory] =
+    React.useState<Record<string, boolean>>({});
+  const [registeredPlayers, setRegisteredPlayers] = React.useState<
+    RegisteredPlayer[]
+  >([]);
+  const [registeredPlayersLoading, setRegisteredPlayersLoading] =
+    React.useState(false);
+  const [registeredPlayersError, setRegisteredPlayersError] = React.useState<
+    string | null
+  >(null);
+  const [teamsByCategory, setTeamsByCategory] = React.useState<
+    Record<string, TeamDto[]>
+  >({});
+  const [teamEditorByCategory, setTeamEditorByCategory] = React.useState<
+    Record<string, TeamEditorState>
+  >({});
+  const [teamsLoadingByCategory, setTeamsLoadingByCategory] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [teamsSubmittingByCategory, setTeamsSubmittingByCategory] =
+    React.useState<Record<string, boolean>>({});
+  const [pendingContinueWarningByCategory, setPendingContinueWarningByCategory] =
+    React.useState<Record<string, boolean>>({});
   const [groupsByCategory, setGroupsByCategory] = React.useState<
     Record<string, GroupBucket[]>
   >({});
@@ -177,6 +322,100 @@ export default function TournamentSetupPage() {
   const groupStructureSignature = (groups: GroupBucket[]) =>
     groups.map((g) => `${g.id}::${g.name}`).join("||");
 
+  const extractPersistedGroupTeamPairs = React.useCallback(
+    (groups: GroupBucket[]) => {
+      const pairs = new Set<string>();
+      groups.forEach((group) => {
+        const groupId = Number(group.id);
+        if (!Number.isFinite(groupId) || groupId <= 0) return;
+        (group.participants ?? []).forEach((participant) => {
+          const teamId = Number(String(participant ?? "").trim());
+          if (!Number.isFinite(teamId) || teamId <= 0) return;
+          pairs.add(`${groupId}:${teamId}`);
+        });
+      });
+      return pairs;
+    },
+    [],
+  );
+
+  const syncGroupTeamAssignmentsForCategory = React.useCallback(
+    async (
+      previousGroups: GroupBucket[],
+      nextGroups: GroupBucket[],
+      categoryTeamIds: Set<number>,
+    ) => {
+      const token = getToken();
+      if (!token) return;
+
+      const previousPairs = extractPersistedGroupTeamPairs(previousGroups);
+      const nextPairs = extractPersistedGroupTeamPairs(nextGroups);
+
+      const toCreate = Array.from(nextPairs).filter((pair) => !previousPairs.has(pair));
+      const toDelete = Array.from(previousPairs).filter((pair) => !nextPairs.has(pair));
+
+      if (toCreate.length === 0 && toDelete.length === 0) return;
+
+      try {
+        await Promise.all(
+          toCreate.map(async (pair) => {
+            const [groupIdRaw, teamIdRaw] = pair.split(":");
+            const groupId = Number(groupIdRaw);
+            const teamId = Number(teamIdRaw);
+            if (!categoryTeamIds.has(teamId)) return;
+            const res = await fetch(`${API_URL}/group-teams`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ groupId, teamId }),
+            });
+            if (!res.ok) {
+              const body = await res.json().catch(() => null);
+              throw new Error(
+                body?.message?.[0] ||
+                  body?.error ||
+                  `Failed to assign team ${teamId} to group ${groupId}.`,
+              );
+            }
+          }),
+        );
+
+        await Promise.all(
+          toDelete.map(async (pair) => {
+            const [groupIdRaw, teamIdRaw] = pair.split(":");
+            const groupId = Number(groupIdRaw);
+            const teamId = Number(teamIdRaw);
+            if (!categoryTeamIds.has(teamId)) return;
+            const res = await fetch(
+              `${API_URL}/group-teams/group/${groupId}/team/${teamId}`,
+              {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              },
+            );
+            if (!res.ok) {
+              const body = await res.json().catch(() => null);
+              throw new Error(
+                body?.message?.[0] ||
+                  body?.error ||
+                  `Failed to unassign team ${teamId} from group ${groupId}.`,
+              );
+            }
+          }),
+        );
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to sync group-team assignments.",
+        );
+      }
+    },
+    [extractPersistedGroupTeamPairs],
+  );
+
   const syncTournamentGroupsForCategory = React.useCallback(
     async (categoryId: string, nextGroups: GroupBucket[]) => {
       const token = getToken();
@@ -191,6 +430,35 @@ export default function TournamentSetupPage() {
         const serverIds = new Set(serverGroupIdsByCategory[categoryId] ?? []);
         const usedIds = new Set<number>();
         const updated = [...nextGroups];
+        let serverGroupsByName: Map<string, number> | null = null;
+
+        const loadServerGroupsByName = async (): Promise<Map<string, number>> => {
+          if (serverGroupsByName) return serverGroupsByName;
+          const res = await fetch(
+            `${API_URL}/tournament-groups?categoryId=${encodeURIComponent(parsedCategoryId)}`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          const body = await res.json().catch(() => null);
+          if (!res.ok) {
+            throw new Error(
+              body?.message?.[0] ||
+                body?.error ||
+                "Failed to load existing tournament groups",
+            );
+          }
+          const list: ApiTournamentGroup[] = Array.isArray(body)
+            ? body
+            : (body?.data ?? []);
+          serverGroupsByName = new Map(
+            list
+              .map((group) => [String(group.name ?? "").trim().toLowerCase(), Number(group.id)] as const)
+              .filter(
+                ([nameKey, groupId]) =>
+                  Boolean(nameKey) && Number.isFinite(groupId) && groupId > 0,
+              ),
+          );
+          return serverGroupsByName;
+        };
 
         for (let i = 0; i < updated.length; i += 1) {
           const group = updated[i];
@@ -219,6 +487,38 @@ export default function TournamentSetupPage() {
                 updateBody?.message?.[0] ||
                   updateBody?.error ||
                   "Failed to update tournament group",
+              );
+            }
+            continue;
+          }
+
+          const existingByNameId = (
+            await loadServerGroupsByName()
+          ).get(String(group.name ?? "").trim().toLowerCase());
+          if (Number.isFinite(existingByNameId) && Number(existingByNameId) > 0) {
+            const normalizedId = Number(existingByNameId);
+            usedIds.add(normalizedId);
+            updated[i] = { ...group, id: String(normalizedId) };
+            const updateRes = await fetch(
+              `${API_URL}/tournament-groups/${normalizedId}`,
+              {
+                method: "PUT",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                  categoryId: parsedCategoryId,
+                  name: group.name,
+                }),
+              },
+            );
+            if (!updateRes.ok) {
+              const updateBody = await updateRes.json().catch(() => null);
+              throw new Error(
+                updateBody?.message?.[0] ||
+                  updateBody?.error ||
+                  "Failed to reconcile tournament group",
               );
             }
             continue;
@@ -473,13 +773,40 @@ export default function TournamentSetupPage() {
           }),
         );
 
+        const groupTeamRes = await fetch(`${API_URL}/group-teams`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const groupTeamBody: ApiGroupTeamAssignment[] | null =
+          await groupTeamRes.json().catch(() => null);
+        const groupAssignments = Array.isArray(groupTeamBody)
+          ? groupTeamBody
+          : [];
+        const teamIdsByGroupId = new Map<number, number[]>();
+        groupAssignments.forEach((assignment) => {
+          const groupId = Number(assignment.groupId);
+          const teamId = Number(assignment.teamId);
+          if (
+            !Number.isFinite(groupId) ||
+            groupId <= 0 ||
+            !Number.isFinite(teamId) ||
+            teamId <= 0
+          ) {
+            return;
+          }
+          const current = teamIdsByGroupId.get(groupId) ?? [];
+          if (!current.includes(teamId)) current.push(teamId);
+          teamIdsByGroupId.set(groupId, current);
+        });
+
         const nextGroupsMap: Record<string, GroupBucket[]> = {};
         const nextServerIdsMap: Record<string, number[]> = {};
         groupFetches.forEach(({ categoryKey, groups }) => {
           const mappedGroups: GroupBucket[] = groups.map((g) => ({
             id: String(g.id),
             name: String(g.name ?? "Group"),
-            participants: [],
+            participants: (teamIdsByGroupId.get(Number(g.id)) ?? []).map((teamId) =>
+              String(teamId),
+            ),
           }));
           nextGroupsMap[categoryKey] = mappedGroups;
           nextServerIdsMap[categoryKey] = groups
@@ -512,6 +839,271 @@ export default function TournamentSetupPage() {
   }, [id]);
 
   React.useEffect(() => {
+    if (!id || (activeTab !== "teams" && activeTab !== "overview")) return;
+    const token = getToken();
+    if (!token) return;
+
+    let cancelled = false;
+    const run = async () => {
+      setRegisteredPlayersLoading(true);
+      setRegisteredPlayersError(null);
+      try {
+        const res = await fetch(`${API_URL}/events/${id}/subscriptions`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const body: ApiEventSubscription[] | null = await res
+          .json()
+          .catch(() => null);
+        if (!res.ok) {
+          const msg =
+            (body as any)?.message?.[0] ||
+            (body as any)?.error ||
+            "Could not load registered players.";
+          throw new Error(msg);
+        }
+
+        const list = Array.isArray(body) ? body : [];
+        const players: RegisteredPlayer[] = list
+          .filter(
+            (item) => String(item.status ?? "").toUpperCase() === "REGISTERED",
+          )
+          .map((item) => ({
+            id: String(item.userId ?? ""),
+            name: String(item.userFullName ?? "Unnamed player"),
+            email: String(item.userEmail ?? ""),
+            preferredPartner:
+              item.categories?.find((category) => category?.suggestedPlayer)
+                ?.suggestedPlayer ?? null,
+            categoryIds: Array.isArray(item.categories)
+              ? item.categories
+                  .map((category) => String(category?.id ?? ""))
+                  .filter(Boolean)
+              : [],
+          }))
+          .filter((item) => item.id);
+
+        if (cancelled) return;
+        setRegisteredPlayers(players);
+      } catch (err) {
+        if (cancelled) return;
+        setRegisteredPlayersError(
+          err instanceof Error
+            ? err.message
+            : "Could not load registered players.",
+        );
+        setRegisteredPlayers([]);
+      } finally {
+        if (!cancelled) setRegisteredPlayersLoading(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, activeTab]);
+
+  const isStructureReadyForConfig = React.useCallback(
+    (cfg?: CategorySetupConfig) => {
+      if (!cfg?.structureMode) return false;
+      if (cfg.structureMode !== "groups_knockout") return true;
+      const groupCount = Number(cfg.groupCount ?? 0);
+      const teamsPerGroup = Number(cfg.teamsPerGroup ?? 0);
+      const qualifiedPerGroup = Number(cfg.qualifiedPerGroup ?? 0);
+      return (
+        groupCount > 0 &&
+        teamsPerGroup >= 4 &&
+        qualifiedPerGroup > 0 &&
+        qualifiedPerGroup <= teamsPerGroup
+      );
+    },
+    [],
+  );
+
+  const getCategoryTeamEditor = React.useCallback(
+    (categoryId: string): TeamEditorState =>
+      teamEditorByCategory[categoryId] ?? {
+        name: "",
+        memberUserIds: [],
+        autoNameFromMembers: true,
+        editingTeamId: null,
+      },
+    [teamEditorByCategory],
+  );
+
+  const loadTeamsForCategory = React.useCallback(async (categoryId: string) => {
+    const token = getToken();
+    if (!token) return;
+    const parsedCategoryId = Number(categoryId);
+    if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return;
+
+    setTeamsLoadingByCategory((prev) => ({ ...prev, [categoryId]: true }));
+    try {
+      const res = await fetch(
+        `${API_URL}/teams?categoryId=${encodeURIComponent(parsedCategoryId)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          data?.message?.[0] ||
+            data?.error ||
+            `Failed to load teams (${res.status})`,
+        );
+      }
+      const list = Array.isArray(data) ? data : (data?.data ?? []);
+      setTeamsByCategory((prev) => ({ ...prev, [categoryId]: list }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load teams.");
+      setTeamsByCategory((prev) => ({ ...prev, [categoryId]: [] }));
+    } finally {
+      setTeamsLoadingByCategory((prev) => ({ ...prev, [categoryId]: false }));
+    }
+  }, []);
+
+  const setCategoryTeamEditor = React.useCallback(
+    (
+      categoryId: string,
+      updater: (current: TeamEditorState) => TeamEditorState,
+    ) => {
+      setTeamEditorByCategory((prev) => {
+        const current: TeamEditorState = prev[categoryId] ?? {
+          name: "",
+          memberUserIds: [],
+          autoNameFromMembers: true,
+          editingTeamId: null,
+        };
+        return { ...prev, [categoryId]: updater(current) };
+      });
+    },
+    [],
+  );
+
+  const saveCategoryTeam = React.useCallback(
+    async (categoryId: string) => {
+      const token = getToken();
+      if (!token) {
+        setError("You are not logged in.");
+        return;
+      }
+      const parsedCategoryId = Number(categoryId);
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
+        setError("Invalid category id for team.");
+        return;
+      }
+
+      const editor = getCategoryTeamEditor(categoryId);
+      const members = editor.memberUserIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .map((id) => ({ userId: id, role: "Player" }));
+
+      if (members.length === 0) {
+        setError("Select at least one player to create a team.");
+        return;
+      }
+
+      const payload = {
+        categoryId: parsedCategoryId,
+        categoryIds: [parsedCategoryId],
+        name: editor.name.trim() || undefined,
+        autoNameFromMembers: editor.autoNameFromMembers,
+        members,
+      };
+
+      setTeamsSubmittingByCategory((prev) => ({ ...prev, [categoryId]: true }));
+      setError(null);
+      try {
+        const url =
+          editor.editingTeamId == null
+            ? `${API_URL}/teams`
+            : `${API_URL}/teams/${editor.editingTeamId}`;
+        const method = editor.editingTeamId == null ? "POST" : "PUT";
+        const res = await fetch(url, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            data?.message?.[0] ||
+              data?.error ||
+              (editor.editingTeamId == null
+                ? "Failed to create team."
+                : "Failed to update team."),
+          );
+        }
+        setStatusMessage(
+          editor.editingTeamId == null ? "Team created." : "Team updated.",
+        );
+        setCategoryTeamEditor(categoryId, () => ({
+          name: "",
+          memberUserIds: [],
+          autoNameFromMembers: true,
+          editingTeamId: null,
+        }));
+        await loadTeamsForCategory(categoryId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save team.");
+      } finally {
+        setTeamsSubmittingByCategory((prev) => ({
+          ...prev,
+          [categoryId]: false,
+        }));
+      }
+    },
+    [getCategoryTeamEditor, loadTeamsForCategory, setCategoryTeamEditor],
+  );
+
+  const deleteCategoryTeam = React.useCallback(async (categoryId: string, teamId: number) => {
+    const token = getToken();
+    if (!token) {
+      setError("You are not logged in.");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_URL}/teams/${teamId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(
+          body?.message?.[0] || body?.error || "Failed to delete team.",
+        );
+      }
+      setStatusMessage("Team deleted.");
+      await loadTeamsForCategory(categoryId);
+      setCategoryTeamEditor(categoryId, (current) =>
+        current.editingTeamId === teamId
+          ? {
+              name: "",
+              memberUserIds: [],
+              autoNameFromMembers: true,
+              editingTeamId: null,
+            }
+          : current,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete team.");
+    }
+  }, [loadTeamsForCategory, setCategoryTeamEditor]);
+
+  React.useEffect(() => {
+    if (
+      (activeTab !== "teams" && activeTab !== "groups" && activeTab !== "overview") ||
+      !selectedCategoryId
+    ) {
+      return;
+    }
+    void loadTeamsForCategory(selectedCategoryId);
+  }, [activeTab, selectedCategoryId, loadTeamsForCategory]);
+
+  React.useEffect(() => {
     if (categories.length === 0) return;
     setCategoryConfigs((prev) => {
       const next = { ...prev };
@@ -536,6 +1128,14 @@ export default function TournamentSetupPage() {
 
   const selectedCategory =
     categories.find((c) => c.id === selectedCategoryId) ?? null;
+  const selectedCategoryLevel =
+    extractLevelFromCategoryName(selectedCategory?.name) ?? "Other";
+  const selectedCategoryDisplayName = selectedCategory
+    ? stripLevelPrefixFromCategoryName(
+        selectedCategory.name,
+        selectedCategoryLevel,
+      )
+    : "";
   const selectedConfig = selectedCategory
     ? (categoryConfigs[selectedCategory.id] ?? {
         formats: [],
@@ -560,9 +1160,48 @@ export default function TournamentSetupPage() {
   );
   const selectedFormat = inferFormatFromCategoryName(selectedCategory?.name);
   const selectedEntryLabel = entryLabelFromFormat(selectedFormat);
+  const selectedCategoryTeamsForTab = selectedCategory
+    ? (teamsByCategory[selectedCategory.id] ?? [])
+    : [];
+  const selectedCategoryPlayersForTab = selectedCategory
+    ? registeredPlayers.filter((player) =>
+        player.categoryIds.includes(selectedCategory.id),
+      )
+    : [];
+  const assignedUserIdsForTeamsTab = new Set(
+    selectedCategoryTeamsForTab.flatMap((team) =>
+      (team.members ?? []).map((member) => String(member.userId)),
+    ),
+  );
+  const unassignedPlayersCountForTeamsTab = selectedCategoryPlayersForTab.filter(
+    (player) => !assignedUserIdsForTeamsTab.has(player.id),
+  ).length;
+  const showTeamsTabContinueWarning = Boolean(
+    pendingContinueWarningByCategory[selectedCategoryId],
+  );
   const categoriesOverview = React.useMemo(
-    () =>
-      categories.map((cat) => {
+    () => {
+      const dedupedMixed = new Map<
+        string,
+        {
+          id: string;
+          name: string;
+          format: TournamentFormat;
+          structure: string;
+          hasGroups: boolean;
+          hasBracket: boolean;
+        }
+      >();
+      const regular: Array<{
+        id: string;
+        name: string;
+        format: TournamentFormat;
+        structure: string;
+        hasGroups: boolean;
+        hasBracket: boolean;
+      }> = [];
+
+      categories.forEach((cat) => {
         const cfg = categoryConfigs[cat.id];
         const groups = groupsByCategory[cat.id] ?? [];
         const hasGroups =
@@ -571,17 +1210,68 @@ export default function TournamentSetupPage() {
             g.participants.some((p) => String(p).trim().length > 0),
           );
         const hasBracket = (cfg?.bracketMatches?.length ?? 0) > 0;
-        return {
+        const format = inferFormatFromCategoryName(cat.name);
+        const isMixed =
+          String(cat.discipline ?? "")
+            .toLowerCase()
+            .includes("mixed") || String(cat.name ?? "").toLowerCase().includes("mixed");
+        if (isMixed) {
+          const level = extractLevelFromCategoryName(cat.name) ?? "Open";
+          const key = `mixed::${level.toLowerCase()}`;
+          const previous = dedupedMixed.get(key);
+          if (!previous) {
+            dedupedMixed.set(key, {
+              id: cat.id,
+              name: `${level} - Mixed`,
+              format,
+              structure: cfg?.structureMode ?? "",
+              hasGroups,
+              hasBracket,
+            });
+          } else {
+            dedupedMixed.set(key, {
+              ...previous,
+              structure: previous.structure || (cfg?.structureMode ?? ""),
+              hasGroups: previous.hasGroups || hasGroups,
+              hasBracket: previous.hasBracket || hasBracket,
+            });
+          }
+          return;
+        }
+        regular.push({
           id: cat.id,
           name: cat.name,
-          format: inferFormatFromCategoryName(cat.name),
+          format,
           structure: cfg?.structureMode ?? "",
           hasGroups,
           hasBracket,
-        };
-      }),
+        });
+      });
+
+      return [...regular, ...Array.from(dedupedMixed.values())];
+    },
     [categories, categoryConfigs, groupsByCategory],
   );
+  const groupedCategoriesOverview = React.useMemo(() => {
+    const levelOrder = ["Advanced", "Intermediate", "Beginner", "Open", "Other"];
+    const byLevel = new Map<string, typeof categoriesOverview>();
+    categoriesOverview.forEach((item) => {
+      const level = extractLevelFromCategoryName(item.name) ?? "Other";
+      const current = byLevel.get(level) ?? [];
+      byLevel.set(level, [...current, item]);
+    });
+
+    return Array.from(byLevel.entries())
+      .sort((a, b) => {
+        const ai = levelOrder.indexOf(a[0]);
+        const bi = levelOrder.indexOf(b[0]);
+        const ax = ai === -1 ? Number.MAX_SAFE_INTEGER : ai;
+        const bx = bi === -1 ? Number.MAX_SAFE_INTEGER : bi;
+        if (ax !== bx) return ax - bx;
+        return a[0].localeCompare(b[0]);
+      })
+      .map(([level, items]) => ({ level, items }));
+  }, [categoriesOverview]);
 
   const saveSetup = () => {
     if (!id) return;
@@ -594,9 +1284,9 @@ export default function TournamentSetupPage() {
     setStatusMessage("Category setup saved.");
   };
 
-  const applySelectedStructureToAllCategories = () => {
-    if (!selectedCategory || !selectedConfig) return;
-    const selectedStructure = selectedConfig.structureMode;
+  const applyStructureToAllCategoriesFrom = (categoryId: string) => {
+    const source = categoryConfigs[categoryId];
+    const selectedStructure = source?.structureMode;
     if (!selectedStructure) return;
     const confirmed = window.confirm(
       `Apply "${selectedStructure}" structure to all ${categories.length} categories?`,
@@ -615,15 +1305,17 @@ export default function TournamentSetupPage() {
       });
       return next;
     });
+    setConfirmedStructureByCategory({});
+    setOverviewStepByCategory({});
     setStatusMessage(`Applied ${selectedStructure} structure to all categories.`);
   };
 
-  const applySelectedGroupInputsToAllCategories = () => {
-    if (!selectedCategory || !selectedConfig) return;
-    if (selectedConfig.structureMode !== "groups_knockout") return;
-    const groupCount = Number(selectedConfig.groupCount ?? 0);
-    const teamsPerGroup = Number(selectedConfig.teamsPerGroup ?? 0);
-    const qualifiedPerGroup = Number(selectedConfig.qualifiedPerGroup ?? 0);
+  const applyGroupInputsToAllCategoriesFrom = (categoryId: string) => {
+    const source = categoryConfigs[categoryId];
+    if (!source || source.structureMode !== "groups_knockout") return;
+    const groupCount = Number(source.groupCount ?? 0);
+    const teamsPerGroup = Number(source.teamsPerGroup ?? 0);
+    const qualifiedPerGroup = Number(source.qualifiedPerGroup ?? 0);
     if (
       groupCount <= 0 ||
       teamsPerGroup < 4 ||
@@ -655,6 +1347,8 @@ export default function TournamentSetupPage() {
       });
       return next;
     });
+    setConfirmedStructureByCategory({});
+    setOverviewStepByCategory({});
     setError(null);
     setStatusMessage("Applied group inputs to all categories.");
   };
@@ -686,11 +1380,19 @@ export default function TournamentSetupPage() {
       groupCount,
       teamsPerGroup,
       uniqueTeams,
-    ).map((group, idx) => ({
-      ...group,
-      id: `g_${selectedCategory.id}_${idx + 1}`,
-      name: `Group ${groupLetter(idx)}`,
-    }));
+    ).map((group, idx) => {
+      const existingGroupId = Number(
+        groupsByCategory[selectedCategory.id]?.[idx]?.id,
+      );
+      return {
+        ...group,
+        id:
+          Number.isFinite(existingGroupId) && existingGroupId > 0
+            ? String(existingGroupId)
+            : `g_${selectedCategory.id}_${idx + 1}`,
+        name: `Group ${groupLetter(idx)}`,
+      };
+    });
     const bracketMatches = generateBracketSkeleton(
       groupCount,
       qualifiedPerGroup,
@@ -710,6 +1412,74 @@ export default function TournamentSetupPage() {
     setError(null);
     setStatusMessage(`Generated ${groupCount} groups and bracket structure.`);
   };
+
+  const generateGroupsAndBracketForCategory = React.useCallback(
+    (categoryId: string, seedTeams: string[] = []) => {
+      const cfg = categoryConfigs[categoryId];
+      if (!cfg) return false;
+      const groupCount = Number(cfg.groupCount ?? 0);
+      const teamsPerGroup = Number(cfg.teamsPerGroup ?? 0);
+      const qualifiedPerGroup = Number(cfg.qualifiedPerGroup ?? 0);
+      if (
+        groupCount <= 0 ||
+        teamsPerGroup < 4 ||
+        qualifiedPerGroup <= 0 ||
+        qualifiedPerGroup > teamsPerGroup
+      ) {
+        setError(
+          "Invalid structure. Use: groups > 0, teams/group >= 4, qualified between 1 and teams/group.",
+        );
+        return false;
+      }
+
+      const existingTeams =
+        groupsByCategory[categoryId]?.flatMap((g) =>
+          (g.participants ?? []).map((p: string) => p.trim()).filter(Boolean),
+        ) ?? [];
+      const uniqueTeams = Array.from(
+        new Set(
+          [...existingTeams, ...seedTeams]
+            .map((t) => String(t).trim())
+            .filter(Boolean),
+        ),
+      );
+
+      const generatedGroups = generateGroupsSkeleton(
+        groupCount,
+        teamsPerGroup,
+        uniqueTeams,
+      ).map((group, idx) => {
+        const existingGroupId = Number(groupsByCategory[categoryId]?.[idx]?.id);
+        return {
+          ...group,
+          id:
+            Number.isFinite(existingGroupId) && existingGroupId > 0
+              ? String(existingGroupId)
+              : `g_${categoryId}_${idx + 1}`,
+          name: `Group ${groupLetter(idx)}`,
+        };
+      });
+      const bracketMatches = generateBracketSkeleton(
+        groupCount,
+        qualifiedPerGroup,
+      );
+
+      persistGroups({
+        ...groupsByCategory,
+        [categoryId]: generatedGroups,
+      });
+      setCategoryConfigs((prev) => ({
+        ...prev,
+        [categoryId]: {
+          ...cfg,
+          bracketMatches,
+        },
+      }));
+      setError(null);
+      return true;
+    },
+    [categoryConfigs, groupsByCategory],
+  );
 
   const persistGroups = (next: Record<string, GroupBucket[]>) => {
     setGroupsByCategory(next);
@@ -1012,7 +1782,6 @@ export default function TournamentSetupPage() {
             <Tab value="overview" label="Overview" />
             <Tab value="categories" label="Structure" />
             <Tab value="teams" label="Teams" />
-            <Tab value="drawing" label="Drawing" />
             <Tab value="groups" label="Groups & Brackets" />
           </Tabs>
         </Box>
@@ -1037,335 +1806,42 @@ export default function TournamentSetupPage() {
         ) : event ? (
           <Stack spacing={2}>
             {activeTab === "overview" ? (
-              <Card>
+                <Card>
                 <CardContent sx={{ p: 3 }}>
-                  {/* Blue Info Alert */}
-                  <Alert
-                    severity="info"
+                  <Box
                     sx={{
-                      mb: 3,
-                      bgcolor: "#EFF6FF",
-                      border: "1px solid #BEDBFF",
+                      mb: 2,
+                      p: 2,
                       borderRadius: "14px",
-                      "& .MuiAlert-icon": {
-                        color: "#155DFC",
-                      },
+                      bgcolor: "#F9FAFB",
+                      border: "1px solid #E5E7EB",
                     }}
                   >
                     <Typography
                       sx={{
-                        fontWeight: 500,
-                        mb: 0.5,
-                        color: "#1C398E",
-                        fontSize: "0.875rem",
+                        fontWeight: 700,
+                        mb: 1,
+                        color: "#101828",
+                        fontSize: "1.05rem",
                       }}
                     >
-                      Setup flow: Category List to Structure to Teams to Groups
-                      and Brackets.
+                      How to proceed
                     </Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{ color: "#1447E6", fontSize: "0.75rem" }}
-                    >
-                      Open Category List from Overview, pick a category, set
-                      structure, then continue with teams and groups.
-                    </Typography>
-                  </Alert>
-
-                  {/* Setup Progress Section */}
-                  <Typography
-                    variant="h6"
-                    sx={{
-                      fontWeight: 700,
-                      mb: 2,
-                      fontSize: "1.25rem",
-                      color: "#101828",
-                    }}
-                  >
-                    Setup Progress
-                  </Typography>
-
-                  {/* Overall Completion Progress Bar */}
-                  <Box sx={{ mb: 3 }}>
-                    <Stack
-                      direction="row"
-                      justifyContent="space-between"
-                      alignItems="center"
-                      sx={{ mb: 1 }}
-                    >
-                      <Typography
-                        sx={{
-                          fontSize: "0.875rem",
-                          fontWeight: 500,
-                          color: "#364153",
-                        }}
-                      >
-                        Overall Completion
+                    <Stack spacing={0.75}>
+                      <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
+                        1. Choose a category from the list below.
                       </Typography>
-                      <Typography
-                        sx={{
-                          fontSize: "0.875rem",
-                          fontWeight: 700,
-                          color: "#8B5CF6",
-                        }}
-                      >
-                        {categories.length > 0
-                          ? Math.round(
-                              (categoriesOverview.filter(
-                                (c) => c.format && c.structure && c.hasGroups,
-                              ).length /
-                                categories.length) *
-                                100,
-                            )
-                          : 0}
-                        %
+                      <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
+                        2. Open the category page to configure its setup.
+                      </Typography>
+                      <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
+                        3. Complete Structure, Teams, then Groups & Brackets.
+                      </Typography>
+                      <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
+                        4. Return here and continue with the next category.
                       </Typography>
                     </Stack>
-                    <Box
-                      sx={{
-                        width: "100%",
-                        height: 12,
-                        bgcolor: "#E5E7EB",
-                        borderRadius: "999px",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <Box
-                        sx={{
-                          width: `${
-                            categories.length > 0
-                              ? Math.round(
-                                  (categoriesOverview.filter(
-                                    (c) =>
-                                      c.format && c.structure && c.hasGroups,
-                                  ).length /
-                                    categories.length) *
-                                    100,
-                                )
-                              : 0
-                          }%`,
-                          height: "100%",
-                          background:
-                            "linear-gradient(to right, #8B5CF6, #A855F7)",
-                          transition: "width 0.3s ease",
-                        }}
-                      />
-                    </Box>
                   </Box>
-
-                  {/* Status Cards Grid */}
-                  <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                    {/* Category List Status Card */}
-                    <Box
-                      sx={{
-                        flex: 1,
-                        p: 2,
-                        bgcolor: "#F9FAFB",
-                        border: "1px solid #E5E7EB",
-                        borderRadius: "14px",
-                      }}
-                    >
-                      <Stack
-                        direction="row"
-                        spacing={1.5}
-                        alignItems="center"
-                        sx={{ mb: 1 }}
-                      >
-                        <Box
-                          sx={{
-                            width: 20,
-                            height: 20,
-                            borderRadius: "50%",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <svg
-                            width="20"
-                            height="20"
-                            viewBox="0 0 20 20"
-                            fill="none"
-                          >
-                            <circle
-                              cx="10"
-                              cy="10"
-                              r="9"
-                              stroke="#00A63E"
-                              strokeWidth="1.67"
-                            />
-                            <path
-                              d="M6 10L9 13L14 7"
-                              stroke="#00A63E"
-                              strokeWidth="1.67"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </Box>
-                        <Typography
-                          sx={{
-                            fontWeight: 600,
-                            fontSize: "1rem",
-                            color: "#101828",
-                          }}
-                        >
-                          Category List
-                        </Typography>
-                      </Stack>
-                      <Typography
-                        variant="body2"
-                        sx={{ color: "#4A5565", fontSize: "0.875rem" }}
-                      >
-                        <strong style={{ color: "#101828" }}>
-                          {categories.length}
-                        </strong>{" "}
-                        categories available
-                      </Typography>
-                    </Box>
-
-                    {/* Structure Status Card */}
-                    <Box
-                      sx={{
-                        flex: 1,
-                        p: 2,
-                        bgcolor: "#F9FAFB",
-                        border: "1px solid #E5E7EB",
-                        borderRadius: "14px",
-                      }}
-                    >
-                      <Stack
-                        direction="row"
-                        spacing={1.5}
-                        alignItems="center"
-                        sx={{ mb: 1 }}
-                      >
-                        <Box
-                          sx={{
-                            width: 20,
-                            height: 20,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <svg
-                            width="20"
-                            height="20"
-                            viewBox="0 0 20 20"
-                            fill="none"
-                          >
-                            <circle
-                              cx="10"
-                              cy="10"
-                              r="9"
-                              stroke="#FF6900"
-                              strokeWidth="1.67"
-                            />
-                            <path
-                              d="M10 5V10L13.33 11.67"
-                              stroke="#FF6900"
-                              strokeWidth="1.67"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </Box>
-                        <Typography
-                          sx={{
-                            fontWeight: 600,
-                            fontSize: "1rem",
-                            color: "#101828",
-                          }}
-                        >
-                          Structure
-                        </Typography>
-                      </Stack>
-                      <Typography
-                        variant="body2"
-                        sx={{ color: "#4A5565", fontSize: "0.875rem" }}
-                      >
-                        <strong style={{ color: "#101828" }}>
-                          {categoriesOverview.filter((c) => c.structure).length}
-                        </strong>{" "}
-                        of {categories.length} configured
-                      </Typography>
-                    </Box>
-
-                    {/* Groups Status Card */}
-                    <Box
-                      sx={{
-                        flex: 1,
-                        p: 2,
-                        bgcolor: "#F9FAFB",
-                        border: "1px solid #E5E7EB",
-                        borderRadius: "14px",
-                      }}
-                    >
-                      <Stack
-                        direction="row"
-                        spacing={1.5}
-                        alignItems="center"
-                        sx={{ mb: 1 }}
-                      >
-                        <Box
-                          sx={{
-                            width: 20,
-                            height: 20,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <svg
-                            width="20"
-                            height="20"
-                            viewBox="0 0 20 20"
-                            fill="none"
-                          >
-                            <circle
-                              cx="10"
-                              cy="10"
-                              r="9"
-                              stroke="#99A1AF"
-                              strokeWidth="1.67"
-                            />
-                            <path
-                              d="M10 6.67V10"
-                              stroke="#99A1AF"
-                              strokeWidth="1.67"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                            <circle
-                              cx="10"
-                              cy="13.33"
-                              r="0.83"
-                              fill="#99A1AF"
-                            />
-                          </svg>
-                        </Box>
-                        <Typography
-                          sx={{
-                            fontWeight: 600,
-                            fontSize: "1rem",
-                            color: "#101828",
-                          }}
-                        >
-                          Groups
-                        </Typography>
-                      </Stack>
-                      <Typography
-                        variant="body2"
-                        sx={{ color: "#4A5565", fontSize: "0.875rem" }}
-                      >
-                        <strong style={{ color: "#101828" }}>
-                          {categoriesOverview.filter((c) => c.hasGroups).length}
-                        </strong>{" "}
-                        of {categories.length} configured
-                      </Typography>
-                    </Box>
-                  </Stack>
 
                   <Divider sx={{ my: 3 }} />
 
@@ -1380,177 +1856,1506 @@ export default function TournamentSetupPage() {
                   >
                     Category List
                   </Typography>
-                  <Stack spacing={1.5}>
-                    {categoriesOverview.map((item) => (
-                      <Box
-                        key={item.id}
-                        onClick={() => {
-                          setSelectedCategoryId(item.id);
-                          setActiveTab("categories");
-                        }}
-                        sx={{
-                          p: 2,
-                          borderRadius: "14px",
-                          border: "1px solid #E5E7EB",
-                          bgcolor: "white",
-                          display: "flex",
-                          flexDirection: { xs: "column", md: "row" },
-                          alignItems: { md: "center" },
-                          gap: 2,
-                          transition: "all 120ms ease",
-                          cursor: "pointer",
-                          "&:hover": {
-                            borderColor: "#8B5CF6",
-                            boxShadow: "0 2px 8px rgba(139,92,246,0.1)",
-                          },
-                        }}
-                      >
-                        {/* Trophy Icon + Category Name */}
-                        <Stack
-                          direction="row"
-                          spacing={2}
-                          alignItems="center"
-                          sx={{ flex: 1, minWidth: 0 }}
+                  <Stack spacing={2}>
+                    {groupedCategoriesOverview.map((section) => (
+                      <Box key={`level-${section.level}`}>
+                        <Typography
+                          sx={{
+                            fontWeight: 700,
+                            fontSize: "0.95rem",
+                            color: "#6A7282",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.03em",
+                            mb: 1,
+                          }}
                         >
-                          <Box
-                            sx={{
-                              width: 40,
-                              height: 40,
-                              borderRadius: "10px",
-                              bgcolor: "#FFEDD4",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              flexShrink: 0,
-                            }}
-                          >
-                            <EmojiEventsRoundedIcon
-                              sx={{ fontSize: 20, color: "#F54900" }}
-                            />
-                          </Box>
-                          <Typography
-                            sx={{
-                              fontWeight: 700,
-                              fontSize: "1.125rem",
-                              color: "#101828",
-                            }}
-                          >
-                            {item.name}
-                          </Typography>
-                        </Stack>
+                          {section.level}
+                        </Typography>
+                        <Stack spacing={1.5}>
+                          {section.items.map((item) => (
+                            <Box
+                              key={item.id}
+                              sx={{
+                                p: 2,
+                                borderRadius: "14px",
+                                border: "1px solid #E5E7EB",
+                                bgcolor: "white",
+                                display: "flex",
+                                flexDirection: { xs: "column", md: "row" },
+                                alignItems: { md: "center" },
+                                gap: 2,
+                                transition: "all 120ms ease",
+                                cursor: "pointer",
+                                "&:hover": {
+                                  borderColor: "#8B5CF6",
+                                  boxShadow: "0 2px 8px rgba(139,92,246,0.1)",
+                                },
+                              }}
+                              onClick={() => {
+                                setSelectedCategoryId(item.id);
+                                setExpandedOverviewCategoryId(null);
+                                setActiveTab("categories");
+                              }}
+                            >
+                              <Stack spacing={1.5} sx={{ width: "100%" }}>
+                                <Stack
+                                  direction={{ xs: "column", md: "row" }}
+                                  alignItems={{ xs: "flex-start", md: "center" }}
+                                  justifyContent="space-between"
+                                  spacing={1.5}
+                                  sx={{ width: "100%" }}
+                                >
+                                  {/* Trophy Icon + Category Name */}
+                                  <Stack
+                                    direction="row"
+                                    spacing={2}
+                                    alignItems="center"
+                                    sx={{ minWidth: 0 }}
+                                  >
+                                    <Box
+                                      sx={{
+                                        width: 40,
+                                        height: 40,
+                                        borderRadius: "10px",
+                                        bgcolor: "#FFEDD4",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      <EmojiEventsRoundedIcon
+                                        sx={{ fontSize: 20, color: "#F54900" }}
+                                      />
+                                    </Box>
+                                    <Typography
+                                      sx={{
+                                        fontWeight: 700,
+                                        fontSize: "1.125rem",
+                                        color: "#101828",
+                                      }}
+                                    >
+                                      {stripLevelPrefixFromCategoryName(
+                                        item.name,
+                                        section.level,
+                                      )}
+                                    </Typography>
+                                  </Stack>
 
-                        {/* Status Badges */}
-                        <Stack
-                          direction="row"
-                          spacing={1}
-                          useFlexGap
-                          flexWrap="wrap"
-                          alignItems="center"
-                        >
-                          <Chip
-                            size="medium"
-                            label={
-                              item.format
-                                ? `Format: ${item.format}`
-                                : "Format: Pending"
-                            }
-                            sx={{
-                              bgcolor: item.format ? "#8B5CF6" : "#E5E7EB",
-                              color: item.format ? "white" : "#4A5565",
-                              fontWeight: 700,
-                              border: "none",
-                              fontSize: "0.75rem",
-                              height: 32,
-                              borderRadius: "10px",
-                              px: 2,
-                            }}
-                          />
-                          <Chip
-                            size="medium"
-                            label={
-                              item.structure
-                                ? "Structure: Set"
-                                : "Structure: Pending"
-                            }
-                            sx={{
-                              bgcolor: item.structure ? "#8B5CF6" : "#E5E7EB",
-                              color: item.structure ? "white" : "#4A5565",
-                              fontWeight: 700,
-                              border: "none",
-                              fontSize: "0.75rem",
-                              height: 32,
-                              borderRadius: "10px",
-                              px: 2,
-                            }}
-                          />
-                          <Chip
-                            size="medium"
-                            label={
-                              item.hasGroups
-                                ? "Groups: Created"
-                                : "Groups: Pending"
-                            }
-                            sx={{
-                              bgcolor: item.hasGroups ? "#8B5CF6" : "#E5E7EB",
-                              color: item.hasGroups ? "white" : "#4A5565",
-                              fontWeight: 700,
-                              border: "none",
-                              fontSize: "0.75rem",
-                              height: 32,
-                              borderRadius: "10px",
-                              px: 2,
-                            }}
-                          />
-                          <Chip
-                            size="medium"
-                            label={
-                              item.hasBracket
-                                ? "Bracket: Created"
-                                : "Bracket: Pending"
-                            }
-                            sx={{
-                              bgcolor: item.hasBracket ? "#8B5CF6" : "#E5E7EB",
-                              color: item.hasBracket ? "white" : "#4A5565",
-                              fontWeight: 700,
-                              border: "none",
-                              fontSize: "0.75rem",
-                              height: 32,
-                              borderRadius: "10px",
-                              px: 2,
-                            }}
-                          />
+                                  {/* Status Badges + Expand Icon */}
+                                  <Stack
+                                    direction="row"
+                                    spacing={1}
+                                    useFlexGap
+                                    flexWrap="wrap"
+                                    alignItems="center"
+                                    sx={{ justifyContent: { md: "flex-end" } }}
+                                  >
+                                    <Chip
+                                      size="medium"
+                                      label={
+                                        item.format
+                                          ? `Format: ${item.format}`
+                                          : "Format: Pending"
+                                      }
+                                      sx={{
+                                        bgcolor: item.format ? "#8B5CF6" : "#E5E7EB",
+                                        color: item.format ? "white" : "#4A5565",
+                                        fontWeight: 700,
+                                        border: "none",
+                                        fontSize: "0.75rem",
+                                        height: 32,
+                                        borderRadius: "10px",
+                                        px: 2,
+                                      }}
+                                    />
+                                    <Chip
+                                      size="medium"
+                                      label={
+                                        item.structure
+                                          ? "Structure: Set"
+                                          : "Structure: Pending"
+                                      }
+                                      sx={{
+                                        bgcolor: item.structure ? "#8B5CF6" : "#E5E7EB",
+                                        color: item.structure ? "white" : "#4A5565",
+                                        fontWeight: 700,
+                                        border: "none",
+                                        fontSize: "0.75rem",
+                                        height: 32,
+                                        borderRadius: "10px",
+                                        px: 2,
+                                      }}
+                                    />
+                                    <Chip
+                                      size="medium"
+                                      label={
+                                        item.hasGroups
+                                          ? "Groups: Created"
+                                          : "Groups: Pending"
+                                      }
+                                      sx={{
+                                        bgcolor: item.hasGroups ? "#8B5CF6" : "#E5E7EB",
+                                        color: item.hasGroups ? "white" : "#4A5565",
+                                        fontWeight: 700,
+                                        border: "none",
+                                        fontSize: "0.75rem",
+                                        height: 32,
+                                        borderRadius: "10px",
+                                        px: 2,
+                                      }}
+                                    />
+                                    <Chip
+                                      size="medium"
+                                      label={
+                                        item.hasBracket
+                                          ? "Bracket: Created"
+                                          : "Bracket: Pending"
+                                      }
+                                      sx={{
+                                        bgcolor: item.hasBracket ? "#8B5CF6" : "#E5E7EB",
+                                        color: item.hasBracket ? "white" : "#4A5565",
+                                        fontWeight: 700,
+                                        border: "none",
+                                        fontSize: "0.75rem",
+                                        height: 32,
+                                        borderRadius: "10px",
+                                        px: 2,
+                                      }}
+                                    />
 
-                          {/* Configure Button */}
-                          <Button
-                            variant="contained"
-                            startIcon={
-                              <SettingsOutlinedIcon
-                                sx={{ fontSize: "16px !important" }}
-                              />
-                            }
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedCategoryId(item.id);
-                              setActiveTab("categories");
-                            }}
-                            sx={{
-                              bgcolor: "#FF6900",
-                              color: "white",
-                              fontWeight: 700,
-                              fontSize: "0.875rem",
-                              height: 36,
-                              borderRadius: "10px",
-                              px: 2,
-                              textTransform: "none",
-                              boxShadow: "none",
-                              "&:hover": {
-                                bgcolor: "#E55800",
-                                boxShadow: "none",
-                              },
-                            }}
-                          >
-                            Edit Structure
-                          </Button>
+                                    <IconButton
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedCategoryId(item.id);
+                                        setExpandedOverviewCategoryId(null);
+                                        setActiveTab("categories");
+                                      }}
+                                      sx={{
+                                        border: "1px solid #D1D5DC",
+                                        borderRadius: "10px",
+                                        width: 36,
+                                        height: 36,
+                                        color: "#4A5565",
+                                        bgcolor: "#FFFFFF",
+                                      }}
+                                    >
+                                      <NavigateNextRoundedIcon fontSize="small" />
+                                    </IconButton>
+                                  </Stack>
+                                </Stack>
+
+                              <Collapse
+                                in={expandedOverviewCategoryId === item.id}
+                                timeout="auto"
+                                unmountOnExit
+                                sx={{ width: "100%" }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Divider sx={{ my: 2 }} />
+                                {(() => {
+                                  const inlineConfig =
+                                    categoryConfigs[item.id] ?? {
+                                      formats: [item.format],
+                                      structureMode: "",
+                                    };
+                                  const isInlineStructureReady =
+                                    isStructureReadyForConfig(inlineConfig);
+                                  const isInlineStructureConfirmed = Boolean(
+                                    confirmedStructureByCategory[item.id],
+                                  );
+                                  const showInlineTeams =
+                                    isInlineStructureConfirmed &&
+                                    overviewStepByCategory[item.id] === "teams";
+                                  const showInlineDrawing =
+                                    isInlineStructureConfirmed &&
+                                    overviewStepByCategory[item.id] ===
+                                      "groups";
+                                  const currentFlowStep =
+                                    overviewStepByCategory[item.id] ?? "structure";
+                                  const relevantPlayers = registeredPlayers.filter(
+                                    (player) => player.categoryIds.includes(item.id),
+                                  );
+                                  const inlineTeams = teamsByCategory[item.id] ?? [];
+                                  const inlineTeamsLoading = Boolean(
+                                    teamsLoadingByCategory[item.id],
+                                  );
+                                  const inlineTeamsSubmitting = Boolean(
+                                    teamsSubmittingByCategory[item.id],
+                                  );
+                                  const teamEditor = getCategoryTeamEditor(item.id);
+                                  const assignedUserIds = new Set(
+                                    inlineTeams
+                                      .filter(
+                                        (team) =>
+                                          team.id !== teamEditor.editingTeamId,
+                                      )
+                                      .flatMap((team) =>
+                                        (team.members ?? []).map((member) =>
+                                          String(member.userId),
+                                        ),
+                                      ),
+                                  );
+                                  const selectablePlayers = relevantPlayers.filter(
+                                    (player) =>
+                                      !assignedUserIds.has(player.id) ||
+                                      teamEditor.memberUserIds.includes(player.id),
+                                  );
+                                  const assignedUserIdsForProgress = new Set(
+                                    inlineTeams.flatMap((team) =>
+                                      (team.members ?? []).map((member) =>
+                                        String(member.userId),
+                                      ),
+                                    ),
+                                  );
+                                  const inlineGroups =
+                                    groupsByCategory[item.id] ?? [];
+                                  const assignedTeamIdsInGroups = new Set(
+                                    inlineGroups.flatMap((group) =>
+                                      (group.participants ?? [])
+                                        .map((p) => Number(String(p).trim()))
+                                        .filter(
+                                          (teamId) =>
+                                            Number.isFinite(teamId) &&
+                                            teamId > 0,
+                                        )
+                                        .map((teamId) => String(teamId))
+                                        .filter(Boolean),
+                                    ),
+                                  );
+                                  const unassignedTeamsForDrawing = inlineTeams.filter(
+                                    (team) =>
+                                      !assignedTeamIdsInGroups.has(String(team.id)),
+                                  );
+                                  const unassignedPlayersCount = relevantPlayers.filter(
+                                    (player) =>
+                                      !assignedUserIdsForProgress.has(player.id),
+                                  ).length;
+                                  const showContinueWarning = Boolean(
+                                    pendingContinueWarningByCategory[item.id],
+                                  );
+                                  return (
+                                    <Stack spacing={1.5}>
+                                      {currentFlowStep === "structure" ? (
+                                        <>
+                                          <Stack
+                                            direction="row"
+                                            justifyContent="space-between"
+                                            alignItems="center"
+                                          >
+                                            <Typography
+                                              variant="body2"
+                                              sx={{ fontWeight: 800 }}
+                                            >
+                                              Structure
+                                            </Typography>
+                                            <Button
+                                              size="small"
+                                              variant="outlined"
+                                              onClick={() =>
+                                                applyStructureToAllCategoriesFrom(
+                                                  item.id,
+                                                )
+                                              }
+                                              disabled={!inlineConfig.structureMode}
+                                              sx={{ borderRadius: 999 }}
+                                            >
+                                              Apply structure to all
+                                            </Button>
+                                          </Stack>
+                                          <Stack
+                                            direction={{ xs: "column", md: "row" }}
+                                            spacing={1}
+                                            useFlexGap
+                                            flexWrap="wrap"
+                                          >
+                                            {STRUCTURE_OPTIONS.map((opt) => {
+                                              const isSelected =
+                                                inlineConfig.structureMode === opt.id;
+                                              return (
+                                                <Card
+                                                  key={`${item.id}-${opt.id}`}
+                                                  onClick={() => {
+                                                    setCategoryConfigs((prev) => ({
+                                                      ...prev,
+                                                      [item.id]: {
+                                                        ...inlineConfig,
+                                                        structureMode: opt.id,
+                                                      },
+                                                    }));
+                                                    setConfirmedStructureByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: false,
+                                                      }),
+                                                    );
+                                                    setOverviewStepByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: "structure",
+                                                      }),
+                                                    );
+                                                  }}
+                                                  sx={{
+                                                    cursor: "pointer",
+                                                    width: {
+                                                      xs: "100%",
+                                                      md: "calc(50% - 4px)",
+                                                    },
+                                                    borderRadius: 2,
+                                                    border: "1px solid",
+                                                    borderColor: isSelected
+                                                      ? "rgba(139,92,246,0.45)"
+                                                      : "rgba(15,23,42,0.10)",
+                                                    bgcolor: isSelected
+                                                      ? "rgba(139,92,246,0.08)"
+                                                      : "background.paper",
+                                                  }}
+                                                >
+                                                  <CardContent sx={{ p: 1.25 }}>
+                                                    <Typography
+                                                      sx={{ fontWeight: 800 }}
+                                                    >
+                                                      {opt.title}
+                                                    </Typography>
+                                                    <Typography
+                                                      variant="body2"
+                                                      color="text.secondary"
+                                                    >
+                                                      {opt.subtitle}
+                                                    </Typography>
+                                                  </CardContent>
+                                                </Card>
+                                              );
+                                            })}
+                                          </Stack>
+
+                                          {inlineConfig.structureMode ===
+                                          "groups_knockout" ? (
+                                            <>
+                                              <Stack
+                                                direction="row"
+                                                justifyContent="space-between"
+                                                alignItems="center"
+                                              >
+                                                <Typography
+                                                  variant="body2"
+                                                  sx={{ fontWeight: 800 }}
+                                                >
+                                                  Group Inputs
+                                                </Typography>
+                                                <Button
+                                                  size="small"
+                                                  variant="outlined"
+                                                  onClick={() =>
+                                                    applyGroupInputsToAllCategoriesFrom(
+                                                      item.id,
+                                                    )
+                                                  }
+                                                  sx={{ borderRadius: 999 }}
+                                                >
+                                                  Apply group inputs to all
+                                                </Button>
+                                              </Stack>
+                                              <Stack
+                                                direction={{
+                                                  xs: "column",
+                                                  md: "row",
+                                                }}
+                                                spacing={1.25}
+                                              >
+                                                <TextField
+                                                  label="Number of groups"
+                                                  type="number"
+                                                  value={
+                                                    inlineConfig.groupCount ?? ""
+                                                  }
+                                                  onChange={(e) => {
+                                                    setCategoryConfigs((prev) => ({
+                                                      ...prev,
+                                                      [item.id]: {
+                                                        ...inlineConfig,
+                                                        groupCount: Math.max(
+                                                          1,
+                                                          Number(
+                                                            e.target.value || 0,
+                                                          ),
+                                                        ),
+                                                      },
+                                                    }));
+                                                    setConfirmedStructureByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: false,
+                                                      }),
+                                                    );
+                                                    setOverviewStepByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: "structure",
+                                                      }),
+                                                    );
+                                                  }}
+                                                  fullWidth
+                                                />
+                                                <TextField
+                                                  label="Teams per group (min 4)"
+                                                  type="number"
+                                                  value={
+                                                    inlineConfig.teamsPerGroup ?? ""
+                                                  }
+                                                  onChange={(e) => {
+                                                    setCategoryConfigs((prev) => ({
+                                                      ...prev,
+                                                      [item.id]: {
+                                                        ...inlineConfig,
+                                                        teamsPerGroup: Math.max(
+                                                          4,
+                                                          Number(
+                                                            e.target.value || 0,
+                                                          ),
+                                                        ),
+                                                      },
+                                                    }));
+                                                    setConfirmedStructureByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: false,
+                                                      }),
+                                                    );
+                                                    setOverviewStepByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: "structure",
+                                                      }),
+                                                    );
+                                                  }}
+                                                  fullWidth
+                                                />
+                                                <TextField
+                                                  label="Qualified per group"
+                                                  type="number"
+                                                  value={
+                                                    inlineConfig.qualifiedPerGroup ??
+                                                    ""
+                                                  }
+                                                  onChange={(e) => {
+                                                    setCategoryConfigs((prev) => ({
+                                                      ...prev,
+                                                      [item.id]: {
+                                                        ...inlineConfig,
+                                                        qualifiedPerGroup: Math.max(
+                                                          1,
+                                                          Number(
+                                                            e.target.value || 0,
+                                                          ),
+                                                        ),
+                                                      },
+                                                    }));
+                                                    setConfirmedStructureByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: false,
+                                                      }),
+                                                    );
+                                                    setOverviewStepByCategory(
+                                                      (prev) => ({
+                                                        ...prev,
+                                                        [item.id]: "structure",
+                                                      }),
+                                                    );
+                                                  }}
+                                                  fullWidth
+                                                />
+                                              </Stack>
+                                            </>
+                                          ) : null}
+
+                                          <Stack
+                                            direction={{ xs: "column", sm: "row" }}
+                                            spacing={1}
+                                            justifyContent="flex-end"
+                                          >
+                                            <Button
+                                              variant="contained"
+                                              disabled={!isInlineStructureReady}
+                                              onClick={() => {
+                                                setConfirmedStructureByCategory(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [item.id]: true,
+                                                  }),
+                                                );
+                                                setOverviewStepByCategory(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [item.id]: "structure",
+                                                  }),
+                                                );
+                                                setStatusMessage(
+                                                  `Structure confirmed for ${item.name}.`,
+                                                );
+                                              }}
+                                            >
+                                              Confirm structure
+                                            </Button>
+                                            <Button
+                                              variant="outlined"
+                                              disabled={!isInlineStructureConfirmed}
+                                              onClick={() => {
+                                                setOverviewStepByCategory(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [item.id]: "teams",
+                                                  }),
+                                                );
+                                                void loadTeamsForCategory(item.id);
+                                                window.setTimeout(() => {
+                                                  document
+                                                    .getElementById(
+                                                      `overview-flow-panel-${item.id}`,
+                                                    )
+                                                    ?.scrollIntoView({
+                                                      behavior: "smooth",
+                                                      block: "nearest",
+                                                    });
+                                                }, 120);
+                                              }}
+                                            >
+                                              Next
+                                            </Button>
+                                          </Stack>
+                                        </>
+                                      ) : null}
+
+                                      <Slide
+                                        in={showInlineTeams}
+                                        direction="left"
+                                        mountOnEnter
+                                        unmountOnExit
+                                        timeout={220}
+                                      >
+                                        <Box
+                                          id={`overview-flow-panel-${item.id}`}
+                                          sx={{
+                                            p: 2,
+                                            borderRadius: "12px",
+                                            border: "1px solid #D1D5DC",
+                                            bgcolor: "#F9FAFB",
+                                          }}
+                                        >
+                                          <Alert
+                                            severity="info"
+                                            sx={{
+                                              mb: 2,
+                                              bgcolor: "#EFF6FF",
+                                              border: "1px solid #BEDBFF",
+                                              borderRadius: "14px",
+                                              "& .MuiAlert-icon": {
+                                                color: "#155DFC",
+                                              },
+                                            }}
+                                          >
+                                            <Typography
+                                              sx={{
+                                                fontWeight: 500,
+                                                color: "#1C398E",
+                                                fontSize: "0.875rem",
+                                              }}
+                                            >
+                                              Create teams from registered players.
+                                              Team size depends on format: Singles
+                                              (1), Doubles (2), Teams (3+).
+                                            </Typography>
+                                          </Alert>
+
+                                          <Stack
+                                            direction={{ xs: "column", lg: "row" }}
+                                            spacing={3}
+                                          >
+                                            <Box sx={{ flex: 1 }}>
+                                              <Stack
+                                                direction="row"
+                                                justifyContent="space-between"
+                                                alignItems="center"
+                                                sx={{ mb: 2 }}
+                                              >
+                                                <Typography
+                                                  sx={{
+                                                    fontWeight: 700,
+                                                    fontSize: "1.125rem",
+                                                    color: "#101828",
+                                                  }}
+                                                >
+                                                  Created Teams
+                                                </Typography>
+                                                <Typography
+                                                  sx={{
+                                                    fontWeight: 600,
+                                                    fontSize: "0.875rem",
+                                                    color: "#8B5CF6",
+                                                  }}
+                                                >
+                                                  {inlineTeamsLoading
+                                                    ? "Loading..."
+                                                    : `${inlineTeams.length} teams`}
+                                                </Typography>
+                                              </Stack>
+                                              <Box
+                                                sx={{
+                                                  p: 2,
+                                                  bgcolor: "white",
+                                                  border: "1px solid #E5E7EB",
+                                                  borderRadius: "10px",
+                                                }}
+                                              >
+                                                <Typography
+                                                  sx={{
+                                                    color: "#6A7282",
+                                                    fontSize: "0.875rem",
+                                                  }}
+                                                >
+                                                  {inlineTeamsLoading
+                                                    ? "Loading teams..."
+                                                    : inlineTeams.length === 0
+                                                      ? "No teams created yet for this category."
+                                                      : ""}
+                                                </Typography>
+                                                {inlineTeams.length > 0 ? (
+                                                  <Stack spacing={1} sx={{ mt: 1 }}>
+                                                    {inlineTeams.map((team) => (
+                                                      <Box
+                                                        key={`inline-team-${item.id}-${team.id}`}
+                                                        sx={{
+                                                          p: 1.25,
+                                                          borderRadius: "10px",
+                                                          border:
+                                                            "1px solid #E5E7EB",
+                                                          bgcolor: "#FFFFFF",
+                                                        }}
+                                                      >
+                                                        <Stack
+                                                          direction="row"
+                                                          justifyContent="space-between"
+                                                          alignItems="center"
+                                                          sx={{ mb: 0.5 }}
+                                                        >
+                                                          <Typography
+                                                            sx={{
+                                                              fontWeight: 700,
+                                                              color: "#101828",
+                                                              fontSize: "0.9rem",
+                                                            }}
+                                                          >
+                                                            {team.name || `Team #${team.id}`}
+                                                          </Typography>
+                                                          <Stack
+                                                            direction="row"
+                                                            spacing={0.75}
+                                                          >
+                                                            <Button
+                                                              size="small"
+                                                              variant="outlined"
+                                                              onClick={() =>
+                                                                setCategoryTeamEditor(
+                                                                  item.id,
+                                                                  () => ({
+                                                                    name:
+                                                                      team.name ??
+                                                                      "",
+                                                                    memberUserIds:
+                                                                      (
+                                                                        team.members ??
+                                                                        []
+                                                                      ).map((m) =>
+                                                                        String(
+                                                                          m.userId,
+                                                                        ),
+                                                                      ),
+                                                                    autoNameFromMembers:
+                                                                      Boolean(
+                                                                        team.autoNameFromMembers,
+                                                                      ),
+                                                                    editingTeamId:
+                                                                      team.id,
+                                                                  }),
+                                                                )
+                                                              }
+                                                            >
+                                                              Edit
+                                                            </Button>
+                                                            <Button
+                                                              size="small"
+                                                              color="error"
+                                                              variant="outlined"
+                                                              onClick={() =>
+                                                                void deleteCategoryTeam(
+                                                                  item.id,
+                                                                  team.id,
+                                                                )
+                                                              }
+                                                            >
+                                                              Delete
+                                                            </Button>
+                                                          </Stack>
+                                                        </Stack>
+                                                        <Typography
+                                                          sx={{
+                                                            color: "#6A7282",
+                                                            fontSize: "0.75rem",
+                                                          }}
+                                                        >
+                                                          Members:{" "}
+                                                          {team.members?.length ??
+                                                            0}
+                                                        </Typography>
+                                                      </Box>
+                                                    ))}
+                                                  </Stack>
+                                                ) : null}
+                                              </Box>
+                                            </Box>
+
+                                            <Box sx={{ flex: 1 }}>
+                                              <Stack
+                                                direction="row"
+                                                justifyContent="space-between"
+                                                alignItems="center"
+                                                sx={{ mb: 2 }}
+                                              >
+                                                <Typography
+                                                  sx={{
+                                                    fontWeight: 700,
+                                                    fontSize: "1.125rem",
+                                                    color: "#101828",
+                                                  }}
+                                                >
+                                                  Available Players
+                                                </Typography>
+                                              </Stack>
+                                              <Box
+                                                sx={{
+                                                  p: 2.5,
+                                                  bgcolor: "white",
+                                                  border: "1px solid #E5E7EB",
+                                                  borderRadius: "10px",
+                                                  mb: 2,
+                                                }}
+                                              >
+                                                <Typography
+                                                  sx={{
+                                                    fontWeight: 700,
+                                                    fontSize: "1rem",
+                                                    color: "#101828",
+                                                    mb: 2,
+                                                  }}
+                                                >
+                                                  New Team
+                                                </Typography>
+                                                <Box sx={{ mb: 2 }}>
+                                                  <Typography
+                                                    sx={{
+                                                      fontSize: "0.875rem",
+                                                      fontWeight: 500,
+                                                      color: "#364153",
+                                                      mb: 0.5,
+                                                    }}
+                                                  >
+                                                    Team Name
+                                                  </Typography>
+                                                  <TextField
+                                                    fullWidth
+                                                    placeholder="Enter team name..."
+                                                    size="small"
+                                                    value={teamEditor.name}
+                                                    onChange={(e) =>
+                                                      setCategoryTeamEditor(
+                                                        item.id,
+                                                        (current) => ({
+                                                          ...current,
+                                                          name: e.target.value,
+                                                        }),
+                                                      )
+                                                    }
+                                                    sx={{
+                                                      "& .MuiOutlinedInput-root": {
+                                                        borderRadius: "10px",
+                                                        bgcolor: "white",
+                                                      },
+                                                    }}
+                                                  />
+                                                </Box>
+                                                <Box sx={{ mb: 2 }}>
+                                                  <Typography
+                                                    sx={{
+                                                      fontSize: "0.875rem",
+                                                      fontWeight: 500,
+                                                      color: "#364153",
+                                                      mb: 1,
+                                                    }}
+                                                  >
+                                                    Select Players (
+                                                    {
+                                                      teamEditor.memberUserIds
+                                                        .length
+                                                    }{" "}
+                                                    selected)
+                                                  </Typography>
+                                                  <Stack
+                                                    spacing={1}
+                                                    sx={{
+                                                      maxHeight: 180,
+                                                      overflowY: "auto",
+                                                    }}
+                                                  >
+                                                    {registeredPlayersLoading ? (
+                                                      <Typography
+                                                        sx={{
+                                                          fontSize: "0.875rem",
+                                                          color: "#6A7282",
+                                                          p: 1,
+                                                        }}
+                                                      >
+                                                        Loading players...
+                                                      </Typography>
+                                                    ) : selectablePlayers.length ===
+                                                      0 ? (
+                                                      <Typography
+                                                        sx={{
+                                                          fontSize: "0.875rem",
+                                                          color: "#6A7282",
+                                                          p: 1,
+                                                        }}
+                                                      >
+                                                        No available players for this
+                                                        category. Assigned players are in
+                                                        teams already.
+                                                      </Typography>
+                                                    ) : (
+                                                      selectablePlayers.map(
+                                                        (player) => (
+                                                          <Box
+                                                            key={`picker-${item.id}-${player.id}`}
+                                                            sx={{
+                                                              p: 1,
+                                                              borderRadius: "4px",
+                                                              "&:hover": {
+                                                                bgcolor: "#F9FAFB",
+                                                              },
+                                                              cursor: "pointer",
+                                                            }}
+                                                            onClick={() =>
+                                                              setCategoryTeamEditor(
+                                                                item.id,
+                                                                (current) => {
+                                                                  const exists =
+                                                                    current.memberUserIds.includes(
+                                                                      player.id,
+                                                                    );
+                                                                  return {
+                                                                    ...current,
+                                                                    memberUserIds:
+                                                                      exists
+                                                                        ? current.memberUserIds.filter(
+                                                                            (
+                                                                              id,
+                                                                            ) =>
+                                                                              id !==
+                                                                              player.id,
+                                                                          )
+                                                                        : [
+                                                                            ...current.memberUserIds,
+                                                                            player.id,
+                                                                          ],
+                                                                  };
+                                                                },
+                                                              )
+                                                            }
+                                                          >
+                                                            <Stack
+                                                              direction="row"
+                                                              spacing={1}
+                                                              alignItems="center"
+                                                            >
+                                                          <Box
+                                                            sx={{
+                                                              width: 16,
+                                                              height: 16,
+                                                              border:
+                                                                "2px solid #D1D5DC",
+                                                              borderRadius: "4px",
+                                                              bgcolor:
+                                                                teamEditor.memberUserIds.includes(
+                                                                  player.id,
+                                                                )
+                                                                  ? "#8B5CF6"
+                                                                  : "transparent",
+                                                            }}
+                                                          />
+                                                              <Box sx={{ flex: 1 }}>
+                                                                <Typography
+                                                                  sx={{
+                                                                    fontSize:
+                                                                      "0.875rem",
+                                                                    fontWeight: 500,
+                                                                    color:
+                                                                      "#101828",
+                                                                  }}
+                                                                >
+                                                                  {player.name}
+                                                                </Typography>
+                                                                <Typography
+                                                                  sx={{
+                                                                    fontSize:
+                                                                      "0.75rem",
+                                                                    fontWeight: 500,
+                                                                    color:
+                                                                      "#6A7282",
+                                                                  }}
+                                                                >
+                                                                  {player.email}
+                                                                </Typography>
+                                                              </Box>
+                                                            </Stack>
+                                                          </Box>
+                                                        ),
+                                                      )
+                                                    )}
+                                                  </Stack>
+                                                </Box>
+                                                <Button
+                                                  fullWidth
+                                                  disabled={
+                                                    inlineTeamsSubmitting ||
+                                                    teamEditor.memberUserIds
+                                                      .length === 0
+                                                  }
+                                                  onClick={() =>
+                                                    void saveCategoryTeam(item.id)
+                                                  }
+                                                  sx={{
+                                                    bgcolor:
+                                                      inlineTeamsSubmitting ||
+                                                      teamEditor.memberUserIds
+                                                        .length === 0
+                                                        ? "#D1D5DC"
+                                                        : "#8B5CF6",
+                                                    color: "white",
+                                                    fontWeight: 600,
+                                                    fontSize: "1rem",
+                                                    textTransform: "none",
+                                                    height: 40,
+                                                    borderRadius: "10px",
+                                                    "&:hover": {
+                                                      bgcolor:
+                                                        inlineTeamsSubmitting ||
+                                                        teamEditor.memberUserIds
+                                                          .length === 0
+                                                          ? "#D1D5DC"
+                                                          : "#7C3AED",
+                                                    },
+                                                  }}
+                                                >
+                                                  {inlineTeamsSubmitting
+                                                    ? "Saving..."
+                                                    : teamEditor.editingTeamId ==
+                                                          null
+                                                      ? "Create Team"
+                                                      : "Save Team"}
+                                                </Button>
+                                              </Box>
+
+                                              <Typography
+                                                sx={{
+                                                  fontSize: "0.875rem",
+                                                  fontWeight: 600,
+                                                  color: "#364153",
+                                                  mb: 1.5,
+                                                }}
+                                              >
+                                                All Players
+                                              </Typography>
+                                              <Typography
+                                                sx={{
+                                                  fontSize: "0.75rem",
+                                                  color: "#6A7282",
+                                                  mb: 1.25,
+                                                }}
+                                              >
+                                                Hint: `♥ Name` shows this player's desired
+                                                partner for team creation.
+                                              </Typography>
+                                              <Stack
+                                                spacing={1.5}
+                                                sx={{ maxHeight: 260, overflowY: "auto", pr: 0.5 }}
+                                              >
+                                                {registeredPlayersLoading ? (
+                                                  <Typography
+                                                    sx={{
+                                                      fontSize: "0.875rem",
+                                                      color: "#6A7282",
+                                                      p: 1,
+                                                    }}
+                                                  >
+                                                    Loading players...
+                                                  </Typography>
+                                                ) : relevantPlayers.length === 0 ? (
+                                                  <Typography
+                                                    sx={{
+                                                      fontSize: "0.875rem",
+                                                      color: "#6A7282",
+                                                      p: 1,
+                                                    }}
+                                                  >
+                                                    No registered players available for
+                                                    this category.
+                                                  </Typography>
+                                                ) : (
+                                                  relevantPlayers.map((player) => (
+                                                    (() => {
+                                                      const isAssigned =
+                                                        assignedUserIds.has(
+                                                          player.id,
+                                                        );
+                                                      return (
+                                                    <Box
+                                                      key={`all-${item.id}-${player.id}`}
+                                                      sx={{
+                                                        p: 1.5,
+                                                        bgcolor: isAssigned
+                                                          ? "#ECFDF3"
+                                                          : "white",
+                                                        border: isAssigned
+                                                          ? "1px solid #BBF7D0"
+                                                          : "1px solid #E5E7EB",
+                                                        borderRadius: "10px",
+                                                      }}
+                                                    >
+                                                      <Stack
+                                                        direction="row"
+                                                        justifyContent="space-between"
+                                                        alignItems="center"
+                                                      >
+                                                        <Box>
+                                                          <Typography
+                                                            sx={{
+                                                              fontSize: "0.875rem",
+                                                              fontWeight: 600,
+                                                              color: "#101828",
+                                                            }}
+                                                          >
+                                                            {player.name}
+                                                          </Typography>
+                                                          <Typography
+                                                            sx={{
+                                                              fontSize: "0.75rem",
+                                                              color: "#6A7282",
+                                                            }}
+                                                          >
+                                                            {player.email}
+                                                          </Typography>
+                                                          {player.preferredPartner ? (
+                                                            <Typography
+                                                              sx={{
+                                                                fontSize: "0.75rem",
+                                                                color: "#99A1AF",
+                                                                fontStyle: "italic",
+                                                                mt: 0.25,
+                                                              }}
+                                                            >
+                                                              Wants to play with{" "}
+                                                              {player.preferredPartner}
+                                                            </Typography>
+                                                          ) : null}
+                                                        </Box>
+                                                        {player.preferredPartner ? (
+                                                          <Chip
+                                                            label={`♥ ${player.preferredPartner}`}
+                                                            size="small"
+                                                            sx={{
+                                                              bgcolor: "#FCE7F3",
+                                                              color: "#EC4899",
+                                                              fontWeight: 600,
+                                                              fontSize: "0.75rem",
+                                                              height: 24,
+                                                              border: "none",
+                                                            }}
+                                                          />
+                                                        ) : null}
+                                                      </Stack>
+                                                      {isAssigned ? (
+                                                        <Typography
+                                                          sx={{
+                                                            mt: 0.5,
+                                                            fontSize: "0.75rem",
+                                                            color: "#166534",
+                                                            fontWeight: 600,
+                                                          }}
+                                                        >
+                                                          Assigned to a team
+                                                        </Typography>
+                                                      ) : null}
+                                                    </Box>
+                                                      );
+                                                    })()
+                                                  ))
+                                                )}
+                                              </Stack>
+                                            </Box>
+                                          </Stack>
+
+                                          <Stack
+                                            direction="row"
+                                            justifyContent="space-between"
+                                            alignItems="center"
+                                            sx={{ mt: 1 }}
+                                          >
+                                            <Button
+                                              variant="text"
+                                              onClick={() =>
+                                                setOverviewStepByCategory(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [item.id]: "structure",
+                                                  }),
+                                                )
+                                              }
+                                              sx={{
+                                                color: "#4A5565",
+                                                fontWeight: 600,
+                                                fontSize: "0.875rem",
+                                                textTransform: "none",
+                                                "&:hover": {
+                                                  bgcolor: "transparent",
+                                                  textDecoration: "underline",
+                                                },
+                                              }}
+                                            >
+                                              ← Back to Structure
+                                            </Button>
+                                            <Button
+                                              variant="contained"
+                                              onClick={() => {
+                                                if (unassignedPlayersCount > 0) {
+                                                  setPendingContinueWarningByCategory(
+                                                    (prev) => ({
+                                                      ...prev,
+                                                      [item.id]: true,
+                                                    }),
+                                                  );
+                                                  return;
+                                                }
+                                                setStatusMessage(
+                                                  `All players are assigned for ${item.name}.`,
+                                                );
+                                                setPendingContinueWarningByCategory(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [item.id]: false,
+                                                  }),
+                                                );
+                                                setOverviewStepByCategory(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [item.id]: "groups",
+                                                  }),
+                                                );
+                                              }}
+                                              sx={{
+                                                bgcolor: "#8B5CF6",
+                                                color: "white",
+                                                fontWeight: 700,
+                                                fontSize: "0.95rem",
+                                                height: 40,
+                                                borderRadius: "10px",
+                                                px: 2.5,
+                                                textTransform: "none",
+                                                boxShadow: "none",
+                                                "&:hover": {
+                                                  bgcolor: "#7C3AED",
+                                                  boxShadow: "none",
+                                                },
+                                              }}
+                                            >
+                                              Continue
+                                            </Button>
+                                          </Stack>
+                                          {showContinueWarning ? (
+                                            <Alert
+                                              severity="warning"
+                                              sx={{
+                                                mt: 1.5,
+                                                borderRadius: "10px",
+                                                border: "1px solid #FDE68A",
+                                                bgcolor: "#FFFBEB",
+                                              }}
+                                            >
+                                              <Stack spacing={1}>
+                                                <Typography
+                                                  sx={{
+                                                    fontSize: "0.875rem",
+                                                    color: "#78350F",
+                                                    fontWeight: 600,
+                                                  }}
+                                                >
+                                                  {unassignedPlayersCount} player(s)
+                                                  are still without a team in this
+                                                  category.
+                                                </Typography>
+                                                <Stack
+                                                  direction="row"
+                                                  spacing={1}
+                                                  sx={{
+                                                    justifyContent: "flex-end",
+                                                    flexWrap: "wrap",
+                                                  }}
+                                                >
+                                                  <Button
+                                                    size="small"
+                                                    variant="outlined"
+                                                    onClick={() =>
+                                                      setPendingContinueWarningByCategory(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [item.id]: false,
+                                                        }),
+                                                      )
+                                                    }
+                                                  >
+                                                    Review Players
+                                                  </Button>
+                                                  <Button
+                                                    size="small"
+                                                    variant="contained"
+                                                    color="warning"
+                                                    onClick={() => {
+                                                      setPendingContinueWarningByCategory(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [item.id]: false,
+                                                        }),
+                                                      );
+                                                      setStatusMessage(
+                                                        `Continued with ${unassignedPlayersCount} unassigned player(s) in ${item.name}.`,
+                                                      );
+                                                      setOverviewStepByCategory(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [item.id]: "groups",
+                                                        }),
+                                                      );
+                                                    }}
+                                                  >
+                                                    Continue Anyway
+                                                  </Button>
+                                                </Stack>
+                                              </Stack>
+                                            </Alert>
+                                          ) : null}
+                                        </Box>
+                                      </Slide>
+                                      <Slide
+                                        in={showInlineDrawing}
+                                        direction="left"
+                                        mountOnEnter
+                                        unmountOnExit
+                                        timeout={220}
+                                      >
+                                        <Box
+                                          sx={{
+                                            p: 2,
+                                            borderRadius: "12px",
+                                            border: "1px solid #D1D5DC",
+                                            bgcolor: "#F9FAFB",
+                                          }}
+                                        >
+                                          <Alert
+                                            severity="info"
+                                            sx={{
+                                              mb: 2,
+                                              bgcolor: "#EFF6FF",
+                                              border: "1px solid #BEDBFF",
+                                              borderRadius: "14px",
+                                              "& .MuiAlert-icon": {
+                                                color: "#155DFC",
+                                              },
+                                            }}
+                                          >
+                                            <Typography
+                                              sx={{
+                                                fontWeight: 500,
+                                                color: "#1C398E",
+                                                fontSize: "0.875rem",
+                                              }}
+                                            >
+                                              Drawing: assign teams into groups and
+                                              review bracket progression for this
+                                              category.
+                                            </Typography>
+                                          </Alert>
+
+                                          <Stack
+                                            direction={{ xs: "column", sm: "row" }}
+                                            spacing={1}
+                                            sx={{ mb: 2 }}
+                                            justifyContent="space-between"
+                                            alignItems={{ sm: "center" }}
+                                          >
+                                            <Button
+                                              variant="text"
+                                              onClick={() =>
+                                                setOverviewStepByCategory(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [item.id]: "teams",
+                                                  }),
+                                                )
+                                              }
+                                              sx={{
+                                                color: "#4A5565",
+                                                fontWeight: 600,
+                                                fontSize: "0.875rem",
+                                                textTransform: "none",
+                                                "&:hover": {
+                                                  bgcolor: "transparent",
+                                                  textDecoration: "underline",
+                                                },
+                                              }}
+                                            >
+                                              ← Back to Teams
+                                            </Button>
+                                            <Stack direction="row" spacing={1}>
+                                              <Button
+                                                variant="outlined"
+                                                startIcon={<ShuffleOutlinedIcon />}
+                                                onClick={() => {
+                                                  const ok =
+                                                    generateGroupsAndBracketForCategory(
+                                                      item.id,
+                                                      inlineTeams.map(
+                                                        (team) => String(team.id),
+                                                      ),
+                                                    );
+                                                  if (ok) {
+                                                    setStatusMessage(
+                                                      `Random draw generated for ${item.name}.`,
+                                                    );
+                                                  }
+                                                }}
+                                              >
+                                                Random Draw
+                                              </Button>
+                                              <Button
+                                                variant="contained"
+                                                onClick={() => {
+                                                  setSelectedCategoryId(item.id);
+                                                  setActiveTab("groups");
+                                                }}
+                                              >
+                                                Continue to Groups
+                                              </Button>
+                                            </Stack>
+                                          </Stack>
+
+                                          {unassignedTeamsForDrawing.length > 0 ? (
+                                            <Alert
+                                              severity="warning"
+                                              sx={{
+                                                mb: 2,
+                                                borderRadius: "10px",
+                                                border: "1px solid #FDE68A",
+                                                bgcolor: "#FFFBEB",
+                                              }}
+                                            >
+                                              {unassignedTeamsForDrawing.length} team(s)
+                                              are not assigned to groups yet.
+                                            </Alert>
+                                          ) : null}
+
+                                          <TournamentPhaseBuilder
+                                            groups={inlineGroups}
+                                            bracketMatches={
+                                              inlineConfig.bracketMatches ?? []
+                                            }
+                                            groupCount={
+                                              inlineConfig.groupCount ??
+                                              Math.max(1, 2)
+                                            }
+                                            teamsPerGroup={
+                                              inlineConfig.teamsPerGroup ?? 4
+                                            }
+                                            qualifiersPerGroup={
+                                              inlineConfig.qualifiedPerGroup ?? 1
+                                            }
+                                            entryLabel={entryLabelFromFormat(
+                                              item.format,
+                                            )}
+                                            availableEntries={inlineTeams.map((team) => ({
+                                              value: String(team.id),
+                                              label: getTeamDisplayName(team),
+                                            }))}
+                                            resolveEntryLabel={(value) => {
+                                              const team = inlineTeams.find(
+                                                (candidate) =>
+                                                  String(candidate.id) ===
+                                                  String(value),
+                                              );
+                                              return team
+                                                ? getTeamDisplayName(team)
+                                                : String(value ?? "");
+                                            }}
+                                            structureMode={
+                                              inlineConfig.structureMode ?? ""
+                                            }
+                                            onGroupsChange={(nextGroups) => {
+                                              const previousGroups =
+                                                groupsByCategory[item.id] ?? [];
+                                              persistGroups({
+                                                ...groupsByCategory,
+                                                [item.id]: nextGroups,
+                                              });
+                                              void syncTournamentGroupsForCategory(
+                                                item.id,
+                                                nextGroups,
+                                              );
+                                              void syncGroupTeamAssignmentsForCategory(
+                                                previousGroups,
+                                                nextGroups,
+                                                new Set(
+                                                  inlineTeams.map((team) =>
+                                                    Number(team.id),
+                                                  ),
+                                                ),
+                                              );
+                                            }}
+                                            onGroupCountChange={(count) => {
+                                              setCategoryConfigs((prev) => ({
+                                                ...prev,
+                                                [item.id]: {
+                                                  ...inlineConfig,
+                                                  groupCount: count,
+                                                },
+                                              }));
+                                            }}
+                                            onBracketChange={(nextMatches) => {
+                                              setCategoryConfigs((prev) => ({
+                                                ...prev,
+                                                [item.id]: {
+                                                  ...inlineConfig,
+                                                  bracketMatches: nextMatches,
+                                                },
+                                              }));
+                                            }}
+                                          />
+                                        </Box>
+                                      </Slide>
+                                    </Stack>
+                                  );
+                                })()}
+                              </Collapse>
+                              </Stack>
+                            </Box>
+                          ))}
                         </Stack>
                       </Box>
                     ))}
@@ -1562,84 +3367,129 @@ export default function TournamentSetupPage() {
             {activeTab === "teams" ? (
               <Card>
                 <CardContent sx={{ p: 3 }}>
-                  {/* Blue Info Alert */}
-                  <Alert
-                    severity="info"
+                  {(() => {
+                    const selectedCategoryTeams = selectedCategory
+                      ? (teamsByCategory[selectedCategory.id] ?? [])
+                      : [];
+                    const selectedCategoryId = selectedCategory?.id ?? "";
+                    const teamEditor = getCategoryTeamEditor(selectedCategoryId);
+                    const relevantPlayers = selectedCategory
+                      ? registeredPlayers.filter((player) =>
+                          player.categoryIds.includes(selectedCategory.id),
+                        )
+                      : [];
+                    const assignedUserIds = new Set(
+                      selectedCategoryTeams
+                        .filter((team) => team.id !== teamEditor.editingTeamId)
+                        .flatMap((team) =>
+                          (team.members ?? []).map((member) =>
+                            String(member.userId),
+                          ),
+                        ),
+                    );
+                    const selectablePlayers = relevantPlayers.filter(
+                      (player) =>
+                        !assignedUserIds.has(player.id) ||
+                        teamEditor.memberUserIds.includes(player.id),
+                    );
+                    const teamsTabSubmitting = Boolean(
+                      teamsSubmittingByCategory[selectedCategoryId],
+                    );
+                    return (
+                      <>
+                  {selectedCategory ? (
+                    <Box sx={{ mb: 2.5 }}>
+                      <Typography
+                        sx={{
+                          fontSize: "1.1rem",
+                          fontWeight: 700,
+                          color: "#6A7282",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.04em",
+                          mb: 1,
+                        }}
+                      >
+                        {selectedCategoryLevel}
+                      </Typography>
+                      <Box
+                        sx={{
+                          p: 1.5,
+                          borderRadius: "14px",
+                          border: "1.5px solid #8B5CF6",
+                          bgcolor: "#FFFFFF",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1.5,
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: "10px",
+                            bgcolor: "#FFEDD4",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <EmojiEventsRoundedIcon
+                            sx={{ fontSize: 24, color: "#F54900" }}
+                          />
+                        </Box>
+                        <Typography
+                          sx={{
+                            fontSize: "1.6rem",
+                            fontWeight: 700,
+                            color: "#101828",
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          {selectedCategoryDisplayName}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  ) : (
+                    <Alert severity="warning" sx={{ mb: 2 }}>
+                      Select a category from Category List first.
+                    </Alert>
+                  )}
+
+                  <Box
                     sx={{
-                      mb: 3,
-                      bgcolor: "#EFF6FF",
-                      border: "1px solid #BEDBFF",
-                      borderRadius: "14px",
-                      "& .MuiAlert-icon": {
-                        color: "#155DFC",
-                      },
+                      mb: 2,
+                      p: 1.5,
+                      borderRadius: "10px",
+                      bgcolor: "#F9FAFB",
+                      border: "1px solid #E5E7EB",
                     }}
                   >
                     <Typography
                       sx={{
-                        fontWeight: 500,
-                        color: "#1C398E",
-                        fontSize: "0.875rem",
+                        fontWeight: 700,
+                        color: "#101828",
+                        fontSize: "0.95rem",
+                        mb: 0.5,
                       }}
                     >
-                      Create teams from registered players. Team size depends on
-                      format: Singles (1 player), Doubles (2 players), Teams (3+
-                      players).
+                      Instructions
                     </Typography>
-                  </Alert>
-
-                  {/* Select Category */}
-                  <Typography
-                    sx={{
-                      fontWeight: 700,
-                      mb: 2,
-                      color: "#101828",
-                      fontSize: "1.25rem",
-                    }}
-                  >
-                    Select Category
-                  </Typography>
-                  <Stack
-                    direction="row"
-                    spacing={1.5}
-                    sx={{ mb: 3 }}
-                    useFlexGap
-                    flexWrap="wrap"
-                  >
-                    <Chip
-                      label="Advanced - Men • 1 teams • 0/3 assigned"
-                      onClick={() => {}}
-                      sx={{
-                        bgcolor: "#8B5CF6",
-                        color: "white",
-                        fontWeight: 700,
-                        fontSize: "0.875rem",
-                        height: 40,
-                        borderRadius: "10px",
-                        px: 2,
-                        "&:hover": {
-                          bgcolor: "#7C3AED",
-                        },
-                      }}
-                    />
-                    <Chip
-                      label="Beginner - Mixed • 0 teams • 0/2 assigned"
-                      onClick={() => {}}
-                      sx={{
-                        bgcolor: "#F9FAFB",
-                        color: "#4A5565",
-                        fontWeight: 600,
-                        fontSize: "0.875rem",
-                        height: 40,
-                        borderRadius: "10px",
-                        px: 2,
-                        border: "1px solid #E5E7EB",
-                        "&:hover": {
-                          bgcolor: "#F3F4F6",
-                        },
-                      }}
-                    />
-                  </Stack>
+                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                      1. Create teams from registered players for this category.
+                    </Typography>
+                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                      2. Assigned players are removed from selection.
+                    </Typography>
+                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                      3. Continue to Drawing after team setup.
+                    </Typography>
+                  </Box>
+                  {registeredPlayersError ? (
+                    <Alert severity="warning" sx={{ mb: 2 }}>
+                      {registeredPlayersError}
+                    </Alert>
+                  ) : null}
 
                   {/* Two Column Layout */}
                   <Stack direction={{ xs: "column", lg: "row" }} spacing={3}>
@@ -1667,11 +3517,10 @@ export default function TournamentSetupPage() {
                             color: "#8B5CF6",
                           }}
                         >
-                          1 teams
+                          {selectedCategoryTeams.length} teams
                         </Typography>
                       </Stack>
 
-                      {/* Team Card */}
                       <Box
                         sx={{
                           p: 2,
@@ -1680,136 +3529,84 @@ export default function TournamentSetupPage() {
                           borderRadius: "10px",
                         }}
                       >
-                        {/* Team Header */}
-                        <Stack
-                          direction="row"
-                          justifyContent="space-between"
-                          alignItems="flex-start"
-                          sx={{ mb: 1.5 }}
-                        >
-                          <Box>
-                            <Typography
-                              sx={{
-                                fontWeight: 700,
-                                fontSize: "1rem",
-                                color: "#101828",
-                                mb: 0.25,
-                              }}
-                            >
-                              Thunder Strikers
-                            </Typography>
-                            <Typography
-                              sx={{ fontSize: "0.75rem", color: "#6A7282" }}
-                            >
-                              2/2 members
-                            </Typography>
-                          </Box>
-                          <Button
-                            size="small"
-                            sx={{
-                              color: "#FB2C36",
-                              fontWeight: 600,
-                              fontSize: "0.875rem",
-                              textTransform: "none",
-                              minWidth: "auto",
-                              p: 0,
-                              "&:hover": {
-                                bgcolor: "transparent",
-                                textDecoration: "underline",
-                              },
-                            }}
+                        {selectedCategoryTeams.length === 0 ? (
+                          <Typography
+                            sx={{ fontSize: "0.875rem", color: "#6A7282" }}
                           >
-                            Delete
-                          </Button>
-                        </Stack>
-
-                        {/* Team Members */}
-                        <Stack spacing={1}>
-                          <Stack
-                            direction="row"
-                            spacing={1}
-                            alignItems="center"
-                          >
-                            <Box
-                              sx={{
-                                width: 24,
-                                height: 24,
-                                borderRadius: "50%",
-                                bgcolor: "#F3E8FF",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                              }}
-                            >
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 12 12"
-                                fill="none"
+                            No teams created yet for this category.
+                          </Typography>
+                        ) : (
+                          <Stack spacing={1}>
+                            {selectedCategoryTeams.map((team) => (
+                              <Box
+                                key={`teams-tab-${team.id}`}
+                                sx={{
+                                  p: 1.25,
+                                  border: "1px solid #E5E7EB",
+                                  borderRadius: "10px",
+                                  bgcolor: "white",
+                                }}
                               >
-                                <path
-                                  d="M6 6.5C7.38071 6.5 8.5 5.38071 8.5 4C8.5 2.61929 7.38071 1.5 6 1.5C4.61929 1.5 3.5 2.61929 3.5 4C3.5 5.38071 4.61929 6.5 6 6.5Z"
-                                  stroke="#8B5CF6"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                                <path
-                                  d="M2 10.5C2.46667 8.75 3.93333 7.5 6 7.5C8.06667 7.5 9.53333 8.75 10 10.5"
-                                  stroke="#8B5CF6"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </svg>
-                            </Box>
-                            <Typography
-                              sx={{ fontSize: "0.875rem", color: "#364153" }}
-                            >
-                              John Smith
-                            </Typography>
+                                <Stack
+                                  direction="row"
+                                  justifyContent="space-between"
+                                  alignItems="center"
+                                >
+                                  <Typography
+                                    sx={{
+                                      fontWeight: 700,
+                                      fontSize: "0.95rem",
+                                      color: "#101828",
+                                    }}
+                                  >
+                                    {team.name || `Team #${team.id}`}
+                                  </Typography>
+                                  <Stack direction="row" spacing={0.75}>
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      onClick={() =>
+                                        setCategoryTeamEditor(
+                                          selectedCategoryId,
+                                          () => ({
+                                            name: team.name ?? "",
+                                            memberUserIds: (
+                                              team.members ?? []
+                                            ).map((m) => String(m.userId)),
+                                            autoNameFromMembers: Boolean(
+                                              team.autoNameFromMembers,
+                                            ),
+                                            editingTeamId: team.id,
+                                          }),
+                                        )
+                                      }
+                                    >
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      color="error"
+                                      variant="outlined"
+                                      onClick={() =>
+                                        void deleteCategoryTeam(
+                                          selectedCategoryId,
+                                          team.id,
+                                        )
+                                      }
+                                    >
+                                      Delete
+                                    </Button>
+                                  </Stack>
+                                </Stack>
+                                <Typography
+                                  sx={{ fontSize: "0.75rem", color: "#6A7282" }}
+                                >
+                                  Members: {team.members?.length ?? 0}
+                                </Typography>
+                              </Box>
+                            ))}
                           </Stack>
-                          <Stack
-                            direction="row"
-                            spacing={1}
-                            alignItems="center"
-                          >
-                            <Box
-                              sx={{
-                                width: 24,
-                                height: 24,
-                                borderRadius: "50%",
-                                bgcolor: "#F3E8FF",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                              }}
-                            >
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 12 12"
-                                fill="none"
-                              >
-                                <path
-                                  d="M6 6.5C7.38071 6.5 8.5 5.38071 8.5 4C8.5 2.61929 7.38071 1.5 6 1.5C4.61929 1.5 3.5 2.61929 3.5 4C3.5 5.38071 4.61929 6.5 6 6.5Z"
-                                  stroke="#8B5CF6"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                                <path
-                                  d="M2 10.5C2.46667 8.75 3.93333 7.5 6 7.5C8.06667 7.5 9.53333 8.75 10 10.5"
-                                  stroke="#8B5CF6"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </svg>
-                            </Box>
-                            <Typography
-                              sx={{ fontSize: "0.875rem", color: "#364153" }}
-                            >
-                              Mike Johnson
-                            </Typography>
-                          </Stack>
-                        </Stack>
+                        )}
                       </Box>
                     </Box>
 
@@ -1887,6 +3684,16 @@ export default function TournamentSetupPage() {
                             fullWidth
                             placeholder="Enter team name..."
                             size="small"
+                            value={teamEditor.name}
+                            onChange={(e) =>
+                              setCategoryTeamEditor(
+                                selectedCategoryId,
+                                (current) => ({
+                                  ...current,
+                                  name: e.target.value,
+                                }),
+                              )
+                            }
                             sx={{
                               "& .MuiOutlinedInput-root": {
                                 borderRadius: "10px",
@@ -1906,25 +3713,29 @@ export default function TournamentSetupPage() {
                               mb: 1,
                             }}
                           >
-                            Select Players (0 selected)
+                            Select Players ({teamEditor.memberUserIds.length} selected)
                           </Typography>
                           <Stack
                             spacing={1}
                             sx={{ maxHeight: 180, overflowY: "auto" }}
                           >
-                            {[
-                              { name: "John Smith", email: "john@example.com" },
-                              {
-                                name: "Mike Johnson",
-                                email: "mike@example.com",
-                              },
-                              {
-                                name: "Sarah Williams",
-                                email: "sarah@example.com",
-                              },
-                            ].map((player, idx) => (
+                            {registeredPlayersLoading ? (
+                              <Typography
+                                sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
+                              >
+                                Loading players...
+                              </Typography>
+                            ) : selectablePlayers.length === 0 ? (
+                              <Typography
+                                sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
+                              >
+                                No available players for this category. Assigned
+                                players are in teams already.
+                              </Typography>
+                            ) : (
+                              selectablePlayers.map((player) => (
                               <Box
-                                key={idx}
+                                key={`picker-teams-${player.id}`}
                                 sx={{
                                   p: 1,
                                   borderRadius: "4px",
@@ -1933,6 +3744,23 @@ export default function TournamentSetupPage() {
                                   },
                                   cursor: "pointer",
                                 }}
+                                onClick={() =>
+                                  setCategoryTeamEditor(
+                                    selectedCategoryId,
+                                    (current) => {
+                                      const exists =
+                                        current.memberUserIds.includes(player.id);
+                                      return {
+                                        ...current,
+                                        memberUserIds: exists
+                                          ? current.memberUserIds.filter(
+                                              (id) => id !== player.id,
+                                            )
+                                          : [...current.memberUserIds, player.id],
+                                      };
+                                    },
+                                  )
+                                }
                               >
                                 <Stack
                                   direction="row"
@@ -1945,6 +3773,11 @@ export default function TournamentSetupPage() {
                                       height: 16,
                                       border: "2px solid #D1D5DC",
                                       borderRadius: "4px",
+                                      bgcolor: teamEditor.memberUserIds.includes(
+                                        player.id,
+                                      )
+                                        ? "#8B5CF6"
+                                        : "transparent",
                                     }}
                                   />
                                   <Box sx={{ flex: 1 }}>
@@ -1969,16 +3802,30 @@ export default function TournamentSetupPage() {
                                   </Box>
                                 </Stack>
                               </Box>
-                            ))}
+                              ))
+                            )}
                           </Stack>
                         </Box>
 
                         {/* Create Team Button */}
                         <Button
                           fullWidth
-                          disabled
+                          disabled={
+                            teamsTabSubmitting ||
+                            teamEditor.memberUserIds.length === 0 ||
+                            !selectedCategoryId
+                          }
+                          onClick={() =>
+                            selectedCategoryId
+                              ? void saveCategoryTeam(selectedCategoryId)
+                              : undefined
+                          }
                           sx={{
-                            bgcolor: "#D1D5DC",
+                            bgcolor:
+                              teamsTabSubmitting ||
+                              teamEditor.memberUserIds.length === 0
+                                ? "#D1D5DC"
+                                : "#8B5CF6",
                             color: "white",
                             fontWeight: 600,
                             fontSize: "1rem",
@@ -1986,11 +3833,19 @@ export default function TournamentSetupPage() {
                             height: 40,
                             borderRadius: "10px",
                             "&:hover": {
-                              bgcolor: "#D1D5DC",
+                              bgcolor:
+                                teamsTabSubmitting ||
+                                teamEditor.memberUserIds.length === 0
+                                  ? "#D1D5DC"
+                                  : "#7C3AED",
                             },
                           }}
                         >
-                          Create Team
+                          {teamsTabSubmitting
+                            ? "Saving..."
+                            : teamEditor.editingTeamId == null
+                              ? "Create Team"
+                              : "Save Team"}
                         </Button>
                       </Box>
 
@@ -2005,30 +3860,44 @@ export default function TournamentSetupPage() {
                       >
                         All Players
                       </Typography>
-                      <Stack spacing={1.5}>
-                        {[
-                          {
-                            name: "John Smith",
-                            email: "john@example.com",
-                            wants: "Mike Johnson",
-                          },
-                          {
-                            name: "Mike Johnson",
-                            email: "mike@example.com",
-                            wants: "John Smith",
-                          },
-                          {
-                            name: "Sarah Williams",
-                            email: "sarah@example.com",
-                            wants: null,
-                          },
-                        ].map((player, idx) => (
+                      <Typography
+                        sx={{
+                          fontSize: "0.75rem",
+                          color: "#6A7282",
+                          mb: 1.25,
+                        }}
+                      >
+                        Hint: `♥ Name` shows this player's desired partner for team
+                        creation.
+                      </Typography>
+                      <Stack
+                        spacing={1.5}
+                        sx={{ maxHeight: 280, overflowY: "auto", pr: 0.5 }}
+                      >
+                        {registeredPlayersLoading ? (
+                          <Typography
+                            sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
+                          >
+                            Loading players...
+                          </Typography>
+                        ) : registeredPlayers.length === 0 ? (
+                          <Typography
+                            sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
+                          >
+                            No registered players available yet.
+                          </Typography>
+                        ) : (
+                          relevantPlayers.map((player) => (
                           <Box
-                            key={idx}
+                            key={`all-teams-${player.id}`}
                             sx={{
                               p: 1.5,
-                              bgcolor: "white",
-                              border: "1px solid #E5E7EB",
+                              bgcolor: assignedUserIds.has(player.id)
+                                ? "#ECFDF3"
+                                : "white",
+                              border: assignedUserIds.has(player.id)
+                                ? "1px solid #BBF7D0"
+                                : "1px solid #E5E7EB",
                               borderRadius: "10px",
                             }}
                           >
@@ -2052,7 +3921,7 @@ export default function TournamentSetupPage() {
                                 >
                                   {player.email}
                                 </Typography>
-                                {player.wants && (
+                                {player.preferredPartner && (
                                   <Typography
                                     sx={{
                                       fontSize: "0.75rem",
@@ -2061,13 +3930,13 @@ export default function TournamentSetupPage() {
                                       mt: 0.25,
                                     }}
                                   >
-                                    Wants to play with {player.wants}
+                                    Wants to play with {player.preferredPartner}
                                   </Typography>
                                 )}
                               </Box>
-                              {player.wants && (
+                              {player.preferredPartner && (
                                 <Chip
-                                  label={`♥ ${player.wants}`}
+                                  label={`♥ ${player.preferredPartner}`}
                                   size="small"
                                   sx={{
                                     bgcolor: "#FCE7F3",
@@ -2080,19 +3949,60 @@ export default function TournamentSetupPage() {
                                 />
                               )}
                             </Stack>
+                            {assignedUserIds.has(player.id) ? (
+                              <Typography
+                                sx={{
+                                  mt: 0.5,
+                                  fontSize: "0.75rem",
+                                  color: "#166534",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Assigned to a team
+                              </Typography>
+                            ) : null}
                           </Box>
-                        ))}
+                          ))
+                        )}
                       </Stack>
                     </Box>
                   </Stack>
+                      </>
+                    );
+                  })()}
 
                   {/* Next Button */}
                   <Box
-                    sx={{ mt: 3, display: "flex", justifyContent: "flex-end" }}
+                    sx={{
+                      mt: 3,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 1,
+                    }}
                   >
                     <Button
+                      variant="outlined"
+                      onClick={() => setActiveTab("categories")}
+                      sx={{ borderRadius: "10px" }}
+                    >
+                      Back: Structure
+                    </Button>
+                    <Button
                       variant="contained"
-                      onClick={() => setActiveTab("groups")}
+                      onClick={() => {
+                        if (unassignedPlayersCountForTeamsTab > 0) {
+                          setPendingContinueWarningByCategory((prev) => ({
+                            ...prev,
+                            [selectedCategoryId]: true,
+                          }));
+                          return;
+                        }
+                        setPendingContinueWarningByCategory((prev) => ({
+                          ...prev,
+                          [selectedCategoryId]: false,
+                        }));
+                        setActiveTab("groups");
+                      }}
                       sx={{
                         bgcolor: "#8B5CF6",
                         color: "white",
@@ -2112,402 +4022,65 @@ export default function TournamentSetupPage() {
                       Next: Groups & Brackets →
                     </Button>
                   </Box>
-                </CardContent>
-              </Card>
-            ) : null}
-
-            {activeTab === "drawing" ? (
-              <Card>
-                <CardContent sx={{ p: 3 }}>
-                  {/* Blue Info Alert */}
-                  <Alert
-                    severity="info"
-                    sx={{
-                      mb: 3,
-                      bgcolor: "#EFF6FF",
-                      border: "1px solid #BEDBFF",
-                      borderRadius: "14px",
-                      "& .MuiAlert-icon": {
-                        color: "#155DFC",
-                      },
-                    }}
-                  >
-                    <Typography
+                  {showTeamsTabContinueWarning ? (
+                    <Alert
+                      severity="warning"
                       sx={{
-                        fontWeight: 500,
-                        color: "#1C398E",
-                        fontSize: "0.875rem",
-                      }}
-                    >
-                      Select a category, then use "Random Draw" to automatically
-                      assign teams to groups, or manually assign teams using the
-                      buttons below each team.
-                    </Typography>
-                  </Alert>
-
-                  {/* Category Selection */}
-                  <Typography
-                    sx={{
-                      fontWeight: 700,
-                      mb: 2,
-                      color: "#101828",
-                      fontSize: "1.25rem",
-                    }}
-                  >
-                    Select Category for Drawing
-                  </Typography>
-                  <Stack
-                    direction="row"
-                    spacing={1.5}
-                    sx={{ mb: 3 }}
-                    useFlexGap
-                    flexWrap="wrap"
-                  >
-                    <Chip
-                      label="Advanced - Men • 8 teams"
-                      onClick={() => {}}
-                      sx={{
-                        bgcolor: "#8B5CF6",
-                        color: "white",
-                        fontWeight: 700,
-                        fontSize: "0.875rem",
-                        height: 40,
+                        mt: 1.5,
                         borderRadius: "10px",
-                        px: 2,
-                        "&:hover": {
-                          bgcolor: "#7C3AED",
-                        },
-                      }}
-                    />
-                    <Chip
-                      label="Beginner - Mixed • 0 teams"
-                      onClick={() => {}}
-                      sx={{
-                        bgcolor: "#F9FAFB",
-                        color: "#4A5565",
-                        fontWeight: 600,
-                        fontSize: "0.875rem",
-                        height: 40,
-                        borderRadius: "10px",
-                        px: 2,
-                        border: "1px solid #E5E7EB",
-                        "&:hover": {
-                          bgcolor: "#F3F4F6",
-                        },
-                      }}
-                    />
-                  </Stack>
-
-                  {/* Random Draw Button */}
-                  <Box
-                    sx={{ display: "flex", justifyContent: "center", mb: 3 }}
-                  >
-                    <Button
-                      variant="contained"
-                      startIcon={<ShuffleOutlinedIcon />}
-                      sx={{
-                        background:
-                          "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
-                        color: "white",
-                        fontWeight: 700,
-                        fontSize: "1.25rem",
-                        height: 68,
-                        borderRadius: "16px",
-                        px: 4,
-                        textTransform: "none",
-                        boxShadow:
-                          "0px 20px 25px 0px rgba(0,0,0,0.1), 0px 8px 10px 0px rgba(0,0,0,0.1)",
-                        "&:hover": {
-                          background:
-                            "linear-gradient(135deg, #7C3AED 0%, #6D28D9 100%)",
-                        },
+                        border: "1px solid #FDE68A",
+                        bgcolor: "#FFFBEB",
                       }}
                     >
-                      Random Draw
-                    </Button>
-                  </Box>
-
-                  {/* Four Groups Grid */}
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gridTemplateColumns: {
-                        xs: "1fr",
-                        sm: "repeat(2, 1fr)",
-                        lg: "repeat(4, 1fr)",
-                      },
-                      gap: 2,
-                      mb: 3,
-                    }}
-                  >
-                    {["A", "B", "C", "D"].map((group) => (
-                      <Box
-                        key={group}
-                        sx={{
-                          bgcolor: "white",
-                          border: "2px solid #E5E7EB",
-                          borderRadius: "14px",
-                          overflow: "hidden",
-                          boxShadow:
-                            "0px 4px 6px -1px rgba(0,0,0,0.1), 0px 2px 4px -2px rgba(0,0,0,0.1)",
-                        }}
-                      >
-                        {/* Group Header with Gradient */}
-                        <Box
-                          sx={{
-                            background:
-                              "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
-                            p: 2,
-                          }}
-                        >
-                          <Typography
-                            sx={{
-                              fontWeight: 700,
-                              fontSize: "1.5rem",
-                              color: "white",
-                              textAlign: "center",
-                              mb: 0.5,
-                            }}
-                          >
-                            Group {group}
-                          </Typography>
-                          <Typography
-                            sx={{
-                              fontSize: "0.875rem",
-                              color: "#F3E8FF",
-                              textAlign: "center",
-                            }}
-                          >
-                            0 teams
-                          </Typography>
-                        </Box>
-
-                        {/* Empty State */}
-                        <Box
-                          sx={{
-                            p: 3,
-                            bgcolor: "#F9FAFB",
-                            minHeight: 172,
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: 1,
-                          }}
-                        >
-                          <PeopleAltOutlinedIcon
-                            sx={{ fontSize: 48, color: "#99A1AF" }}
-                          />
-                          <Typography
-                            sx={{
-                              fontSize: "0.875rem",
-                              fontWeight: 500,
-                              color: "#99A1AF",
-                            }}
-                          >
-                            No teams assigned
-                          </Typography>
-                        </Box>
-                      </Box>
-                    ))}
-                  </Box>
-
-                  {/* Unassigned Teams Alert */}
-                  <Alert
-                    severity="warning"
-                    sx={{
-                      mb: 3,
-                      bgcolor: "#FFF4ED",
-                      border: "1px solid #FFD6A8",
-                      borderRadius: "14px",
-                      "& .MuiAlert-icon": {
-                        color: "#F97316",
-                      },
-                    }}
-                  >
-                    <Stack
-                      direction="row"
-                      justifyContent="space-between"
-                      alignItems="center"
-                    >
-                      <Typography
-                        sx={{
-                          fontWeight: 700,
-                          color: "#101828",
-                          fontSize: "1rem",
-                        }}
-                      >
-                        Unassigned Teams (8)
-                      </Typography>
-                    </Stack>
-                    <Typography
-                      sx={{ fontSize: "0.875rem", color: "#4A5565", mt: 0.5 }}
-                    >
-                      Assign these teams to groups before continuing.
-                    </Typography>
-                  </Alert>
-
-                  {/* Teams Grid */}
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gridTemplateColumns: {
-                        xs: "1fr",
-                        sm: "repeat(2, 1fr)",
-                        lg: "repeat(4, 1fr)",
-                      },
-                      gap: 2,
-                      mb: 3,
-                    }}
-                  >
-                    {[
-                      {
-                        name: "Thunder Strikers",
-                        members: ["John Smith", "Mike Johnson"],
-                      },
-                      {
-                        name: "Wave Masters",
-                        members: ["Sarah Williams", "Alex Turner"],
-                      },
-                      {
-                        name: "Beach Kings",
-                        members: ["Ryan Cooper", "Jake Miller"],
-                      },
-                      {
-                        name: "Sand Sharks",
-                        members: ["Chris Evans", "Matt Davis"],
-                      },
-                      {
-                        name: "Court Crushers",
-                        members: ["Tom Harris", "Ben Wilson"],
-                      },
-                      {
-                        name: "Net Ninjas",
-                        members: ["Steve Brown", "Dan White"],
-                      },
-                      {
-                        name: "Spike Squad",
-                        members: ["Kevin Lee", "Mark Taylor"],
-                      },
-                      {
-                        name: "Ace Avengers",
-                        members: ["Paul Garcia", "Lee Martinez"],
-                      },
-                    ].map((team, idx) => (
-                      <Box
-                        key={idx}
-                        sx={{
-                          bgcolor: "white",
-                          border: "1px solid #FFD6A8",
-                          borderRadius: "10px",
-                          p: 2,
-                          boxShadow:
-                            "0px 1px 3px 0px rgba(0,0,0,0.1), 0px 1px 2px 0px rgba(0,0,0,0.1)",
-                        }}
-                      >
+                      <Stack spacing={1}>
                         <Typography
                           sx={{
-                            fontWeight: 700,
-                            fontSize: "1rem",
-                            color: "#101828",
-                            mb: 1,
+                            fontSize: "0.875rem",
+                            color: "#78350F",
+                            fontWeight: 600,
                           }}
                         >
-                          {team.name}
+                          {unassignedPlayersCountForTeamsTab} player(s) are still without a
+                          team in this category.
                         </Typography>
-                        {team.members.map((member, mIdx) => (
-                          <Typography
-                            key={mIdx}
-                            sx={{
-                              fontSize: "0.75rem",
-                              color: "#4A5565",
-                              mb: 0.25,
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          sx={{ justifyContent: "flex-end", flexWrap: "wrap" }}
+                        >
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={() =>
+                              setPendingContinueWarningByCategory((prev) => ({
+                                ...prev,
+                                [selectedCategoryId]: false,
+                              }))
+                            }
+                          >
+                            Review Players
+                          </Button>
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="warning"
+                            onClick={() => {
+                              setPendingContinueWarningByCategory((prev) => ({
+                                ...prev,
+                                [selectedCategoryId]: false,
+                              }));
+                              setStatusMessage(
+                                `Continued with ${unassignedPlayersCountForTeamsTab} unassigned player(s) in ${selectedCategoryDisplayName}.`,
+                              );
+                              setActiveTab("groups");
                             }}
                           >
-                            • {member}
-                          </Typography>
-                        ))}
-
-                        {/* Group Assignment Buttons Grid */}
-                        <Box
-                          sx={{
-                            display: "grid",
-                            gridTemplateColumns: "repeat(2, 1fr)",
-                            gap: 0.75,
-                            mt: 1.5,
-                          }}
-                        >
-                          {["A", "B", "C", "D"].map((group) => (
-                            <Button
-                              key={group}
-                              size="small"
-                              sx={{
-                                bgcolor: "#8B5CF6",
-                                color: "white",
-                                fontWeight: 700,
-                                fontSize: "0.875rem",
-                                height: 36,
-                                borderRadius: "4px",
-                                textTransform: "none",
-                                minWidth: "auto",
-                                "&:hover": {
-                                  bgcolor: "#7C3AED",
-                                },
-                              }}
-                            >
-                              Group {group}
-                            </Button>
-                          ))}
-                        </Box>
-                      </Box>
-                    ))}
-                  </Box>
-
-                  {/* Navigation Buttons */}
-                  <Stack
-                    direction="row"
-                    justifyContent="space-between"
-                    alignItems="center"
-                  >
-                    <Button
-                      variant="text"
-                      onClick={() => setActiveTab("teams")}
-                      sx={{
-                        color: "#4A5565",
-                        fontWeight: 600,
-                        fontSize: "0.875rem",
-                        textTransform: "none",
-                        "&:hover": {
-                          bgcolor: "transparent",
-                          textDecoration: "underline",
-                        },
-                      }}
-                    >
-                      ← Back to Teams
-                    </Button>
-                    <Button
-                      variant="contained"
-                      onClick={() => setActiveTab("groups")}
-                      disabled
-                      sx={{
-                        bgcolor: "#D1D5DC",
-                        color: "white",
-                        fontWeight: 700,
-                        fontSize: "1rem",
-                        height: 44,
-                        borderRadius: "10px",
-                        px: 3,
-                        textTransform: "none",
-                        boxShadow: "none",
-                        "&:hover": {
-                          bgcolor: "#D1D5DC",
-                          boxShadow: "none",
-                        },
-                      }}
-                    >
-                      Confirm & Continue →
-                    </Button>
-                  </Stack>
+                            Continue Anyway
+                          </Button>
+                        </Stack>
+                      </Stack>
+                    </Alert>
+                  ) : null}
                 </CardContent>
               </Card>
             ) : null}
@@ -2515,10 +4088,93 @@ export default function TournamentSetupPage() {
             {activeTab === "categories" ? (
               <Card>
                 <CardContent sx={{ p: 3 }}>
-                  <Alert severity="info" sx={{ mb: 2 }}>
-                    1. Select a category from Category List. 2. Select a
-                    structure. 3. Save and continue to Teams/Groups.
-                  </Alert>
+                  {selectedCategory ? (
+                    <Box sx={{ mb: 2.5 }}>
+                      <Typography
+                        sx={{
+                          fontSize: "1.1rem",
+                          fontWeight: 700,
+                          color: "#6A7282",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.04em",
+                          mb: 1,
+                        }}
+                      >
+                        {selectedCategoryLevel}
+                      </Typography>
+                      <Box
+                        sx={{
+                          p: 1.5,
+                          borderRadius: "14px",
+                          border: "1.5px solid #8B5CF6",
+                          bgcolor: "#FFFFFF",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1.5,
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: "10px",
+                            bgcolor: "#FFEDD4",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <EmojiEventsRoundedIcon
+                            sx={{ fontSize: 24, color: "#F54900" }}
+                          />
+                        </Box>
+                        <Typography
+                          sx={{
+                            fontSize: "1.6rem",
+                            fontWeight: 700,
+                            color: "#101828",
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          {selectedCategoryDisplayName}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  ) : (
+                    <Alert severity="warning" sx={{ mb: 2 }}>
+                      Select a category from Category List first.
+                    </Alert>
+                  )}
+                  <Box
+                    sx={{
+                      mb: 2,
+                      p: 1.5,
+                      borderRadius: "10px",
+                      bgcolor: "#F9FAFB",
+                      border: "1px solid #E5E7EB",
+                    }}
+                  >
+                    <Typography
+                      sx={{
+                        fontWeight: 700,
+                        color: "#101828",
+                        fontSize: "0.95rem",
+                        mb: 0.5,
+                      }}
+                    >
+                      Instructions
+                    </Typography>
+                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                      1. Pick the structure for this category.
+                    </Typography>
+                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                      2. If needed, set group inputs.
+                    </Typography>
+                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                      3. Continue to Teams and then Groups & Brackets.
+                    </Typography>
+                  </Box>
                   <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
                     Structure
                   </Typography>
@@ -2530,63 +4186,10 @@ export default function TournamentSetupPage() {
                   >
                     Configure structure for the selected category.
                   </Typography>
-                  {selectedCategory ? (
-                    <Box
-                      sx={{
-                        mb: 2,
-                        p: 2,
-                        borderRadius: "12px",
-                        bgcolor: "#F3E8FF",
-                        border: "1px solid #E9D5FF",
-                      }}
-                    >
-                      <Typography
-                        sx={{
-                          fontSize: "0.75rem",
-                          fontWeight: 700,
-                          color: "#7C3AED",
-                          textTransform: "uppercase",
-                          letterSpacing: 0.6,
-                          mb: 0.5,
-                        }}
-                      >
-                        Editing Category
-                      </Typography>
-                      <Typography
-                        variant="h5"
-                        sx={{ fontWeight: 800, color: "#4C1D95" }}
-                      >
-                        {selectedCategory.name}
-                      </Typography>
-                    </Box>
-                  ) : (
-                    <Alert severity="warning" sx={{ mb: 2 }}>
-                      Select a category from Category List first.
-                    </Alert>
-                  )}
 
                   <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
                     Structure
                   </Typography>
-                  <Stack
-                    direction="row"
-                    justifyContent="flex-end"
-                    sx={{ mb: 1.5 }}
-                  >
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={applySelectedStructureToAllCategories}
-                      disabled={
-                        !selectedCategory ||
-                        !selectedConfig ||
-                        !selectedConfig.structureMode
-                      }
-                      sx={{ borderRadius: 999 }}
-                    >
-                      Apply structure to all categories
-                    </Button>
-                  </Stack>
                   <Stack
                     direction={{ xs: "column", md: "row" }}
                     spacing={1.25}
@@ -2647,20 +4250,6 @@ export default function TournamentSetupPage() {
                       >
                         Group Phase Inputs
                       </Typography>
-                      <Stack
-                        direction="row"
-                        justifyContent="flex-end"
-                        sx={{ mb: 1.25 }}
-                      >
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={applySelectedGroupInputsToAllCategories}
-                          sx={{ borderRadius: 999 }}
-                        >
-                          Apply group inputs to all categories
-                        </Button>
-                      </Stack>
                       <Stack
                         direction={{ xs: "column", md: "row" }}
                         spacing={1.25}
@@ -2729,7 +4318,7 @@ export default function TournamentSetupPage() {
                         sx={{ mt: 1, display: "block" }}
                       >
                         Groups and bracket will be auto-generated when you click
-                        Next: Groups.
+                        Next: Teams.
                       </Typography>
                     </>
                   ) : null}
@@ -2737,18 +4326,18 @@ export default function TournamentSetupPage() {
                   <Stack
                     direction={{ xs: "column", sm: "row" }}
                     spacing={1.25}
+                    justifyContent="space-between"
                     sx={{ mt: 2 }}
                   >
                     <Button
-                      variant="contained"
-                      onClick={saveSetup}
-                      disabled={!canSaveSelectedCategorySetup}
+                      variant="outlined"
+                      onClick={() => setActiveTab("overview")}
                       sx={{ borderRadius: 999 }}
                     >
-                      Save Category Setup
+                      Back: Overview
                     </Button>
                     <Button
-                      variant="outlined"
+                      variant="contained"
                       onClick={() => {
                         if (
                           selectedConfig?.structureMode === "groups_knockout" &&
@@ -2757,11 +4346,12 @@ export default function TournamentSetupPage() {
                           generateGroupsAndBracketForSelectedCategory();
                         }
                         saveSetup();
-                        setActiveTab("groups");
+                        setActiveTab("teams");
                       }}
+                      disabled={!canSaveSelectedCategorySetup}
                       sx={{ borderRadius: 999 }}
                     >
-                      Next: Groups
+                      Next: Teams
                     </Button>
                   </Stack>
                 </CardContent>
@@ -2779,31 +4369,89 @@ export default function TournamentSetupPage() {
                     <Stack spacing={1.25}>
                       <Box
                         sx={{
-                          p: 2,
-                          borderRadius: "12px",
-                          bgcolor: "#F3E8FF",
-                          border: "1px solid #E9D5FF",
+                          mb: 2,
                         }}
                       >
                         <Typography
                           sx={{
-                            fontSize: "0.75rem",
+                            fontSize: "1.1rem",
                             fontWeight: 700,
-                            color: "#7C3AED",
+                            color: "#6A7282",
                             textTransform: "uppercase",
-                            letterSpacing: 0.6,
+                            letterSpacing: "0.04em",
+                            mb: 1,
+                          }}
+                        >
+                          {selectedCategoryLevel}
+                        </Typography>
+                        <Box
+                          sx={{
+                            p: 1.5,
+                            borderRadius: "14px",
+                            border: "1.5px solid #8B5CF6",
+                            bgcolor: "#FFFFFF",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 1.5,
+                          }}
+                        >
+                          <Box
+                            sx={{
+                              width: 48,
+                              height: 48,
+                              borderRadius: "10px",
+                              bgcolor: "#FFEDD4",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0,
+                            }}
+                          >
+                            <EmojiEventsRoundedIcon
+                              sx={{ fontSize: 24, color: "#F54900" }}
+                            />
+                          </Box>
+                          <Typography
+                            sx={{
+                              fontSize: "1.6rem",
+                              fontWeight: 700,
+                              color: "#101828",
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            {selectedCategoryDisplayName}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <Box
+                        sx={{
+                          mb: 2,
+                          p: 1.5,
+                          borderRadius: "10px",
+                          bgcolor: "#F9FAFB",
+                          border: "1px solid #E5E7EB",
+                        }}
+                      >
+                        <Typography
+                          sx={{
+                            fontWeight: 700,
+                            color: "#101828",
+                            fontSize: "0.95rem",
                             mb: 0.5,
                           }}
                         >
-                          Editing Category
+                          Instructions
                         </Typography>
-                        <Typography
-                          variant="h5"
-                          sx={{ fontWeight: 800, color: "#4C1D95" }}
-                        >
-                          {selectedCategory.name}
+                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                          1. Assign teams to groups manually or use random draw.
                         </Typography>
-                        <Typography sx={{ fontSize: "0.875rem", color: "#6B21A8" }}>
+                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                          2. Review group distribution and bracket pairings.
+                        </Typography>
+                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                          3. Save updates and go back to adjust earlier steps if needed.
+                        </Typography>
+                        <Typography sx={{ fontSize: "0.85rem", color: "#6B7280", mt: 0.75 }}>
                           {selectedConfig?.structureMode
                             ? `Structure: ${selectedConfig.structureMode}`
                             : "Structure not selected yet"}
@@ -2821,8 +4469,27 @@ export default function TournamentSetupPage() {
                           selectedConfig?.qualifiedPerGroup ?? 1
                         }
                         entryLabel={selectedEntryLabel}
+                        availableEntries={(
+                          teamsByCategory[selectedCategory.id] ?? []
+                        ).map((team) => ({
+                          value: String(team.id),
+                          label: getTeamDisplayName(team),
+                        }))}
+                        resolveEntryLabel={(value) => {
+                          const team = (
+                            teamsByCategory[selectedCategory.id] ?? []
+                          ).find(
+                            (candidate) =>
+                              String(candidate.id) === String(value),
+                          );
+                          return team
+                            ? getTeamDisplayName(team)
+                            : String(value ?? "");
+                        }}
                         structureMode={selectedConfig?.structureMode ?? ""}
                         onGroupsChange={(nextGroups) => {
+                          const previousGroups =
+                            groupsByCategory[selectedCategory.id] ?? [];
                           persistGroups({
                             ...groupsByCategory,
                             [selectedCategory.id]: nextGroups,
@@ -2830,6 +4497,15 @@ export default function TournamentSetupPage() {
                           void syncTournamentGroupsForCategory(
                             selectedCategory.id,
                             nextGroups,
+                          );
+                          void syncGroupTeamAssignmentsForCategory(
+                            previousGroups,
+                            nextGroups,
+                            new Set(
+                              (teamsByCategory[selectedCategory.id] ?? []).map(
+                                (team) => Number(team.id),
+                              ),
+                            ),
                           );
                         }}
                         onGroupCountChange={(count) => {
@@ -2853,6 +4529,21 @@ export default function TournamentSetupPage() {
                           }));
                         }}
                       />
+                      <Box
+                        sx={{
+                          display: "flex",
+                          justifyContent: "flex-start",
+                          pt: 1,
+                        }}
+                      >
+                        <Button
+                          variant="outlined"
+                          onClick={() => setActiveTab("teams")}
+                          sx={{ borderRadius: "10px" }}
+                        >
+                          Back: Teams
+                        </Button>
+                      </Box>
                     </Stack>
                   )}
                 </CardContent>

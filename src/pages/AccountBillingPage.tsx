@@ -10,6 +10,7 @@ import {
   Typography,
 } from "@mui/material";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import { useNavigate } from "react-router-dom";
 import MockDataFlag from "../Components/Shared/MockDataFlag";
 import { UI_FEATURE_FLAGS } from "../config/featureFlags";
 
@@ -65,6 +66,7 @@ const faqItems = [
 ];
 
 export default function AccountBillingPage() {
+  const navigate = useNavigate();
   const hasMockData = UI_FEATURE_FLAGS.enableMockData;
 
   return (
@@ -331,6 +333,11 @@ export default function AccountBillingPage() {
                         <Button
                           variant={plan.ctaVariant}
                           fullWidth
+                          onClick={
+                            plan.id === "pro"
+                              ? () => navigate("/account/checkout")
+                              : undefined
+                          }
                           sx={{
                             py: 1.5,
                             fontWeight: 700,

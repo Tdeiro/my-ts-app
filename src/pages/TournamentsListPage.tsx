@@ -33,10 +33,13 @@ import {
   getLoggedInUserId,
   hasCreatorAccess,
   getToken,
+  isPlayerRole,
 } from "../auth/tokens";
 import { UI_FEATURE_FLAGS } from "../config/featureFlags";
 import MockDataFlag from "../Components/Shared/MockDataFlag";
 import { designTokens } from "../Theme/designTokens";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
 
 type ApiEvent = {
   id: number;
@@ -51,9 +54,14 @@ type ApiEvent = {
   locationName?: string;
   startDate: string;
   status?: string;
+  subscriptionStatus?: string;
   entryFee?: number | string;
   currency?: string;
   isPublic?: boolean;
+};
+
+type DashboardApiResp = {
+  events?: ApiEvent[] | null;
 };
 
 type Tournament = {
@@ -69,6 +77,8 @@ type Tournament = {
   currency: string;
   status: "Open";
   isPublic: boolean;
+  apiStatus?: string;
+  subscriptionStatus?: string;
 };
 
 type TournamentDisplayMeta = {
@@ -106,7 +116,20 @@ function mapApiEvent(e: ApiEvent): Tournament {
     currency: (e.currency ?? "AUD").toUpperCase(),
     status: "Open",
     isPublic: e.isPublic ?? true,
+    apiStatus: String(e.status ?? "").toUpperCase(),
+    subscriptionStatus: String(e.subscriptionStatus ?? "").toUpperCase(),
   };
+}
+
+function isSubscribedLikeStatus(value?: string): boolean {
+  const status = String(value ?? "").trim().toUpperCase();
+  return [
+    "REGISTERED",
+    "SUBSCRIBED",
+    "CONFIRMED",
+    "ACTIVE",
+    "APPROVED",
+  ].includes(status);
 }
 
 function formatDate(value: string): string {
@@ -159,18 +182,43 @@ function statusChipSx() {
   };
 }
 
+function readSubscribedEventIds(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed
+        .map((item) => String(item))
+        .map((item) => item.trim())
+        .filter(Boolean),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export default function TournamentsListPage() {
   const navigate = useNavigate();
   const role = getLoggedInRole();
   const currentUserId = getLoggedInUserId();
   const canCreate = hasCreatorAccess(role);
+  const isPlayer = isPlayerRole(role);
 
   const [query, setQuery] = React.useState("");
   const [sportFilter, setSportFilter] = React.useState("All");
 
   const [items, setItems] = React.useState<Tournament[]>([]);
+  const [scopedItems, setScopedItems] = React.useState<Tournament[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [withdrawingById, setWithdrawingById] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [subscribedHintIds, setSubscribedHintIds] = React.useState<Set<string>>(
+    new Set(),
+  );
 
   const loadEvents = React.useCallback(async () => {
     setLoading(true);
@@ -189,6 +237,36 @@ export default function TournamentsListPage() {
     }
 
     try {
+      const dashboardRes = await fetch(`${API_URL}/dashboard`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const dashboardBody: DashboardApiResp | null = await dashboardRes
+        .json()
+        .catch(() => null);
+      if (dashboardRes.ok) {
+        const scopedRaw: ApiEvent[] = Array.isArray(dashboardBody?.events)
+          ? dashboardBody.events
+          : [];
+        const dashboardSubscribed = new Set(
+          scopedRaw
+            .filter((event) =>
+              isSubscribedLikeStatus(
+                String(event.subscriptionStatus ?? event.status ?? ""),
+              ),
+            )
+            .map((event) => String(event.id)),
+        );
+        const scopedMapped = scopedRaw
+          .filter((e) => e.eventType?.toUpperCase() === "TOURNAMENT")
+          .map(mapApiEvent)
+          .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
+        setScopedItems(scopedMapped);
+        setSubscribedHintIds(dashboardSubscribed);
+      } else {
+        setScopedItems([]);
+        setSubscribedHintIds(new Set());
+      }
+
       const res = await fetch("/events", {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -206,6 +284,15 @@ export default function TournamentsListPage() {
       }
 
       const raw: ApiEvent[] = Array.isArray(data) ? data : (data?.data ?? []);
+      const apiSubscribedIds = new Set(
+        raw
+          .filter((event) =>
+            isSubscribedLikeStatus(
+              String(event.subscriptionStatus ?? event.status ?? ""),
+            ),
+          )
+          .map((event) => String(event.id)),
+      );
       const mapped = raw
         .filter((e) => e.eventType?.toUpperCase() === "TOURNAMENT")
         .filter((e) => e.isPublic !== false)
@@ -217,9 +304,12 @@ export default function TournamentsListPage() {
         .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
 
       setItems(mapped);
+      setSubscribedHintIds((prev) => new Set([...prev, ...apiSubscribedIds]));
     } catch {
       setError("Network error loading tournaments.");
       setItems([]);
+      setScopedItems([]);
+      setSubscribedHintIds(new Set());
     } finally {
       setLoading(false);
     }
@@ -249,6 +339,96 @@ export default function TournamentsListPage() {
     return ["All", ...Array.from(s)];
   }, [items]);
 
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const mergedPersonalSource = React.useMemo(() => {
+    const byId = new Map<string, Tournament>();
+    [...items, ...scopedItems].forEach((item) => byId.set(String(item.id), item));
+    return Array.from(byId.values());
+  }, [items, scopedItems]);
+  const ownedItems = React.useMemo(
+    () =>
+      mergedPersonalSource.filter(
+        (t) => t.ownerId != null && t.ownerId === Number(currentUserId),
+      ),
+    [mergedPersonalSource, currentUserId],
+  );
+  const subscribedItems = React.useMemo(
+    () => {
+      const fromDashboard = scopedItems.filter(
+        (t) =>
+          !(t.ownerId != null && t.ownerId === Number(currentUserId)) &&
+          (!t.startDate || String(t.startDate).slice(0, 10) >= todayIso),
+      );
+
+      // Fallback: include tournaments known from invite subscriptions in local storage.
+      const subscribedIdSet = readSubscribedEventIds();
+      const fromStorage = mergedPersonalSource.filter(
+        (t) =>
+          subscribedIdSet.has(String(t.id)) &&
+          !(t.ownerId != null && t.ownerId === Number(currentUserId)) &&
+          (!t.startDate || String(t.startDate).slice(0, 10) >= todayIso),
+      );
+      const fromApiHints = mergedPersonalSource.filter(
+        (t) =>
+          subscribedHintIds.has(String(t.id)) &&
+          !(t.ownerId != null && t.ownerId === Number(currentUserId)) &&
+          (!t.startDate || String(t.startDate).slice(0, 10) >= todayIso),
+      );
+
+      const byId = new Map<string, Tournament>();
+      [...fromDashboard, ...fromStorage, ...fromApiHints].forEach((item) =>
+        byId.set(String(item.id), item),
+      );
+      return Array.from(byId.values());
+    },
+    [
+      scopedItems,
+      mergedPersonalSource,
+      currentUserId,
+      todayIso,
+      subscribedHintIds,
+    ],
+  );
+  const personalIds = React.useMemo(
+    () => new Set([...ownedItems, ...subscribedItems].map((item) => String(item.id))),
+    [ownedItems, subscribedItems],
+  );
+  const discoverItems = React.useMemo(
+    () => filtered.filter((item) => !personalIds.has(String(item.id))),
+    [filtered, personalIds],
+  );
+  const ownedSectionTitle = canCreate && !isPlayer ? "My Tournaments" : "My Events";
+
+  const handleWithdraw = React.useCallback(
+    async (eventId: string) => {
+      const token = getToken();
+      if (!token) return;
+      setWithdrawingById((prev) => ({ ...prev, [eventId]: true }));
+      setError(null);
+      try {
+        const res = await fetch(
+          `${API_URL}/events/${encodeURIComponent(eventId)}/subscriptions/me/withdraw`,
+          {
+            method: "PATCH",
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(
+            body?.message?.[0] || body?.error || "Could not withdraw.",
+          );
+        }
+        await loadEvents();
+      } catch (e: any) {
+        setError(e?.message || "Could not withdraw from event.");
+      } finally {
+        setWithdrawingById((prev) => ({ ...prev, [eventId]: false }));
+      }
+    },
+    [loadEvents],
+  );
+
   const hasMockMeta = UI_FEATURE_FLAGS.enableMockData;
 
   return (
@@ -273,10 +453,10 @@ export default function TournamentsListPage() {
         >
           <Box>
             <Typography variant="h2" sx={{ mb: 0.5, fontWeight: 900 }}>
-              Discover Tournaments
+              Tournaments
             </Typography>
             <Typography variant="body1" color="text.secondary">
-              Browse and register for upcoming beach volleyball tournaments near you.
+              Manage your events, see upcoming registrations, and discover public tournaments.
             </Typography>
           </Box>
           {canCreate ? (
@@ -340,6 +520,162 @@ export default function TournamentsListPage() {
           </Alert>
         )}
 
+        {ownedItems.length > 0 ? (
+          <Stack sx={{ mb: 3 }}>
+            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.25 }}>
+              <TrendingUpRoundedIcon sx={{ color: designTokens.orange[600], fontSize: 30 }} />
+              <Box>
+                <Typography variant="h4" sx={{ fontWeight: 900, lineHeight: 1.1 }}>
+                  {ownedSectionTitle}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Events you created.
+                </Typography>
+              </Box>
+            </Stack>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                gap: 1.5,
+              }}
+            >
+              {ownedItems.map((t) => {
+                const status = statusChipSx();
+                const meta = deriveDisplayMeta(t);
+                const spotPctUsed =
+                  ((meta.totalSpots - meta.spotsLeft) / meta.totalSpots) * 100;
+                return (
+                  <Card key={`owned-${t.id}`} sx={{ borderRadius: 2.5, overflow: "hidden" }}>
+                    <CardContent sx={{ p: 2 }}>
+                      <Stack direction="row" spacing={1.5} alignItems="flex-start" sx={{ mb: 1.25 }}>
+                        <Box sx={{ width: 54, height: 54, borderRadius: 1.5, bgcolor: designTokens.orange[500], color: "#fff", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                          <EmojiEventsRoundedIcon />
+                        </Box>
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
+                            <Typography sx={{ fontWeight: 900, fontSize: 18, lineHeight: 1.2 }}>{t.name}</Typography>
+                            <Chip size="small" label={status.label} variant={status.variant} sx={status.sx} />
+                          </Stack>
+                          <Stack spacing={0.5}>
+                            <MetaRow icon={<LocationOnRoundedIcon fontSize="small" />} text={t.locationName} color={designTokens.orange[600]} />
+                            <MetaRow icon={<CalendarMonthRoundedIcon fontSize="small" />} text={formatDate(t.startDate)} color={designTokens.orange[600]} />
+                            <MetaRow icon={<AccessTimeRoundedIcon fontSize="small" />} text={meta.timeLabel} color={designTokens.orange[600]} />
+                          </Stack>
+                        </Box>
+                      </Stack>
+                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1.25 }}>
+                        {[t.sport, t.format, t.level].map((tag) => (
+                          <Chip key={`owned-${t.id}-${tag}`} size="small" label={tag} sx={{ bgcolor: designTokens.orange[50], border: `1px solid ${designTokens.orange[200]}`, color: designTokens.orange[700] }} />
+                        ))}
+                      </Stack>
+                      <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: designTokens.gray[50], mb: 1 }}>
+                        <Stack direction="row" justifyContent="space-between" spacing={1.25}>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Entry Fee</Typography>
+                            <Typography sx={{ fontWeight: 900 }}>{t.entryFee} {t.currency}</Typography>
+                          </Box>
+                          <Box>
+                            <Typography variant="caption" color="text.secondary">Spots Available</Typography>
+                            <Typography sx={{ fontWeight: 900 }}>{meta.spotsLeft}/{meta.totalSpots}</Typography>
+                          </Box>
+                        </Stack>
+                      </Box>
+                      <Box sx={{ mb: 1.5 }}>
+                        <LinearProgress variant="determinate" value={Math.max(2, Math.min(100, spotPctUsed))} color={spotPctUsed > 80 ? "error" : spotPctUsed > 60 ? "warning" : "success"} />
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+                          Registration closes {formatDateShort(meta.registrationDeadline)}
+                        </Typography>
+                      </Box>
+                      <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                        <Button variant="outlined" fullWidth onClick={() => navigate(`/tournaments/${t.id}/edit`)} sx={{ borderRadius: 2 }}>
+                          Edit
+                        </Button>
+                        <Button
+                          variant="contained"
+                          fullWidth
+                          onClick={() => navigate(`/tournaments/${t.id}/setup`)}
+                          endIcon={<ChevronRightRoundedIcon />}
+                          sx={{ borderRadius: 2, background: designTokens.orange[500], "&:hover": { background: designTokens.orange[600] } }}
+                        >
+                          Manage Tournament
+                        </Button>
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </Box>
+          </Stack>
+        ) : null}
+
+        {isPlayer && subscribedItems.length > 0 ? (
+          <Stack sx={{ mb: 3 }}>
+            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.25 }}>
+              <CalendarMonthRoundedIcon sx={{ color: "primary.main", fontSize: 30 }} />
+              <Box>
+                <Typography variant="h4" sx={{ fontWeight: 900, lineHeight: 1.1 }}>
+                  My Upcoming Events
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Tournaments you are subscribed to.
+                </Typography>
+              </Box>
+            </Stack>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                gap: 1.5,
+              }}
+            >
+              {subscribedItems.map((t) => {
+                const status = statusChipSx();
+                const meta = deriveDisplayMeta(t);
+                return (
+                  <Card key={`subscribed-${t.id}`} sx={{ borderRadius: 2.5, overflow: "hidden" }}>
+                    <CardContent sx={{ p: 2 }}>
+                      <Stack direction="row" spacing={1.5} alignItems="flex-start" sx={{ mb: 1.25 }}>
+                        <Box sx={{ width: 54, height: 54, borderRadius: 1.5, bgcolor: designTokens.purple[600], color: "#fff", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                          <EmojiEventsRoundedIcon />
+                        </Box>
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
+                            <Typography sx={{ fontWeight: 900, fontSize: 18, lineHeight: 1.2 }}>{t.name}</Typography>
+                            <Chip size="small" label={status.label} variant={status.variant} sx={status.sx} />
+                          </Stack>
+                          <Stack spacing={0.5}>
+                            <MetaRow icon={<LocationOnRoundedIcon fontSize="small" />} text={t.locationName} color={designTokens.purple[600]} />
+                            <MetaRow icon={<CalendarMonthRoundedIcon fontSize="small" />} text={formatDate(t.startDate)} color={designTokens.purple[600]} />
+                            <MetaRow icon={<AccessTimeRoundedIcon fontSize="small" />} text={meta.timeLabel} color={designTokens.purple[600]} />
+                          </Stack>
+                        </Box>
+                      </Stack>
+                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1.25 }}>
+                        {[t.sport, t.format, t.level].map((tag) => (
+                          <Chip key={`subscribed-${t.id}-${tag}`} size="small" label={tag} sx={{ bgcolor: designTokens.purple[50], border: `1px solid ${designTokens.purple[200]}`, color: designTokens.purple[700] }} />
+                        ))}
+                      </Stack>
+                      <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          fullWidth
+                          disabled={Boolean(withdrawingById[t.id])}
+                          onClick={() => void handleWithdraw(t.id)}
+                          sx={{ borderRadius: 2 }}
+                        >
+                          {withdrawingById[t.id] ? "Withdrawing..." : "Withdraw"}
+                        </Button>
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </Box>
+          </Stack>
+        ) : null}
+
         <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
           <TrendingUpRoundedIcon sx={{ color: "success.main", fontSize: 34 }} />
           <Box>
@@ -349,7 +685,7 @@ export default function TournamentsListPage() {
             <Typography variant="body1" color="text.secondary">
               {loading
                 ? "Loading tournaments..."
-                : `${filtered.length} tournament${filtered.length === 1 ? "" : "s"} available`}
+                : `${discoverItems.length} tournament${discoverItems.length === 1 ? "" : "s"} available`}
             </Typography>
           </Box>
         </Stack>
@@ -358,7 +694,7 @@ export default function TournamentsListPage() {
           <Paper sx={{ p: 5, textAlign: "center" }}>
             <CircularProgress />
           </Paper>
-        ) : filtered.length === 0 ? (
+        ) : discoverItems.length === 0 ? (
           <Paper sx={{ p: 5, textAlign: "center" }}>
             <SearchRoundedIcon sx={{ fontSize: 56, color: "text.disabled", mb: 1 }} />
             <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>
@@ -374,7 +710,7 @@ export default function TournamentsListPage() {
               gap: 1.5,
             }}
           >
-            {filtered.map((t) => {
+            {discoverItems.map((t) => {
               const isOwner = t.ownerId != null && t.ownerId === Number(currentUserId);
               const status = statusChipSx();
               const meta = deriveDisplayMeta(t);
@@ -408,9 +744,9 @@ export default function TournamentsListPage() {
                         </Stack>
 
                         <Stack spacing={0.5}>
-                          <MetaRow icon={<LocationOnRoundedIcon fontSize="small" />} text={t.locationName} />
-                          <MetaRow icon={<CalendarMonthRoundedIcon fontSize="small" />} text={formatDate(t.startDate)} />
-                          <MetaRow icon={<AccessTimeRoundedIcon fontSize="small" />} text={meta.timeLabel} />
+                            <MetaRow icon={<LocationOnRoundedIcon fontSize="small" />} text={t.locationName} />
+                            <MetaRow icon={<CalendarMonthRoundedIcon fontSize="small" />} text={formatDate(t.startDate)} />
+                            <MetaRow icon={<AccessTimeRoundedIcon fontSize="small" />} text={meta.timeLabel} />
                         </Stack>
 
                         {hasMockMeta ? (
@@ -535,10 +871,18 @@ export default function TournamentsListPage() {
   );
 }
 
-function MetaRow({ icon, text }: { icon: React.ReactNode; text: string }) {
+function MetaRow({
+  icon,
+  text,
+  color = designTokens.green[600],
+}: {
+  icon: React.ReactNode;
+  text: string;
+  color?: string;
+}) {
   return (
     <Stack direction="row" spacing={0.75} alignItems="center">
-      <Box sx={{ color: designTokens.green[600], display: "grid", placeItems: "center" }}>{icon}</Box>
+      <Box sx={{ color, display: "grid", placeItems: "center" }}>{icon}</Box>
       <Typography variant="body2" color="text.secondary" sx={{ minWidth: 0 }}>
         {text}
       </Typography>

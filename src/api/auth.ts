@@ -7,8 +7,6 @@ export type SignUpDto = {
   email: string;
   fullName: string;
   phone?: string;
-  roleIds: number[];
-  roleId?: number;
   password: string;
   billingInfo?: boolean;
 };

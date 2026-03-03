@@ -211,8 +211,8 @@ export default function Dashboard() {
   const token = getToken(); // pp_token
   const user = token ? parseJwt(token) : null;
   const role = getLoggedInRole();
-  const isParticipant = isParticipantRole(role);
   const canCreate = hasCreatorAccess(role);
+  const isParticipant = isParticipantRole(role) && !canCreate;
 
   const [state, setState] = React.useState<DashboardState>({
     loading: false,

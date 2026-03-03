@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  MenuItem,
   Stack,
   TextField,
   Typography,
@@ -35,6 +36,8 @@ type Props = {
   teamsPerGroup: number;
   qualifiersPerGroup: number;
   entryLabel?: string;
+  availableEntries?: Array<{ value: string; label: string }>;
+  resolveEntryLabel?: (value: string) => string;
   structureMode?: "groups_knockout" | "knockout_only" | "group_phase_only" | "swiss" | "";
   onGroupsChange: (groups: GroupBucket[]) => void;
   onBracketChange: (matches: BuilderBracketMatch[]) => void;
@@ -144,6 +147,8 @@ export default function TournamentPhaseBuilder({
   teamsPerGroup,
   qualifiersPerGroup,
   entryLabel = "Team",
+  availableEntries = [],
+  resolveEntryLabel,
   structureMode = "",
   onGroupsChange,
   onBracketChange,
@@ -262,6 +267,32 @@ export default function TournamentPhaseBuilder({
     }
     setSlotOpen(false);
   };
+
+  const renderEntry = React.useCallback(
+    (value: string) => {
+      const normalized = String(value ?? "");
+      if (!normalized.trim()) return "";
+      if (resolveEntryLabel) return resolveEntryLabel(normalized);
+      return normalized;
+    },
+    [resolveEntryLabel],
+  );
+
+  const availableGroupEntriesForSlot = React.useMemo(() => {
+    if (!slotTarget || slotTarget.kind !== "group") return availableEntries;
+    const currentValue =
+      groups.find((g) => g.id === slotTarget.id)?.participants[slotTarget.index ?? 0] ??
+      "";
+    const usedByOtherSlots = new Set(
+      groups
+        .flatMap((g) => g.participants ?? [])
+        .map((v) => String(v).trim())
+        .filter((v) => v && v !== String(currentValue).trim()),
+    );
+    return availableEntries.filter(
+      (entry) => !usedByOtherSlots.has(String(entry.value).trim()),
+    );
+  }, [availableEntries, groups, slotTarget]);
 
   const addGroup = () => {
     const next = [
@@ -414,7 +445,9 @@ export default function TournamentPhaseBuilder({
                             }}
                           >
                             <Typography variant="body2" color={group.participants[idx] ? "text.primary" : "text.secondary"}>
-                              {group.participants[idx] || "EMPTY SPOT"}
+                              {group.participants[idx]
+                                ? renderEntry(group.participants[idx] || "")
+                                : "EMPTY SPOT"}
                             </Typography>
                             <Stack direction="row" spacing={0.25}>
                               <IconButton
@@ -556,7 +589,7 @@ export default function TournamentPhaseBuilder({
                                       }}
                                     >
                                       <Typography variant="body2" color={match.home ? "text.primary" : "text.secondary"}>
-                                        {match.home || "EMPTY SPOT"}
+                                        {match.home ? renderEntry(match.home) : "EMPTY SPOT"}
                                       </Typography>
                                       <IconButton size="small" onClick={() => openSlotEditor({ kind: "match", id: match.id, side: "home" }, match.home)}>
                                         <EditOutlinedIcon fontSize="small" />
@@ -575,7 +608,7 @@ export default function TournamentPhaseBuilder({
                                       }}
                                     >
                                       <Typography variant="body2" color={match.away ? "text.primary" : "text.secondary"}>
-                                        {match.away || "EMPTY SPOT"}
+                                        {match.away ? renderEntry(match.away) : "EMPTY SPOT"}
                                       </Typography>
                                       <IconButton size="small" onClick={() => openSlotEditor({ kind: "match", id: match.id, side: "away" }, match.away)}>
                                         <EditOutlinedIcon fontSize="small" />
@@ -629,14 +662,38 @@ export default function TournamentPhaseBuilder({
       <Dialog open={slotOpen} onClose={() => setSlotOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>Edit Slot</DialogTitle>
         <DialogContent>
-          <TextField
-            autoFocus
-            fullWidth
-            value={slotValue}
-            onChange={(e) => setSlotValue(e.target.value)}
-            label={`${entryLabel} / Seed`}
-            sx={{ mt: 1 }}
-          />
+          {slotTarget?.kind === "group" ? (
+            <TextField
+              autoFocus
+              fullWidth
+              select
+              value={slotValue}
+              onChange={(e) => setSlotValue(e.target.value)}
+              label={`Select ${entryLabel}`}
+              helperText={
+                availableGroupEntriesForSlot.length === 0
+                  ? `No available ${entryLabel.toLowerCase()} to assign.`
+                  : undefined
+              }
+              sx={{ mt: 1 }}
+            >
+              <MenuItem value="">-- Empty --</MenuItem>
+              {availableGroupEntriesForSlot.map((entry) => (
+                <MenuItem key={entry.value} value={entry.value}>
+                  {entry.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          ) : (
+            <TextField
+              autoFocus
+              fullWidth
+              value={slotValue}
+              onChange={(e) => setSlotValue(e.target.value)}
+              label={`${entryLabel} / Seed`}
+              sx={{ mt: 1 }}
+            />
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSlotOpen(false)}>Cancel</Button>

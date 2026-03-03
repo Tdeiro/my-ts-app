@@ -35,6 +35,7 @@ import { UI_FEATURE_FLAGS } from "../config/featureFlags";
 import MockDataFlag from "../Components/Shared/MockDataFlag";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
 
 type ApiEvent = {
   id: number | string;
@@ -57,6 +58,8 @@ type ApiEvent = {
 type DashboardApiResp = {
   events?: ApiEvent[] | null;
 };
+
+type EventsListResp = ApiEvent[] | null;
 
 type CategoryDetail = {
   id: number;
@@ -149,6 +152,35 @@ function derivePreviewCategories(eventId: number): string[] {
     ["Advanced - Mixed", "Beginner - Men"],
   ];
   return presets[Math.abs(eventId) % presets.length];
+}
+
+function readSubscribedEventIds(): number[] {
+  try {
+    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item) && item > 0);
+  } catch {
+    return [];
+  }
+}
+
+function dedupeEventsById(events: ApiEvent[]): ApiEvent[] {
+  const byId = new Map<number, ApiEvent>();
+  events.forEach((event) => {
+    const id = Number(event.id);
+    if (!Number.isFinite(id)) return;
+    const previous = byId.get(id);
+    byId.set(id, {
+      ...(previous ?? {}),
+      ...event,
+      id,
+    });
+  });
+  return Array.from(byId.values());
 }
 
 export default function UpcomingEventsPage() {
@@ -273,8 +305,56 @@ export default function UpcomingEventsPage() {
         }
 
         const today = toDateOnly(new Date().toISOString());
-        const rawEvents = Array.isArray(body?.events) ? body.events : [];
-        const upcomingEvents = rawEvents
+        const dashboardEvents = Array.isArray(body?.events) ? body.events : [];
+        let mergedEvents: ApiEvent[] = [...dashboardEvents];
+
+        // Owner-scoped events endpoint (if available for this role)
+        try {
+          const eventsRes = await fetch(`${API_URL}/events`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const eventsBody: EventsListResp = await eventsRes.json().catch(() => null);
+          if (eventsRes.ok && Array.isArray(eventsBody)) {
+            mergedEvents = dedupeEventsById([...mergedEvents, ...eventsBody]);
+          }
+        } catch {
+          // Ignore; dashboard endpoint remains the source of truth.
+        }
+
+        // Ensure recently subscribed tournaments (from invite flow) are visible.
+        const subscribedIds = readSubscribedEventIds();
+        const knownIds = new Set(
+          mergedEvents
+            .map((event) => Number(event.id))
+            .filter((id) => Number.isFinite(id)),
+        );
+        const missingIds = subscribedIds.filter((id) => !knownIds.has(id));
+        if (missingIds.length > 0) {
+          const fetched = await Promise.all(
+            missingIds.map(async (eventId) => {
+              try {
+                const res = await fetch(`${API_URL}/events/${eventId}`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                const body = (await res.json().catch(() => null)) as ApiEvent | null;
+                if (!res.ok || !body) return null;
+                return {
+                  ...body,
+                  id: Number(body.id ?? eventId),
+                  subscriptionStatus: body.subscriptionStatus ?? "REGISTERED",
+                } as ApiEvent;
+              } catch {
+                return null;
+              }
+            }),
+          );
+          mergedEvents = dedupeEventsById([
+            ...mergedEvents,
+            ...fetched.filter((item): item is ApiEvent => Boolean(item)),
+          ]);
+        }
+
+        const upcomingEvents = mergedEvents
           .filter(
             (event) =>
               String(event.eventType ?? "").toUpperCase() === "TOURNAMENT",

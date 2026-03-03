@@ -1,18 +1,14 @@
 import * as React from "react";
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
+  ButtonBase,
   Card,
-  CardActionArea,
-  CardContent,
   Chip,
   CircularProgress,
-  Container,
   Collapse,
-  IconButton,
-  Paper,
+  Container,
   Stack,
   Tab,
   Tabs,
@@ -23,37 +19,32 @@ import LocationOnOutlinedIcon from "@mui/icons-material/LocationOnOutlined";
 import CalendarMonthOutlinedIcon from "@mui/icons-material/CalendarMonthOutlined";
 import AccessTimeOutlinedIcon from "@mui/icons-material/AccessTimeOutlined";
 import AttachMoneyOutlinedIcon from "@mui/icons-material/AttachMoneyOutlined";
+import PeopleAltOutlinedIcon from "@mui/icons-material/PeopleAltOutlined";
+import EmojiEventsOutlinedIcon from "@mui/icons-material/EmojiEventsOutlined";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
+import ExpandLessRoundedIcon from "@mui/icons-material/ExpandLessRounded";
+import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
+import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 
-type EventSubscriptionDto = {
-  eventId: number;
-  userId: number;
-  userFullName: string;
-  userEmail: string;
-  role: string;
-  status: string;
-  source: string;
-  joinedAt: string;
-};
-
-type InvitedTournamentCategoryDto = {
-  id: number;
-  name: string;
+type EventDetailsCategoryDto = {
+  id: number | string;
+  name?: string;
   level?: string;
-  minAge?: number;
-  maxAge?: number;
+  minAge?: number | null;
+  maxAge?: number | null;
   gender?: string;
   price?: number | string;
-  selected?: boolean;
 };
 
-type InvitedTournamentInfoDto = {
-  eventId: number;
-  name: string;
+type EventDetailsDto = {
+  id: number | string;
+  name?: string;
   timezone?: string;
+  locationName?: string;
+  address?: string;
   startDate?: string;
   endDate?: string;
   startTime?: string;
@@ -62,39 +53,55 @@ type InvitedTournamentInfoDto = {
   entryFee?: number | string;
   currency?: string;
   tournamentStage?: string;
-  categories: InvitedTournamentCategoryDto[];
+  categories?: EventDetailsCategoryDto[];
 };
 
-type SubscriptionCategorySelectionDto = {
+const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
+
+type SubscribeMePayload = {
   eventId: number;
-  userId: number;
-  currency?: string;
-  entryFee?: number | string;
-  selectedCount: number;
-  totalAmount?: number | string;
-  selectedCategories: InvitedTournamentCategoryDto[];
+  categories: Array<{
+    id: number;
+    suggestedPlayer?: string;
+    note?: string;
+  }>;
 };
 
-type SelectedCategoryDto = {
-  id: number;
-  name?: string;
-  partnerName?: string | null;
-  partnerUserId?: number | null;
-  partnerNote?: string | null;
-  teamFormat?: string | null;
-  isDoubles?: boolean | null;
+type Category = {
+  id: string;
+  name: string;
+  level: string;
+  gender: "Men" | "Women" | "Mixed";
+  format: "Singles" | "Doubles" | "Mixed";
+  tabLabel: string;
+  optionLabel: string;
+  selectionLabel: string;
+  minAge: string;
+  maxAge: string;
+  fee: number;
 };
 
-type SelectedCategoriesResponse = {
-  selectedCategories?: SelectedCategoryDto[];
-};
-
-type PartnerPref = {
+type SelectedCategory = Category & {
   partnerName: string;
-  partnerUserId: number | null;
   partnerNote: string;
-  teamFormat: string;
-  isDoubles: boolean;
+};
+
+type InviteUiModel = {
+  eventId: number;
+  name: string;
+  timezone: string;
+  location: string;
+  address: string;
+  dateLabel: string;
+  dateMeta: string;
+  timeLabel: string;
+  timeMeta: string;
+  feeLabel: string;
+  feeMeta: string;
+  deadlineLabel: string;
+  deadlineMeta: string;
+  stage: string;
+  currency: string;
 };
 
 function parseInviteTournamentId(raw: string | null): number | null {
@@ -102,6 +109,25 @@ function parseInviteTournamentId(raw: string | null): number | null {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return parsed;
+}
+
+function rememberSubscribedEvent(eventId: number) {
+  try {
+    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const current: number[] = Array.isArray(parsed)
+      ? parsed
+          .map((item) => Number(item))
+          .filter((item) => Number.isFinite(item) && item > 0)
+      : [];
+    const next = Array.from(new Set([eventId, ...current])).slice(0, 50);
+    window.localStorage.setItem(
+      UPCOMING_SUBSCRIBED_EVENTS_KEY,
+      JSON.stringify(next),
+    );
+  } catch {
+    // Ignore storage errors in private browsing or locked environments.
+  }
 }
 
 function getErrorMessage(err: unknown, fallback: string): string {
@@ -113,676 +139,572 @@ function getErrorMessage(err: unknown, fallback: string): string {
   );
 }
 
-function formatAgeRange(category: InvitedTournamentCategoryDto): string {
-  if (
-    typeof category.minAge === "number" &&
-    typeof category.maxAge === "number"
-  ) {
-    return `${category.minAge}-${category.maxAge}`;
-  }
-  if (typeof category.minAge === "number") {
-    return `${category.minAge}+`;
-  }
-  if (typeof category.maxAge === "number") {
-    return `Up to ${category.maxAge}`;
-  }
+function normalizeGender(value?: string): "Men" | "Women" | "Mixed" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized.includes("women") || normalized.includes("female")) return "Women";
+  if (normalized.includes("men") || normalized.includes("male")) return "Men";
+  return "Mixed";
+}
+
+function normalizeLevel(value?: string): string {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return "Open";
+  if (normalized === "all levels") return "Open";
+  return normalized
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function parseFormatFromName(name?: string): "Singles" | "Doubles" | "Mixed" {
+  const text = String(name ?? "").toLowerCase();
+  if (text.includes("double")) return "Doubles";
+  if (text.includes("single")) return "Singles";
+  if (text.includes("mixed")) return "Mixed";
+  return "Singles";
+}
+
+function formatDateRange(start?: string, end?: string): string {
+  if (!start) return "Date TBD";
+  if (!end || end === start) return start;
+  return `${start} to ${end}`;
+}
+
+function categoryAgeLabel(category: Category): string {
+  if (category.minAge && category.maxAge) return `${category.minAge}-${category.maxAge}`;
+  if (category.minAge) return `${category.minAge}+`;
+  if (category.maxAge) return `Up to ${category.maxAge}`;
   return "All ages";
 }
 
-function formatMoney(value: number | string | undefined, currency: string | undefined): string {
-  const amount = Number(value ?? 0);
-  const cleanCurrency = (currency || "AUD").toUpperCase();
-  if (!Number.isFinite(amount)) return `0 ${cleanCurrency}`;
-  return `${amount} ${cleanCurrency}`;
+function categorySubtitle(category: Category): string {
+  if (category.format === "Mixed") return "Women and Men";
+  return categoryAgeLabel(category);
 }
 
-function getCategoryPrice(
-  category: InvitedTournamentCategoryDto,
-  fallbackFee?: number | string,
-): number {
-  const fallback = Number(fallbackFee ?? 0);
-  if (Number.isFinite(fallback) && fallback >= 0) {
-    return fallback;
-  }
+function daysLeftLabel(deadline?: string): string {
+  if (!deadline) return "N/A";
+  const target = new Date(`${deadline}T00:00:00`);
+  if (Number.isNaN(target.getTime())) return "N/A";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffMs = target.getTime() - today.getTime();
+  const days = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+  return `${days} day${days === 1 ? "" : "s"} left`;
+}
 
-  const raw = category as InvitedTournamentCategoryDto & {
-    entryFee?: number | string;
-    fee?: number | string;
-    categoryFee?: number | string;
-    pricePerCategory?: number | string;
+function mapEventToUi(event: EventDetailsDto): InviteUiModel {
+  const currency = String(event.currency || "AUD").toUpperCase();
+  const entryFee = Number(event.entryFee ?? 0);
+  return {
+    eventId: Number(event.id),
+    name: String(event.name ?? "Tournament"),
+    timezone: String(event.timezone ?? "Australia/Sydney"),
+    location: String(event.locationName ?? "Location TBD"),
+    address: String(event.address ?? "Address not provided"),
+    dateLabel: formatDateRange(event.startDate, event.endDate),
+    dateMeta: event.startDate && event.endDate && event.startDate !== event.endDate ? "Multiple days" : "Single Day",
+    timeLabel: `${event.startTime ?? "-"}${event.endTime ? ` - ${event.endTime}` : ""}`,
+    timeMeta: "Scheduled time",
+    feeLabel: `${Number.isFinite(entryFee) ? entryFee : 0} ${currency}`,
+    feeMeta: "per category",
+    deadlineLabel: event.registrationDeadline || "Not set",
+    deadlineMeta: "Registration deadline",
+    stage: String(event.tournamentStage ?? "INVITE"),
+    currency,
   };
-  const candidates = [
-    raw.price,
-    raw.entryFee,
-    raw.fee,
-    raw.categoryFee,
-    raw.pricePerCategory,
-  ];
-  for (const candidate of candidates) {
-    const value = Number(candidate);
-    if (Number.isFinite(value) && value >= 0) {
-      return value;
+}
+
+function mapEventCategories(event: EventDetailsDto): Category[] {
+  const fallbackFee = Number(event.entryFee ?? 0);
+  const categories = Array.isArray(event.categories) ? event.categories : [];
+  const deduped: Category[] = [];
+  const seenMixedKeys = new Set<string>();
+
+  categories.forEach((category) => {
+    const price = Number(category.price);
+    const format = parseFormatFromName(category.name);
+    const gender = normalizeGender(category.gender);
+    const level = normalizeLevel(category.level);
+    const fee = Number.isFinite(price)
+      ? Math.max(0, price)
+      : Number.isFinite(fallbackFee)
+        ? Math.max(0, fallbackFee)
+        : 0;
+
+    const mapped: Category = {
+      id: String(category.id),
+      name: String(category.name ?? `Category #${category.id}`),
+      level,
+      gender: format === "Mixed" ? "Mixed" : gender,
+      format,
+      tabLabel: level,
+      optionLabel: format === "Mixed" ? "Mixed" : `${gender} ${format}`,
+      selectionLabel: format === "Mixed" ? `${level} Mixed` : `${gender} ${level} ${format}`,
+      minAge: typeof category.minAge === "number" ? String(category.minAge) : "",
+      maxAge: typeof category.maxAge === "number" ? String(category.maxAge) : "",
+      fee,
+    };
+
+    // Backend can return duplicated mixed variants by gender; keep a single mixed card per level.
+    if (mapped.format === "Mixed") {
+      const mixedKey = `${mapped.tabLabel}::${mapped.format}`;
+      if (seenMixedKeys.has(mixedKey)) return;
+      seenMixedKeys.add(mixedKey);
     }
-  }
-  return 0;
+
+    deduped.push(mapped);
+  });
+
+  return deduped;
 }
 
-type CategoryTileProps = {
-  category: InvitedTournamentCategoryDto;
-  selected: boolean;
-  currency?: string;
-  fallbackFee?: number | string;
-  onToggle: (id: number) => void;
-};
+function TournamentInviteContent({
+  tournament,
+  categories,
+  readOnly,
+  onBack,
+  onConfirm,
+  submitting,
+}: {
+  tournament: InviteUiModel;
+  categories: Category[];
+  readOnly: boolean;
+  onBack: () => void;
+  onConfirm: (selected: SelectedCategory[]) => void;
+  submitting: boolean;
+}) {
+  const availableTabs = React.useMemo<string[]>(() => {
+    const set = new Set(categories.map((c) => c.tabLabel));
+    const tabOrder = ["Beginner", "Intermediate", "Advanced", "Open"];
+    const known = tabOrder.filter((item) => set.has(item));
+    const unknown = Array.from(set).filter((item) => !tabOrder.includes(item)).sort();
+    const ordered = [...known, ...unknown];
+    return ordered.length > 0 ? ordered : ["Open"];
+  }, [categories]);
 
-function CategoryTile({
-  category,
-  selected,
-  currency,
-  fallbackFee,
-  onToggle,
-}: CategoryTileProps) {
-  return (
-    <Card
-      variant="outlined"
-      sx={{
-        borderRadius: 3,
-        borderColor: selected ? "primary.main" : "divider",
-        bgcolor: selected ? "rgba(139,92,246,0.08)" : "background.paper",
-        boxShadow: selected ? "0 8px 24px rgba(139,92,246,0.18)" : "none",
-        transition: "all 160ms ease",
-        position: "relative",
-        "&:hover": {
-          boxShadow: "0 6px 18px rgba(15,23,42,0.10)",
-          borderColor: selected ? "primary.main" : "rgba(139,92,246,0.35)",
-        },
-      }}
-    >
-      <CardActionArea onClick={() => onToggle(category.id)} sx={{ borderRadius: 3 }}>
-        <CardContent sx={{ p: 2 }}>
-          {selected ? (
-            <CheckCircleRoundedIcon
-              sx={{
-                position: "absolute",
-                top: 10,
-                right: 10,
-                color: "primary.main",
-                fontSize: 22,
-              }}
-            />
-          ) : null}
-          <Stack spacing={1}>
-            <Typography sx={{ fontWeight: 800 }}>{category.name || "Category"}</Typography>
-            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-              <Chip size="small" label={category.level || "Open"} />
-              <Chip size="small" variant="outlined" label={formatAgeRange(category)} />
-            </Stack>
-            <Typography variant="body2" color="text.secondary">
-              Fee: {formatMoney(getCategoryPrice(category, fallbackFee), currency)}
-            </Typography>
-          </Stack>
-        </CardContent>
-      </CardActionArea>
-    </Card>
-  );
-}
+  const [activeTab, setActiveTab] = React.useState<string>("");
+  const [selectedCategories, setSelectedCategories] = React.useState<SelectedCategory[]>([]);
+  const [expandedCategoryId, setExpandedCategoryId] = React.useState<string | null>(null);
 
-type SelectedCategoryRowProps = {
-  category: InvitedTournamentCategoryDto;
-  currency?: string;
-  fallbackFee?: number | string;
-  pref: PartnerPref;
-  expanded: boolean;
-  partnerOptions: string[];
-  onToggleExpand: () => void;
-  onPartnerNameChange: (value: string) => void;
-  onPartnerNoteChange: (value: string) => void;
-};
+  React.useEffect(() => {
+    if (!availableTabs.includes(activeTab)) setActiveTab(availableTabs[0]);
+  }, [activeTab, availableTabs]);
 
-function SelectedCategoryRow({
-  category,
-  currency,
-  fallbackFee,
-  pref,
-  expanded,
-  partnerOptions,
-  onToggleExpand,
-  onPartnerNameChange,
-  onPartnerNoteChange,
-}: SelectedCategoryRowProps) {
-  return (
-    <Card variant="outlined" sx={{ borderRadius: 2.5 }}>
-      <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={1}
-          justifyContent="space-between"
-          alignItems={{ xs: "flex-start", sm: "center" }}
-        >
-          <Stack spacing={0.5}>
-            <Typography sx={{ fontWeight: 700 }}>
-              {category.name || "Category"} · {category.gender || "Open"}
-            </Typography>
-            <Chip
-              size="small"
-              variant="outlined"
-              label={`Fee ${formatMoney(getCategoryPrice(category, fallbackFee), currency)}`}
-              sx={{ width: "fit-content" }}
-            />
-          </Stack>
-          <Stack direction="row" spacing={0.5} alignItems="center">
-            <Typography variant="body2" color="text.secondary">
-              Partner preference (optional)
-            </Typography>
-            <IconButton
-              size="small"
-              onClick={onToggleExpand}
-              sx={{
-                transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
-                transition: "transform 160ms ease",
-              }}
-            >
-              <ExpandMoreRoundedIcon fontSize="small" />
-            </IconButton>
-          </Stack>
-        </Stack>
+  React.useEffect(() => {
+    setSelectedCategories([]);
+    setExpandedCategoryId(null);
+  }, [tournament.eventId]);
 
-        <Collapse in={expanded}>
-          <Stack spacing={1} sx={{ mt: 1.25 }}>
-            <Autocomplete
-              freeSolo
-              options={partnerOptions}
-              value={pref.partnerName}
-              onInputChange={(_, value) => onPartnerNameChange(value)}
-              renderInput={(params) => (
-                <TextField {...params} size="small" label="Partner name" />
-              )}
-            />
-            <TextField
-              size="small"
-              label="Partner note (optional)"
-              value={pref.partnerNote}
-              onChange={(e) => onPartnerNoteChange(e.target.value)}
-              fullWidth
-            />
-          </Stack>
-        </Collapse>
-      </CardContent>
-    </Card>
-  ); 
-}
+  const visibleCategories = categories.filter((c) => c.tabLabel === activeTab);
+  const womenCategories = visibleCategories.filter((c) => c.gender === "Women" && c.format !== "Mixed");
+  const menCategories = visibleCategories.filter((c) => c.gender === "Men" && c.format !== "Mixed");
+  const mixedCategories = visibleCategories.filter((c) => c.format === "Mixed");
 
-type InvitationHeroProps = {
-  tournamentInfo: InvitedTournamentInfoDto;
-  playerName?: string | null;
-};
+  const toggleCategory = (category: Category) => {
+    const exists = selectedCategories.some((c) => c.id === category.id);
+    if (exists) {
+      setSelectedCategories((prev) => prev.filter((c) => c.id !== category.id));
+      if (expandedCategoryId === category.id) setExpandedCategoryId(null);
+      return;
+    }
+    setSelectedCategories((prev) => [
+      ...prev,
+      { ...category, partnerName: "", partnerNote: "" },
+    ]);
+    setExpandedCategoryId(category.id);
+  };
 
-function TicketCard({ children }: { children: React.ReactNode }) {
-  return (
-    <Paper
-      sx={(theme) => ({
-        position: "relative",
-        overflow: "visible",
-        borderRadius: 2.5,
-        border: "1px solid",
-        borderColor: "divider",
-        boxShadow: 2,
-        bgcolor: "background.paper",
-        "&::before": {
-          content: '""',
-          position: "absolute",
-          width: 18,
-          height: 18,
-          borderRadius: "50%",
-          left: -9,
-          top: "50%",
-          transform: "translateY(-50%)",
-          bgcolor: "background.default",
-          boxShadow: `inset -1px 0 0 ${theme.palette.divider}`,
-        },
-        "&::after": {
-          content: '""',
-          position: "absolute",
-          width: 18,
-          height: 18,
-          borderRadius: "50%",
-          right: -9,
-          top: "50%",
-          transform: "translateY(-50%)",
-          bgcolor: "background.default",
-          boxShadow: `inset 1px 0 0 ${theme.palette.divider}`,
-        },
-      })}
-    >
-      <Box
-        sx={{
-          position: "absolute",
-          inset: 0,
-          borderRadius: 2.5,
-          background:
-            "linear-gradient(110deg, rgba(15,23,42,0.02) 0%, rgba(139,92,246,0.07) 40%, rgba(255,255,255,0.92) 100%)",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
-      <Box
-        sx={{
-          position: "absolute",
-          inset: 12,
-          border: "1px solid",
-          borderColor: "rgba(139,92,246,0.35)",
-          borderRadius: 2,
-          pointerEvents: "none",
-          zIndex: 1,
-        }}
-      />
-      <Box sx={{ position: "relative", zIndex: 2 }}>{children}</Box>
-    </Paper>
-  );
-}
+  const updatePartner = (
+    categoryId: string,
+    field: "partnerName" | "partnerNote",
+    value: string,
+  ) => {
+    setSelectedCategories((prev) =>
+      prev.map((cat) => (cat.id === categoryId ? { ...cat, [field]: value } : cat)),
+    );
+  };
 
-function InvitationHero({ tournamentInfo, playerName }: InvitationHeroProps) {
-  return (
-    <TicketCard>
-      <Box
-        sx={{
-          maxWidth: 1200,
-          mx: "auto",
-          px: { xs: 3, md: 4.5 },
-          py: { xs: 3.25, md: 4.25 },
-          display: "grid",
-          alignItems: "start",
-          gridTemplateColumns: { xs: "1fr", md: "1fr auto" },
-          gap: 2.5,
-        }}
-      >
-        <Stack spacing={1.5}>
-          <Typography
-            variant="overline"
-            sx={{ letterSpacing: 1.2, color: "text.secondary" }}
-          >
-            You&apos;re invited{playerName ? `, ${playerName}` : ""}
-          </Typography>
-          <Typography variant="h4" sx={{ fontWeight: 900, color: "text.primary" }}>
-            {tournamentInfo.name}
-          </Typography>
-          <Typography variant="body1" sx={{ color: "text.secondary" }}>
-            Compete. Connect. Challenge yourself.
-          </Typography>
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} useFlexGap flexWrap="wrap">
-            <Chip
-              icon={<LocationOnOutlinedIcon />}
-              label={tournamentInfo.timezone || "Location TBD"}
-              variant="outlined"
-              size="small"
-            />
-            <Chip
-              icon={<CalendarMonthOutlinedIcon />}
-              label={`${tournamentInfo.startDate || "-"}${
-                tournamentInfo.endDate ? ` to ${tournamentInfo.endDate}` : ""
-              }`}
-              variant="outlined"
-              size="small"
-            />
-            <Chip
-              icon={<AccessTimeOutlinedIcon />}
-              label={`${tournamentInfo.startTime || "-"}${
-                tournamentInfo.endTime ? ` - ${tournamentInfo.endTime}` : ""
-              }`}
-              variant="outlined"
-              size="small"
-            />
-            <Chip
-              icon={<AttachMoneyOutlinedIcon />}
-              label={`Fee ${formatMoney(tournamentInfo.entryFee, tournamentInfo.currency)} / category`}
-              variant="outlined"
-              size="small"
-            />
-          </Stack>
-          <Typography variant="body2" color="text.secondary">
-            Registration deadline: {tournamentInfo.registrationDeadline || "-"}
-          </Typography>
-        </Stack>
+  const totalFee = selectedCategories.reduce((sum, cat) => sum + cat.fee, 0);
+
+  const renderCategoryCard = (category: Category) => {
+    const selected = selectedCategories.some((c) => c.id === category.id);
+
+    return (
+      <ButtonBase key={category.id} onClick={() => toggleCategory(category)} sx={{ borderRadius: 1.5, textAlign: "left" }}>
         <Box
           sx={{
-            display: "flex",
-            justifyContent: { xs: "flex-start", md: "flex-end" },
-            alignSelf: "flex-start",
-            pt: { xs: 0, md: 0.25 },
+            position: "relative",
+            width: "100%",
+            p: 1.75,
+            borderRadius: 1.5,
+            border: "1px solid",
+            borderColor: selected ? "#9333EA" : "#D1D5DB",
+            bgcolor: selected ? "#9333EA" : "#FFF",
+            color: selected ? "#FFF" : "#111827",
+            boxShadow: selected ? "0 8px 16px rgba(147, 51, 234, 0.3)" : "none",
+            transition: "all 180ms ease",
           }}
         >
-          <Chip
-            label={tournamentInfo.tournamentStage || "Registration"}
-            size="small"
-            sx={{
-              bgcolor: "rgba(255,255,255,0.78)",
-              color: "primary.dark",
-              fontWeight: 700,
-            }}
-          />
+          {selected ? (
+            <CheckCircleRoundedIcon sx={{ position: "absolute", top: -10, right: -10, color: "#22C55E", bgcolor: "#FFF", borderRadius: "50%" }} />
+          ) : null}
+          <Stack direction="row" justifyContent="space-between" sx={{ mb: 1.25 }}>
+            <Typography sx={{ fontSize: 18, fontWeight: 800, color: selected ? "#FFFFFF" : "#111827" }}>{category.optionLabel}</Typography>
+            <Chip
+              size="small"
+              label={category.level}
+              sx={{
+                bgcolor: selected ? "rgba(255,255,255,0.2)" : "#F3E8FF",
+                color: selected ? "#FFF" : "#6D28D9",
+                fontWeight: 700,
+              }}
+            />
+          </Stack>
+          <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Typography sx={{ fontSize: 13, color: selected ? "rgba(255,255,255,0.85)" : "#6B7280" }}>
+              {categorySubtitle(category)}
+            </Typography>
+            <Typography sx={{ fontSize: 17, fontWeight: 800, color: selected ? "#FFFFFF" : "#111827" }}>${category.fee}</Typography>
+          </Stack>
         </Box>
+      </ButtonBase>
+    );
+  };
+
+  return (
+    <Box sx={{ flex: 1, bgcolor: "#F3F4F6", overflow: "auto" }}>
+      <Box sx={{ maxWidth: 1200, mx: "auto", px: { xs: 2, md: 3 }, py: 3 }}>
+        <Button
+          startIcon={<ArrowBackRoundedIcon />}
+          onClick={onBack}
+          sx={{
+            mb: 2.5,
+            px: 2.5,
+            py: 1,
+            borderRadius: 1.5,
+            color: "#FFF",
+            fontWeight: 700,
+            background: "linear-gradient(135deg, #7C3AED 0%, #A21CAF 100%)",
+            "&:hover": { filter: "brightness(0.97)" },
+          }}
+        >
+          Back to Tournaments
+        </Button>
+
+        <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB", mb: 2.5, overflow: "hidden" }}>
+          <Box sx={{ height: 6, background: "linear-gradient(90deg, #9333EA 0%, #EC4899 100%)" }} />
+          <Box sx={{ p: { xs: 2, md: 3 } }}>
+            <Stack spacing={2} sx={{ mb: 2 }}>
+              <Stack direction="row" spacing={1.5} alignItems="center">
+                <Box
+                  sx={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: "50%",
+                    bgcolor: "#7C3AED",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <AutoAwesomeOutlinedIcon sx={{ color: "#FFF", fontSize: 20 }} />
+                </Box>
+                <Box>
+                  <Typography sx={{ fontSize: 24, fontWeight: 900, color: "#111827", lineHeight: 1.1 }}>
+                    {tournament.name}
+                  </Typography>
+                  <Typography sx={{ fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: 1 }}>
+                    You&apos;re Invited!
+                  </Typography>
+                </Box>
+              </Stack>
+              <Typography sx={{ color: "#4B5563", fontSize: 18 }}>Compete. Connect. Challenge yourself.</Typography>
+            </Stack>
+
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", md: "repeat(4, minmax(0,1fr))" },
+                gap: 1.5,
+                mb: 2,
+              }}
+            >
+              {[
+                { label: "Location", value: tournament.location, meta: tournament.address, icon: <LocationOnOutlinedIcon sx={{ fontSize: 16, color: "#9333EA" }} /> },
+                { label: "Date", value: tournament.dateLabel, meta: tournament.dateMeta, icon: <CalendarMonthOutlinedIcon sx={{ fontSize: 16, color: "#9333EA" }} /> },
+                { label: "Time", value: tournament.timeLabel, meta: tournament.timeMeta, icon: <AccessTimeOutlinedIcon sx={{ fontSize: 16, color: "#9333EA" }} /> },
+                { label: "Entry Fee", value: tournament.feeLabel, meta: tournament.feeMeta, icon: <AttachMoneyOutlinedIcon sx={{ fontSize: 16, color: "#9333EA" }} /> },
+              ].map((item) => (
+                <Box key={item.label} sx={{ p: 1.5, border: "1px solid #D1D5DB", borderRadius: 1.5, bgcolor: "#F9FAFB" }}>
+                  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
+                    {item.icon}
+                    <Typography sx={{ fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
+                      {item.label}
+                    </Typography>
+                  </Stack>
+                  <Typography sx={{ fontSize: 14, fontWeight: 800, color: "#111827" }}>{item.value}</Typography>
+                  <Typography sx={{ fontSize: 12, color: "#6B7280" }}>{item.meta}</Typography>
+                </Box>
+              ))}
+            </Box>
+
+            <Box sx={{ p: 1.75, borderRadius: 1.5, border: "1px solid #D8B4FE", bgcolor: "#F5F3FF" }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Box sx={{ width: 30, height: 30, borderRadius: "50%", bgcolor: "#9333EA", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <AccessTimeOutlinedIcon sx={{ fontSize: 16, color: "#FFF" }} />
+                  </Box>
+                  <Box>
+                    <Typography sx={{ fontWeight: 800, color: "#111827", fontSize: 22 }}>
+                      Registration Deadline
+                    </Typography>
+                    <Typography sx={{ fontSize: 13, color: "#6B7280" }}>
+                      {tournament.deadlineLabel} - Don&apos;t miss out!
+                    </Typography>
+                  </Box>
+                </Stack>
+                <Chip label={daysLeftLabel(tournament.deadlineLabel)} sx={{ bgcolor: "#9333EA", color: "#FFF", fontWeight: 800 }} />
+              </Stack>
+            </Box>
+          </Box>
+        </Card>
+
+        <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB", mb: 2.5 }}>
+          <Box sx={{ p: { xs: 2, md: 3 } }}>
+            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
+              <EmojiEventsOutlinedIcon sx={{ color: "#9333EA", fontSize: 30 }} />
+              <Box>
+                <Typography sx={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>Your Registered Categories</Typography>
+                <Typography sx={{ fontSize: 14, color: "#6B7280" }}>You are registered for the following categories</Typography>
+              </Box>
+            </Stack>
+
+            <Alert
+              icon={<CheckCircleRoundedIcon />}
+              severity="success"
+              sx={{ mb: 2.5, borderRadius: 1.5, bgcolor: "#ECFDF3", border: "1px solid #BBF7D0", color: "#166534" }}
+            >
+              You&apos;re all set! Your registration is confirmed for these categories.
+            </Alert>
+
+            <Stack spacing={2}>
+              <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value)}>
+                {availableTabs.map((tab) => (
+                  <Tab key={tab} value={tab} label={tab} sx={{ textTransform: "none", fontWeight: 700 }} />
+                ))}
+              </Tabs>
+
+              <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" }, gap: 2 }}>
+                <Stack spacing={1.5}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
+                    Women
+                  </Typography>
+                  {womenCategories.length > 0 ? (
+                    womenCategories.map(renderCategoryCard)
+                  ) : (
+                    <Box sx={{ p: 1.5, border: "1px dashed #D1D5DB", borderRadius: 1.25, bgcolor: "#F9FAFB" }}>
+                      <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Unavailable</Typography>
+                    </Box>
+                  )}
+                </Stack>
+                <Stack spacing={1.5}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
+                    Men
+                  </Typography>
+                  {menCategories.length > 0 ? (
+                    menCategories.map(renderCategoryCard)
+                  ) : (
+                    <Box sx={{ p: 1.5, border: "1px dashed #D1D5DB", borderRadius: 1.25, bgcolor: "#F9FAFB" }}>
+                      <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Unavailable</Typography>
+                    </Box>
+                  )}
+                </Stack>
+              </Box>
+              {mixedCategories.length > 0 ? (
+                <Stack spacing={1.5}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
+                    Mixed
+                  </Typography>
+                  <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" }, gap: 2 }}>
+                    {mixedCategories.map(renderCategoryCard)}
+                  </Box>
+                </Stack>
+              ) : null}
+            </Stack>
+          </Box>
+        </Card>
+
+        <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB", mb: 2.5 }}>
+          <Box sx={{ p: { xs: 2, md: 3 } }}>
+            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
+              <PeopleAltOutlinedIcon sx={{ color: "#9333EA", fontSize: 30 }} />
+              <Box sx={{ flex: 1 }}>
+                <Typography sx={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>Your Selections</Typography>
+                <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Add partner details (optional)</Typography>
+              </Box>
+              <Chip label={`${selectedCategories.length} Category`} sx={{ bgcolor: "#9333EA", color: "#FFF", fontWeight: 800 }} />
+            </Stack>
+
+            <Alert icon={<AutoAwesomeOutlinedIcon />} severity="info" sx={{ borderRadius: 1.5, mb: 2 }}>
+              Partner information is optional. You can add it now or your coach can help you decide later.
+            </Alert>
+
+            {selectedCategories.length > 0 ? (
+              <Stack spacing={1.5}>
+                {selectedCategories.map((category) => {
+                  const expanded = expandedCategoryId === category.id;
+                  return (
+                    <Card key={category.id} sx={{ border: "1px solid #D1D5DB", borderRadius: 1.25 }}>
+                      <ButtonBase sx={{ width: "100%", textAlign: "left" }} onClick={() => setExpandedCategoryId(expanded ? null : category.id)}>
+                        <Box sx={{ width: "100%", p: 2, bgcolor: "#F9FAFB" }}>
+                          <Stack direction="row" justifyContent="space-between" alignItems="center">
+                            <Stack direction="row" spacing={1.25} alignItems="center">
+                              <Box sx={{ width: 36, height: 36, borderRadius: 1, bgcolor: "#9333EA", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <EmojiEventsOutlinedIcon sx={{ color: "#FFF", fontSize: 18 }} />
+                              </Box>
+                              <Box>
+                                <Typography sx={{ fontWeight: 800 }}>{category.selectionLabel}</Typography>
+                                <Typography sx={{ fontSize: 12, color: "#6B7280" }}>Fee: ${category.fee} {tournament.currency}</Typography>
+                              </Box>
+                            </Stack>
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              {category.partnerName ? <Chip label="Partner added" size="small" color="success" /> : null}
+                              {expanded ? <ExpandLessRoundedIcon /> : <ExpandMoreRoundedIcon />}
+                            </Stack>
+                          </Stack>
+                        </Box>
+                      </ButtonBase>
+
+                      <Collapse in={expanded && !readOnly} timeout="auto" unmountOnExit>
+                        <Box sx={{ p: 2, borderTop: "1px solid #E5E7EB" }}>
+                          <Stack spacing={1.5}>
+                            <TextField
+                              label="Partner Name (Optional)"
+                              value={category.partnerName}
+                              onChange={(e) => updatePartner(category.id, "partnerName", e.target.value)}
+                              fullWidth
+                            />
+                            <TextField
+                              label="Partner Note (Optional)"
+                              value={category.partnerNote}
+                              onChange={(e) => updatePartner(category.id, "partnerNote", e.target.value)}
+                              fullWidth
+                            />
+                          </Stack>
+                        </Box>
+                      </Collapse>
+                    </Card>
+                  );
+                })}
+              </Stack>
+            ) : (
+              <Box sx={{ p: 2, border: "1px dashed #D1D5DB", borderRadius: 1.25 }}>
+                <Typography sx={{ fontSize: 14, color: "#6B7280" }}>
+                  No category selected yet. Select one from &quot;Your Registered Categories&quot;.
+                </Typography>
+              </Box>
+            )}
+          </Box>
+        </Card>
+
+        <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB" }}>
+          <Box sx={{ p: { xs: 2, md: 3 }, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <Box>
+              <Typography sx={{ fontSize: 14, color: "#6B7280" }}>Total Amount Paid</Typography>
+              <Typography sx={{ fontSize: 42, fontWeight: 900, color: "#9333EA", lineHeight: 1.05 }}>${totalFee} {tournament.currency}</Typography>
+              <Typography sx={{ fontSize: 13, color: "#6B7280" }}>
+                {selectedCategories.length > 0 ? "Payment completed" : "Select a category to continue"}
+              </Typography>
+            </Box>
+
+            <Stack direction="row" spacing={1.25}>
+              <Button variant="outlined" onClick={onBack}>Cancel</Button>
+              <Button
+                variant="contained"
+                disabled={selectedCategories.length === 0 || readOnly || submitting}
+                onClick={() => onConfirm(selectedCategories)}
+              >
+                {submitting ? "Confirming..." : "Confirm Registration"}
+              </Button>
+            </Stack>
+          </Box>
+        </Card>
       </Box>
-    </TicketCard>
+    </Box>
   );
 }
 
 export default function PlayerTournamentInvitePage() {
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-
-  const inviteTournamentId = parseInviteTournamentId(
-    searchParams.get("inviteTournamentId")
-  );
+  const [searchParams] = useSearchParams();
+  const inviteTournamentId = parseInviteTournamentId(searchParams.get("inviteTournamentId"));
   const isReadOnlyView = searchParams.get("mode") === "view";
 
-  const [loadingInitial, setLoadingInitial] = React.useState(false);
-  const [loadingSave, setLoadingSave] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<string | null>(null);
-
-  const [subscription, setSubscription] =
-    React.useState<EventSubscriptionDto | null>(null);
-  const [tournamentInfo, setTournamentInfo] =
-    React.useState<InvitedTournamentInfoDto | null>(null);
-
-  const [activeGenderTab, setActiveGenderTab] = React.useState<string>("Men");
-  const [selectedCategoryIds, setSelectedCategoryIds] = React.useState<number[]>([]);
-  const [partnerPrefs, setPartnerPrefs] = React.useState<Record<string, PartnerPref>>({});
-  const [expandedPartnerRows, setExpandedPartnerRows] = React.useState<Record<string, boolean>>({});
-
-  const allCategories = tournamentInfo?.categories ?? [];
-
-  const availableGenders = React.useMemo(() => {
-    const set = new Set<string>();
-    allCategories.forEach((category) => set.add((category.gender || "Open").trim() || "Open"));
-
-    const preferredOrder = ["Men", "Women", "Mixed", "Open"];
-    const listed = Array.from(set);
-    listed.sort((a, b) => {
-      const ai = preferredOrder.findIndex((item) => item.toLowerCase() === a.toLowerCase());
-      const bi = preferredOrder.findIndex((item) => item.toLowerCase() === b.toLowerCase());
-      if (ai === -1 && bi === -1) return a.localeCompare(b);
-      if (ai === -1) return 1;
-      if (bi === -1) return -1;
-      return ai - bi;
-    });
-    return listed;
-  }, [allCategories]);
+  const [event, setEvent] = React.useState<EventDetailsDto | null>(null);
 
   React.useEffect(() => {
-    if (availableGenders.length === 0) return;
-    const exists = availableGenders.some((g) => g.toLowerCase() === activeGenderTab.toLowerCase());
-    if (!exists) setActiveGenderTab(availableGenders[0]);
-  }, [availableGenders, activeGenderTab]);
+    if (!inviteTournamentId) return;
 
-  const visibleCategories = React.useMemo(() => {
-    if (!activeGenderTab) return allCategories;
-    return allCategories.filter(
-      (category) => ((category.gender || "Open").trim() || "Open").toLowerCase() === activeGenderTab.toLowerCase(),
-    );
-  }, [allCategories, activeGenderTab]);
-
-  const selectedCategories = React.useMemo(() => {
-    const selected = new Set(selectedCategoryIds);
-    return allCategories.filter((category) => selected.has(category.id));
-  }, [allCategories, selectedCategoryIds]);
-
-  const partnerOptions = React.useMemo(() => {
-    const names = Object.values(partnerPrefs)
-      .map((pref) => pref.partnerName.trim())
-      .filter(Boolean);
-    return Array.from(new Set(names));
-  }, [partnerPrefs]);
-
-  const liveTotalAmount = React.useMemo(() => {
-    const feePerCategory = Number(tournamentInfo?.entryFee ?? 0);
-    if (!Number.isFinite(feePerCategory)) return 0;
-    return Math.max(0, feePerCategory) * selectedCategoryIds.length;
-  }, [tournamentInfo?.entryFee, selectedCategoryIds.length]);
-
-  const mergePartnerPrefFromApi = React.useCallback((category: SelectedCategoryDto) => {
-    const key = String(category.id);
-    setPartnerPrefs((prev) => ({
-      ...prev,
-      [key]: {
-        ...(prev[key] ?? {
-          partnerName: "",
-          partnerUserId: null,
-          partnerNote: "",
-          teamFormat: "DOUBLES",
-          isDoubles: true,
-        }),
-        partnerName: category.partnerName ?? prev[key]?.partnerName ?? "",
-        partnerUserId: category.partnerUserId ?? prev[key]?.partnerUserId ?? null,
-        partnerNote: category.partnerNote ?? prev[key]?.partnerNote ?? "",
-        teamFormat: category.teamFormat ?? prev[key]?.teamFormat ?? "DOUBLES",
-        isDoubles: category.isDoubles ?? prev[key]?.isDoubles ?? true,
-      },
-    }));
-  }, []);
-
-  const loadInviteData = React.useCallback(
-    async (eventId: number) => {
-      setLoadingInitial(true);
+    let cancelled = false;
+    const run = async () => {
+      setLoading(true);
       setError(null);
-
       try {
-        const subscriptionRes = await api.post<EventSubscriptionDto>(
-          `/events/${eventId}/subscriptions/me`
-        );
-        setSubscription(subscriptionRes.data);
-
-        const infoRes = await api.get<InvitedTournamentInfoDto>(
-          `/events/${eventId}/subscriptions/me/tournament-info`
-        );
-        let mergedTournamentInfo: InvitedTournamentInfoDto = infoRes.data;
-        try {
-          const categoriesRes = await api.get<
-            InvitedTournamentCategoryDto[] | { data?: InvitedTournamentCategoryDto[] }
-          >(`/tournament-categories?eventId=${eventId}`);
-          const backendCategories = Array.isArray(categoriesRes.data)
-            ? categoriesRes.data
-            : (categoriesRes.data?.data ?? []);
-
-          if (backendCategories.length > 0) {
-            const backendById = new Map(
-              backendCategories.map((item) => [Number(item.id), item]),
-            );
-            mergedTournamentInfo = {
-              ...infoRes.data,
-              categories: (infoRes.data.categories ?? []).map((category) => {
-                const fromBackend = backendById.get(Number(category.id));
-                if (!fromBackend) return category;
-                const backendPrice = getCategoryPrice(fromBackend);
-                if (backendPrice <= 0) return category;
-                return { ...category, price: backendPrice };
-              }),
-            };
-          }
-        } catch {
-          // best effort only
-        }
-
-        setTournamentInfo(mergedTournamentInfo);
-
-        const selectedFromInfo = (mergedTournamentInfo.categories ?? [])
-          .filter((category) => category.selected)
-          .map((category) => category.id);
-
-        try {
-          const selectionRes = await api.get<SelectedCategoriesResponse>(
-            `/events/${eventId}/subscriptions/me/categories`
-          );
-          const selected = selectionRes.data.selectedCategories ?? [];
-          setSelectedCategoryIds(selected.map((category) => category.id));
-          selected.forEach((category) => mergePartnerPrefFromApi(category));
-        } catch {
-          setSelectedCategoryIds(selectedFromInfo);
-        }
+        const res = await api.get<EventDetailsDto>(`/events/${inviteTournamentId}`);
+        if (!cancelled) setEvent(res.data);
       } catch (err: unknown) {
-        setError(
-          getErrorMessage(err, "Could not load invite information for this tournament."),
-        );
+        if (!cancelled) setError(getErrorMessage(err, "Could not load tournament details."));
       } finally {
-        setLoadingInitial(false);
+        if (!cancelled) setLoading(false);
       }
-    },
-    [mergePartnerPrefFromApi],
-  );
+    };
 
-  React.useEffect(() => {
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteTournamentId]);
+
+  const handleConfirm = async (selected: SelectedCategory[]) => {
     if (!inviteTournamentId) return;
-    void loadInviteData(inviteTournamentId);
-  }, [inviteTournamentId, loadInviteData]);
 
-  const toggleCategory = (categoryId: number) => {
-    const key = String(categoryId);
-    const currentlySelected = selectedCategoryIds.includes(categoryId);
-
-    setSelectedCategoryIds((prev) => {
-      if (currentlySelected) return prev.filter((id) => id !== categoryId);
-      return [...prev, categoryId];
-    });
-
-    if (currentlySelected) {
-      setPartnerPrefs((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-      setExpandedPartnerRows((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-      return;
-    }
-
-    setPartnerPrefs((prev) => ({
-      ...prev,
-      [key]:
-        prev[key] ?? {
-          partnerName: "",
-          partnerUserId: null,
-          partnerNote: "",
-          teamFormat: "DOUBLES",
-          isDoubles: true,
-        },
-    }));
-    setExpandedPartnerRows((prev) => ({ ...prev, [key]: true }));
-  };
-
-  const setPartnerField = (categoryId: number, field: keyof PartnerPref, value: string) => {
-    const key = String(categoryId);
-    setPartnerPrefs((prev) => ({
-      ...prev,
-      [key]: {
-        ...(prev[key] ?? {
-          partnerName: "",
-          partnerUserId: null,
-          partnerNote: "",
-          teamFormat: "DOUBLES",
-          isDoubles: true,
-        }),
-        [field]: value,
-      },
-    }));
-  };
-
-  const toggleExpandedRow = (categoryId: number) => {
-    const key = String(categoryId);
-    setExpandedPartnerRows((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const handleConfirmRegistration = async () => {
-    if (!inviteTournamentId) return;
-    if (selectedCategoryIds.length === 0) {
-      setError("Select at least one category.");
-      return;
-    }
-
-    setLoadingSave(true);
+    setSubmitting(true);
     setError(null);
     setSuccess(null);
-
     try {
-      const saveCategoriesRes = await api.put<SubscriptionCategorySelectionDto>(
-        `/events/${inviteTournamentId}/subscriptions/me/categories`,
-        { categoryIds: selectedCategoryIds },
-      );
-      setSelectedCategoryIds((saveCategoriesRes.data.selectedCategories ?? []).map((c) => c.id));
+      const payload: SubscribeMePayload = {
+        eventId: inviteTournamentId,
+        categories: selected.map((category) => ({
+          id: Number(category.id),
+          suggestedPlayer: category.partnerName.trim() || undefined,
+          note: category.partnerNote.trim() || undefined,
+        })),
+      };
 
-      const partnerPayloads = selectedCategoryIds
-        .map((categoryId) => ({ categoryId, pref: partnerPrefs[String(categoryId)] }))
-        .filter((entry) => {
-          const pref = entry.pref;
-          if (!pref) return false;
-          return Boolean(pref.partnerName.trim() || pref.partnerNote.trim());
-        });
-
-      if (partnerPayloads.length > 0) {
-        await Promise.all(
-          partnerPayloads.map((entry) =>
-            api.put(
-              `/events/${inviteTournamentId}/subscriptions/me/categories/${entry.categoryId}/partner-preference`,
-              {
-                partnerName: entry.pref.partnerName.trim() || null,
-                partnerUserId: entry.pref.partnerUserId,
-                partnerNote: entry.pref.partnerNote.trim() || null,
-                teamFormat: entry.pref.teamFormat || "DOUBLES",
-                isDoubles: entry.pref.isDoubles,
-              },
-            ),
-          ),
-        );
-      }
-
+      await api.post(`/events/${inviteTournamentId}/subscriptions/me`, payload);
+      rememberSubscribedEvent(inviteTournamentId);
       setSuccess("Registration confirmed.");
 
-      const infoRes = await api.get<InvitedTournamentInfoDto>(
-        `/events/${inviteTournamentId}/subscriptions/me/tournament-info`,
-      );
-      try {
-        const categoriesRes = await api.get<
-          InvitedTournamentCategoryDto[] | { data?: InvitedTournamentCategoryDto[] }
-        >(`/tournament-categories?eventId=${inviteTournamentId}`);
-        const backendCategories = Array.isArray(categoriesRes.data)
-          ? categoriesRes.data
-          : (categoriesRes.data?.data ?? []);
-        if (backendCategories.length > 0) {
-          const backendById = new Map(
-            backendCategories.map((item) => [Number(item.id), item]),
-          );
-          setTournamentInfo({
-            ...infoRes.data,
-            categories: (infoRes.data.categories ?? []).map((category) => {
-              const fromBackend = backendById.get(Number(category.id));
-              if (!fromBackend) return category;
-              const backendPrice = getCategoryPrice(fromBackend);
-              if (backendPrice <= 0) return category;
-              return { ...category, price: backendPrice };
-            }),
-          });
-        } else {
-          setTournamentInfo(infoRes.data);
-        }
-      } catch {
-        setTournamentInfo(infoRes.data);
-      }
-
+      const totalAmount = selected.reduce((sum, item) => sum + Number(item.fee || 0), 0);
       navigate("/tournaments/payment", {
         state: {
           eventId: inviteTournamentId,
-          tournamentName: infoRes.data.name || "Tournament",
-          currency: infoRes.data.currency || "AUD",
-          totalAmount: liveTotalAmount,
-          selectedCategoryNames: selectedCategories.map((category) => category.name || "Category"),
+          tournamentName: event?.name || "Tournament",
+          currency: String(event?.currency || "AUD").toUpperCase(),
+          totalAmount,
+          selectedCategoryNames: selected.map((c) => c.name),
         },
       });
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Could not confirm registration."));
     } finally {
-      setLoadingSave(false);
+      setSubmitting(false);
     }
   };
 
@@ -792,240 +714,52 @@ export default function PlayerTournamentInvitePage() {
         <Alert severity="error" sx={{ mb: 2 }}>
           Invalid invite link. Missing or invalid <code>inviteTournamentId</code>.
         </Alert>
-        <Button variant="contained" onClick={() => navigate("/dashboard")}>
-          Go to Dashboard
-        </Button>
+        <Button variant="contained" onClick={() => navigate("/dashboard")}>Go to Dashboard</Button>
       </Container>
     );
   }
 
-  return (
-    <Box
-      component="main"
-      sx={{
-        minHeight: "100vh",
-        bgcolor: "rgba(139,92,246,0.04)",
-        py: { xs: 2, md: 3 },
-      }}
-    >
-      <Container maxWidth="lg">
-        <Stack spacing={3}>
-          <Typography variant="h4" sx={{ fontWeight: 900 }}>
-            Tournament Invite
-          </Typography>
-
-          {loadingInitial ? (
-            <Paper sx={{ p: 2, borderRadius: 3 }}>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <CircularProgress size={18} />
-                <Typography variant="body2" color="text.secondary">
-                  Loading invite details...
-                </Typography>
-              </Stack>
-            </Paper>
-          ) : null}
-
-          {error ? <Alert severity="error">{error}</Alert> : null}
-          {success ? <Alert severity="success">{success}</Alert> : null}
-
-          {tournamentInfo ? (
-            <>
-              <InvitationHero
-                tournamentInfo={tournamentInfo}
-                playerName={subscription?.userFullName}
-              />
-
-              {!isReadOnlyView ? (
-                <Card sx={{ borderRadius: 3 }}>
-                  <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-                    <Stack spacing={2}>
-                      <Typography variant="h6" sx={{ fontWeight: 800 }}>
-                        Choose Categories
-                      </Typography>
-                      <Tabs
-                        value={activeGenderTab}
-                        onChange={(_, value) => setActiveGenderTab(value)}
-                        variant="scrollable"
-                        allowScrollButtonsMobile
-                      >
-                        {availableGenders.map((gender) => (
-                          <Tab key={gender} label={gender} value={gender} />
-                        ))}
-                      </Tabs>
-
-                      <Box
-                        sx={{
-                          display: "grid",
-                          gridTemplateColumns: {
-                            xs: "1fr",
-                            sm: "repeat(2, minmax(0, 1fr))",
-                            md: "repeat(3, minmax(0, 1fr))",
-                          },
-                          gap: 1.5,
-                        }}
-                      >
-                        {visibleCategories.map((category) => (
-                          <Box key={category.id}>
-                            <CategoryTile
-                              category={category}
-                              selected={selectedCategoryIds.includes(category.id)}
-                              currency={tournamentInfo.currency}
-                              fallbackFee={tournamentInfo.entryFee}
-                              onToggle={toggleCategory}
-                            />
-                          </Box>
-                        ))}
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ) : null}
-
-              {selectedCategories.length > 0 ? (
-                <Card sx={{ borderRadius: 3 }}>
-                  <CardContent sx={{ p: { xs: 2, md: 3 } }}>
-                    <Stack spacing={1.5}>
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography variant="h6" sx={{ fontWeight: 800 }}>
-                          Selected categories
-                        </Typography>
-                        <Chip size="small" color="primary" label={`${selectedCategories.length} selected`} />
-                      </Stack>
-
-                      {!isReadOnlyView ? (
-                        <Box
-                          sx={{
-                            px: 1.25,
-                            py: 1,
-                            borderRadius: 2,
-                            bgcolor: "rgba(139,92,246,0.10)",
-                            border: "1px solid rgba(139,92,246,0.20)",
-                          }}
-                        >
-                          <Typography variant="body2" color="text.secondary">
-                            Partner name is optional. If you do not have a partner yet, your coach can
-                            decide later or you can update it later.
-                          </Typography>
-                        </Box>
-                      ) : null}
-
-                      <Stack spacing={1.2}>
-                        {selectedCategories.map((category) => {
-                          const key = String(category.id);
-                          const pref =
-                            partnerPrefs[key] ?? {
-                              partnerName: "",
-                              partnerUserId: null,
-                              partnerNote: "",
-                              teamFormat: "DOUBLES",
-                              isDoubles: true,
-                            };
-                          if (isReadOnlyView) {
-                            return (
-                              <Card key={`selected-${category.id}`} variant="outlined" sx={{ borderRadius: 2.5 }}>
-                                <CardContent sx={{ p: 1.5, "&:last-child": { pb: 1.5 } }}>
-                                  <Typography sx={{ fontWeight: 700, mb: 0.5 }}>
-                                    {category.name || "Category"} · {category.gender || "Open"}
-                                  </Typography>
-                                  <Typography variant="body2" color="text.secondary">
-                                    Partner name: {pref.partnerName.trim() || "Not provided"}
-                                  </Typography>
-                                  {pref.partnerNote.trim() ? (
-                                    <Typography variant="body2" color="text.secondary">
-                                      Note: {pref.partnerNote}
-                                    </Typography>
-                                  ) : null}
-                                </CardContent>
-                              </Card>
-                            );
-                          }
-                          return (
-                            <SelectedCategoryRow
-                              key={`selected-${category.id}`}
-                              category={category}
-                              currency={tournamentInfo.currency}
-                              fallbackFee={tournamentInfo.entryFee}
-                              pref={pref}
-                              expanded={Boolean(expandedPartnerRows[key])}
-                              partnerOptions={partnerOptions}
-                              onToggleExpand={() => toggleExpandedRow(category.id)}
-                              onPartnerNameChange={(value) =>
-                                setPartnerField(category.id, "partnerName", value)
-                              }
-                              onPartnerNoteChange={(value) =>
-                                setPartnerField(category.id, "partnerNote", value)
-                              }
-                            />
-                          );
-                        })}
-                      </Stack>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ) : null}
-
-              {!isReadOnlyView ? (
-                <Paper
-                  elevation={6}
-                  sx={{
-                    position: "sticky",
-                    bottom: 10,
-                    borderRadius: 3,
-                    px: { xs: 1.25, sm: 2 },
-                    py: 1.25,
-                    border: "1px solid rgba(139,92,246,0.20)",
-                    zIndex: 5,
-                  }}
-                >
-                  <Stack
-                    direction={{ xs: "column", md: "row" }}
-                    spacing={1.5}
-                    justifyContent="space-between"
-                    alignItems={{ xs: "stretch", md: "center" }}
-                  >
-                    <Stack direction="row" spacing={1.2} alignItems="center">
-                      <Chip
-                        color="primary"
-                        label={`${selectedCategoryIds.length} categor${
-                          selectedCategoryIds.length === 1 ? "y" : "ies"
-                        } selected`}
-                      />
-                      <Typography sx={{ fontWeight: 700 }}>
-                        Total: {formatMoney(liveTotalAmount, tournamentInfo.currency)}
-                      </Typography>
-                    </Stack>
-
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2}>
-                      <Button variant="text" onClick={() => navigate("/dashboard")}>
-                        Back
-                      </Button>
-                      <Button
-                        variant="contained"
-                        disabled={loadingSave || selectedCategoryIds.length === 0}
-                        onClick={handleConfirmRegistration}
-                      >
-                        {loadingSave ? "Confirming..." : "Confirm Registration"}
-                      </Button>
-                    </Stack>
-                  </Stack>
-                </Paper>
-              ) : (
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2}>
-                  <Button variant="outlined" onClick={() => navigate("/dashboard")}>
-                    Back to Dashboard
-                  </Button>
-                </Stack>
-              )}
-            </>
-          ) : null}
-
-          {subscription ? (
-            <Typography variant="caption" color="text.secondary">
-              Registration status: {subscription.status || "UNKNOWN"}
-            </Typography>
-          ) : null}
-        </Stack>
+  if (loading) {
+    return (
+      <Container maxWidth="md" sx={{ py: 4 }}>
+        <Alert severity="info" sx={{ mb: 2 }}>Loading invite details...</Alert>
+        <CircularProgress size={20} />
       </Container>
-    </Box>
+    );
+  }
+
+  if (!event) {
+    return (
+      <Container maxWidth="md" sx={{ py: 4 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>{error || "Tournament not found."}</Alert>
+        <Button variant="contained" onClick={() => navigate("/dashboard")}>Go to Dashboard</Button>
+      </Container>
+    );
+  }
+
+  const inviteUi = mapEventToUi(event);
+  const categories = mapEventCategories(event);
+
+  return (
+    <>
+      {error ? (
+        <Container maxWidth="md" sx={{ py: 2 }}>
+          <Alert severity="error">{error}</Alert>
+        </Container>
+      ) : null}
+      {success ? (
+        <Container maxWidth="md" sx={{ py: 2 }}>
+          <Alert severity="success">{success}</Alert>
+        </Container>
+      ) : null}
+      <TournamentInviteContent
+        tournament={inviteUi}
+        categories={categories}
+        readOnly={isReadOnlyView}
+        onBack={() => navigate("/dashboard")}
+        onConfirm={handleConfirm}
+        submitting={submitting}
+      />
+    </>
   );
 }

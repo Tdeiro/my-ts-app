@@ -53,7 +53,7 @@ type TournamentForm = {
   isPublic: boolean;
   allowWaitlist: boolean;
   requireApproval: boolean;
-  tournamentStage: "REGISTRATION";
+  tournamentStage: "DRAFT" | "REGISTRATION";
 };
 
 type TournamentCategoryForm = {
@@ -91,7 +91,7 @@ const initialForm: TournamentForm = {
   isPublic: true,
   allowWaitlist: false,
   requireApproval: false,
-  tournamentStage: "REGISTRATION",
+  tournamentStage: "DRAFT",
 };
 
 const SPORT_TO_API_VALUE: Record<TournamentForm["sport"], string> = {
@@ -136,6 +136,22 @@ function formatCategoryFormatLabel(
   if (format === "SINGLES") return "Singles";
   if (format === "DOUBLES") return "Doubles";
   return "Mixed";
+}
+
+function inferFormatFromCategoryName(
+  name: string,
+): TournamentCategoryForm["format"] {
+  const normalized = String(name ?? "").toLowerCase();
+  if (normalized.includes("single")) return "SINGLES";
+  if (normalized.includes("mixed")) return "MIXED";
+  return "DOUBLES";
+}
+
+function teamsLimitSizeFromFormat(
+  format: TournamentCategoryForm["format"],
+): number {
+  if (format === "SINGLES") return 1;
+  return 2;
 }
 
 function buildAutoCategoryName(category: TournamentCategoryForm): string {
@@ -332,7 +348,9 @@ export default function AddTournamentPage() {
           isPublic: Boolean(selected.isPublic ?? true),
           allowWaitlist: Boolean(selected.allowWaitlist ?? false),
           requireApproval: Boolean(selected.requireApproval ?? false),
-          tournamentStage: "REGISTRATION",
+          tournamentStage: String(
+            selected.tournamentStage ?? prev.tournamentStage ?? "DRAFT",
+          ).toUpperCase() as TournamentForm["tournamentStage"],
         }));
         setCategoryPricingRule((prev) => ({
           ...prev,
@@ -352,7 +370,10 @@ export default function AddTournamentPage() {
             level: String(
               c.level ?? "INTERMEDIATE",
             ) as TournamentCategoryForm["level"],
-            format: "DOUBLES",
+            format:
+              Number(c.teamsLimitSize) === 1
+                ? "SINGLES"
+                : inferFormatFromCategoryName(String(c.name ?? "")),
             gender: String(c.gender ?? "Men") === "Women" ? "Women" : "Men",
             price: Math.max(
               0,
@@ -569,6 +590,11 @@ export default function AddTournamentPage() {
     const value = Number(first.price ?? 0);
     return Number.isFinite(value) ? Math.max(0, value) : 0;
   }, [signupCategories]);
+  const defaultEventFormatLabel = React.useMemo(() => {
+    const first = signupCategories[0];
+    if (!first) return "Doubles";
+    return formatCategoryFormatLabel(first.format);
+  }, [signupCategories]);
 
   const handleSubmit = async () => {
     const token = getToken();
@@ -593,7 +619,8 @@ export default function AddTournamentPage() {
         name: form.name.trim(),
         eventType: "TOURNAMENT",
         sport: SPORT_TO_API_VALUE[form.sport],
-        level: (form.level || "All levels").toUpperCase().replaceAll(" ", "_"),
+        format: defaultEventFormatLabel,
+        level: form.level || "All levels",
         timezone: form.timezone,
         locationName: form.locationName,
         address: form.address,
@@ -609,7 +636,7 @@ export default function AddTournamentPage() {
         isPublic: form.isPublic,
         allowWaitlist: form.allowWaitlist,
         requireApproval: form.requireApproval,
-        tournamentStage: form.tournamentStage,
+        tournamentStage: form.tournamentStage || "DRAFT",
       };
 
       const res = await fetch(
@@ -647,6 +674,7 @@ export default function AddTournamentPage() {
         backendId?: number;
         name: string;
         level: TournamentCategoryForm["level"];
+        format: TournamentCategoryForm["format"];
         gender: TournamentCategoryForm["gender"];
         price: number;
       }> = savedCategories.reduce((acc, source) => {
@@ -656,6 +684,7 @@ export default function AddTournamentPage() {
           backendId: source.backendId,
           name: baseName,
           level: source.level,
+          format: source.format,
           gender: source.gender,
           price: Math.max(0, Number(source.price || 0)),
         });
@@ -664,6 +693,7 @@ export default function AddTournamentPage() {
         backendId?: number;
         name: string;
         level: TournamentCategoryForm["level"];
+        format: TournamentCategoryForm["format"];
         gender: TournamentCategoryForm["gender"];
         price: number;
       }>);
@@ -688,11 +718,12 @@ export default function AddTournamentPage() {
                   eventId: createdId,
                   name: category.name,
                   level: category.level,
+                  minAge: null,
+                  maxAge: null,
                   gender: category.gender,
+                  teamsLimitSize: teamsLimitSizeFromFormat(category.format),
                   price: category.price,
-                  entryFee: category.price,
-                  fee: category.price,
-                  categoryFee: category.price,
+                  currency: categoryPricingRule.currency || "AUD",
                 }),
               },
             );
@@ -713,11 +744,12 @@ export default function AddTournamentPage() {
                 eventId: createdId,
                 name: category.name,
                 level: category.level,
+                minAge: null,
+                maxAge: null,
                 gender: category.gender,
+                teamsLimitSize: teamsLimitSizeFromFormat(category.format),
                 price: category.price,
-                entryFee: category.price,
-                fee: category.price,
-                categoryFee: category.price,
+                currency: categoryPricingRule.currency || "AUD",
               }),
             });
             const body = await resCreate.json().catch(() => null);
@@ -756,11 +788,12 @@ export default function AddTournamentPage() {
             eventId: createdId,
             name: c.name,
             level: c.level,
+            minAge: null,
+            maxAge: null,
             gender: c.gender,
+            teamsLimitSize: teamsLimitSizeFromFormat(c.format),
             price: Math.max(0, Number(c.price || 0)),
-            entryFee: Math.max(0, Number(c.price || 0)),
-            fee: Math.max(0, Number(c.price || 0)),
-            categoryFee: Math.max(0, Number(c.price || 0)),
+            currency: categoryPricingRule.currency || "AUD",
           }))
           .filter((c) => c.name);
 

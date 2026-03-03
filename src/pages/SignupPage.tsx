@@ -7,12 +7,6 @@ import {
   CardContent,
   Container,
   Divider,
-  FormControl,
-  FormControlLabel,
-  FormHelperText,
-  FormLabel,
-  Radio,
-  RadioGroup,
   Stack,
   TextField,
   Typography,
@@ -23,15 +17,9 @@ import {
 import { setToken } from "../auth/tokens";
 import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
-import type { AccountType, FormErrors, SignupForm } from "../Utils/FormTypes";
+import type { FormErrors, SignupForm } from "../Utils/FormTypes";
 import { validateInput } from "../Utils/FormValidationUtil";
 import Logo from "../assets/onora.png";
-
-const REGISTER_ROLE_IDS_BY_ACCOUNT_TYPE: Record<AccountType, number[]> = {
-  participant: [1],
-  coach: [2],
-  organization: [2],
-};
 
 export default function SignupPage() {
   const navigate = useNavigate();
@@ -39,11 +27,10 @@ export default function SignupPage() {
   const inviteTournamentId = searchParams.get("inviteTournamentId");
 
   const [form, setForm] = React.useState<SignupForm>({
-    name: "",
+    firstName: "",
+    lastName: "",
     email: "",
     phone: "",
-    accountType: "participant",
-    organizationName: "",
     password: "",
     confirmPassword: "",
   });
@@ -54,8 +41,6 @@ export default function SignupPage() {
   const [apiSuccess, setApiSuccess] = React.useState<string | null>(null);
   const [showPassword, setShowPassword] = React.useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
-
-  const showOrgName = form.accountType === "organization";
 
   const setField =
     (field: keyof SignupForm) => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -71,24 +56,6 @@ export default function SignupPage() {
       });
     };
 
-  const setAccountType = (value: AccountType) => {
-    setForm((prev) => ({
-      ...prev,
-      accountType: value,
-
-      organizationName: value === "organization" ? prev.organizationName : "",
-    }));
-
-    if (value !== "organization") {
-      setErrors((prev) => {
-        if (!prev.organizationName) return prev;
-        const next = { ...prev };
-        delete next.organizationName;
-        return next;
-      });
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -101,18 +68,11 @@ export default function SignupPage() {
     if (Object.keys(nextErrors).length > 0) return;
 
     setIsSubmitting(true);
-    // const normaliseName = `${form.name.trim()} ${form.lastName.trim()}`;
-
     try {
-      const roleIds =
-        REGISTER_ROLE_IDS_BY_ACCOUNT_TYPE[form.accountType] ??
-        REGISTER_ROLE_IDS_BY_ACCOUNT_TYPE.participant;
-
       const payload = {
         email: form.email.trim().toLowerCase(),
-        fullName: form.name.trim(), // backend expects fullName
+        fullName: `${form.firstName.trim()} ${form.lastName.trim()}`.trim(),
         phone: form.phone.trim(),
-        roleIds,
         password: form.password,
         billingInfo: false,
       };
@@ -215,21 +175,21 @@ export default function SignupPage() {
               <TextField
                 required
                 label="First Name"
-                value={form.name}
-                onChange={setField("name")}
-                error={!!errors.name}
-                helperText={errors.name || " "}
-                autoComplete="name"
+                value={form.firstName}
+                onChange={setField("firstName")}
+                error={!!errors.firstName}
+                helperText={errors.firstName || " "}
+                autoComplete="given-name"
               />
-              {/* <TextField
+              <TextField
                 required
                 label="Last Name"
                 value={form.lastName}
                 onChange={setField("lastName")}
                 error={!!errors.lastName}
                 helperText={errors.lastName || " "}
-                autoComplete="lastName"
-              /> */}
+                autoComplete="family-name"
+              />
               <TextField
                 required
                 label="Email address"
@@ -250,50 +210,6 @@ export default function SignupPage() {
                 helperText={errors.phone || " "}
                 autoComplete="tel"
               />
-
-              {/* Account Type */}
-              <FormControl required error={!!errors.accountType}>
-                <FormLabel id="account-type-label">I’m signing up as</FormLabel>
-                <RadioGroup
-                  row
-                  aria-labelledby="account-type-label"
-                  name="account-type"
-                  value={form.accountType}
-                  onChange={(e) =>
-                    setAccountType(e.target.value as AccountType)
-                  }
-                >
-                  <FormControlLabel
-                    value="participant"
-                    control={<Radio />}
-                    label="Player / Participant"
-                  />
-                  <FormControlLabel
-                    value="coach"
-                    control={<Radio />}
-                    label="Coach"
-                  />
-                  <FormControlLabel
-                    value="organization"
-                    control={<Radio />}
-                    label="School / Club"
-                  />
-                </RadioGroup>
-                <FormHelperText>{errors.accountType || " "}</FormHelperText>
-              </FormControl>
-
-              {/* Conditional: School / Club Name */}
-              {showOrgName ? (
-                <TextField
-                  required
-                  label="School / Club name"
-                  value={form.organizationName}
-                  onChange={setField("organizationName")}
-                  error={!!errors.organizationName}
-                  helperText={errors.organizationName || " "}
-                  autoComplete="organization"
-                />
-              ) : null}
 
               <TextField
                 required
