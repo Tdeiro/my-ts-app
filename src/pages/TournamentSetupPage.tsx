@@ -16,7 +16,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { getLoggedInUserId, getToken } from "../auth/tokens";
 import {
   type GroupBucket,
@@ -36,6 +36,7 @@ import LocationOnOutlinedIcon from "@mui/icons-material/LocationOnOutlined";
 import CalendarMonthOutlinedIcon from "@mui/icons-material/CalendarMonthOutlined";
 import ShuffleOutlinedIcon from "@mui/icons-material/ShuffleOutlined";
 import NavigateNextRoundedIcon from "@mui/icons-material/NavigateNextRounded";
+import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -66,11 +67,13 @@ type ApiTournamentGroup = {
   id: number;
   categoryId: number;
   name: string;
-};
-
-type ApiGroupTeamAssignment = {
-  groupId?: number | string;
-  teamId?: number | string;
+  teamIds?: Array<number | string>;
+  teams?: Array<{
+    id?: number | string;
+    name?: string;
+    autoNameFromMembers?: boolean;
+    members?: TeamMemberDto[];
+  }>;
 };
 
 type ApiEventSubscriptionCategory = {
@@ -260,6 +263,7 @@ function stripLevelPrefixFromCategoryName(
 
 export default function TournamentSetupPage() {
   const { id } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -320,117 +324,43 @@ export default function TournamentSetupPage() {
   }, [id]);
 
   const groupStructureSignature = (groups: GroupBucket[]) =>
-    groups.map((g) => `${g.id}::${g.name}`).join("||");
-
-  const extractPersistedGroupTeamPairs = React.useCallback(
-    (groups: GroupBucket[]) => {
-      const pairs = new Set<string>();
-      groups.forEach((group) => {
-        const groupId = Number(group.id);
-        if (!Number.isFinite(groupId) || groupId <= 0) return;
-        (group.participants ?? []).forEach((participant) => {
-          const teamId = Number(String(participant ?? "").trim());
-          if (!Number.isFinite(teamId) || teamId <= 0) return;
-          pairs.add(`${groupId}:${teamId}`);
-        });
-      });
-      return pairs;
-    },
-    [],
-  );
-
-  const syncGroupTeamAssignmentsForCategory = React.useCallback(
-    async (
-      previousGroups: GroupBucket[],
-      nextGroups: GroupBucket[],
-      categoryTeamIds: Set<number>,
-    ) => {
-      const token = getToken();
-      if (!token) return;
-
-      const previousPairs = extractPersistedGroupTeamPairs(previousGroups);
-      const nextPairs = extractPersistedGroupTeamPairs(nextGroups);
-
-      const toCreate = Array.from(nextPairs).filter((pair) => !previousPairs.has(pair));
-      const toDelete = Array.from(previousPairs).filter((pair) => !nextPairs.has(pair));
-
-      if (toCreate.length === 0 && toDelete.length === 0) return;
-
-      try {
-        await Promise.all(
-          toCreate.map(async (pair) => {
-            const [groupIdRaw, teamIdRaw] = pair.split(":");
-            const groupId = Number(groupIdRaw);
-            const teamId = Number(teamIdRaw);
-            if (!categoryTeamIds.has(teamId)) return;
-            const res = await fetch(`${API_URL}/group-teams`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({ groupId, teamId }),
-            });
-            if (!res.ok) {
-              const body = await res.json().catch(() => null);
-              throw new Error(
-                body?.message?.[0] ||
-                  body?.error ||
-                  `Failed to assign team ${teamId} to group ${groupId}.`,
-              );
-            }
-          }),
-        );
-
-        await Promise.all(
-          toDelete.map(async (pair) => {
-            const [groupIdRaw, teamIdRaw] = pair.split(":");
-            const groupId = Number(groupIdRaw);
-            const teamId = Number(teamIdRaw);
-            if (!categoryTeamIds.has(teamId)) return;
-            const res = await fetch(
-              `${API_URL}/group-teams/group/${groupId}/team/${teamId}`,
-              {
-                method: "DELETE",
-                headers: { Authorization: `Bearer ${token}` },
-              },
-            );
-            if (!res.ok) {
-              const body = await res.json().catch(() => null);
-              throw new Error(
-                body?.message?.[0] ||
-                  body?.error ||
-                  `Failed to unassign team ${teamId} from group ${groupId}.`,
-              );
-            }
-          }),
-        );
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Failed to sync group-team assignments.",
-        );
-      }
-    },
-    [extractPersistedGroupTeamPairs],
-  );
+    groups
+      .map((g) => {
+        const participants = (g.participants ?? [])
+          .map((participant) => String(participant ?? "").trim())
+          .join(",");
+        return `${g.id}::${g.name}::${participants}`;
+      })
+      .join("||");
 
   const syncTournamentGroupsForCategory = React.useCallback(
-    async (categoryId: string, nextGroups: GroupBucket[]) => {
+    async (
+      categoryId: string,
+      nextGroups: GroupBucket[],
+      categoryTeams: TeamDto[] = [],
+    ) => {
       const token = getToken();
-      if (!token) return;
+      if (!token) return nextGroups;
       const parsedCategoryId = Number(categoryId);
-      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return;
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0)
+        return nextGroups;
 
       const signature = groupStructureSignature(nextGroups);
-      if (groupStructureSignatureRef.current[categoryId] === signature) return;
+      if (groupStructureSignatureRef.current[categoryId] === signature)
+        return nextGroups;
 
       try {
         const serverIds = new Set(serverGroupIdsByCategory[categoryId] ?? []);
         const usedIds = new Set<number>();
         const updated = [...nextGroups];
         let serverGroupsByName: Map<string, number> | null = null;
+        const categoryTeamMap = new Map<number, TeamDto>(
+          categoryTeams
+            .map((team) => [Number(team.id), team] as const)
+            .filter(
+              ([teamId]) => Number.isFinite(teamId) && Number(teamId) > 0,
+            ),
+        );
 
         const loadServerGroupsByName = async (): Promise<Map<string, number>> => {
           if (serverGroupsByName) return serverGroupsByName;
@@ -464,6 +394,38 @@ export default function TournamentSetupPage() {
           const group = updated[i];
           const backendId = Number(group.id);
           const isPersisted = Number.isFinite(backendId) && backendId > 0;
+          const groupTeamIds = Array.from(
+            new Set(
+              (group.participants ?? [])
+                .map((participant) => Number(String(participant ?? "").trim()))
+                .filter(
+                  (teamId) =>
+                    Number.isFinite(teamId) &&
+                    teamId > 0 &&
+                    categoryTeamMap.has(teamId),
+                ),
+            ),
+          );
+          const teams = groupTeamIds
+            .map((teamId) => categoryTeamMap.get(teamId))
+            .filter((team): team is TeamDto => Boolean(team))
+            .map((team) => ({
+              id: team.id,
+              name: team.name,
+              autoNameFromMembers: Boolean(team.autoNameFromMembers),
+              members: (team.members ?? []).map((member) => ({
+                userId: member.userId,
+                userFullName: member.userFullName,
+                role: member.role,
+                joinedAt: member.joinedAt,
+              })),
+            }));
+          const payload = {
+            categoryId: parsedCategoryId,
+            name: group.name,
+            teams,
+            teamIds: groupTeamIds,
+          };
 
           if (isPersisted) {
             usedIds.add(backendId);
@@ -475,10 +437,7 @@ export default function TournamentSetupPage() {
                   "Content-Type": "application/json",
                   Authorization: `Bearer ${token}`,
                 },
-                body: JSON.stringify({
-                  categoryId: parsedCategoryId,
-                  name: group.name,
-                }),
+                body: JSON.stringify(payload),
               },
             );
             if (!updateRes.ok) {
@@ -507,10 +466,7 @@ export default function TournamentSetupPage() {
                   "Content-Type": "application/json",
                   Authorization: `Bearer ${token}`,
                 },
-                body: JSON.stringify({
-                  categoryId: parsedCategoryId,
-                  name: group.name,
-                }),
+                body: JSON.stringify(payload),
               },
             );
             if (!updateRes.ok) {
@@ -530,10 +486,7 @@ export default function TournamentSetupPage() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({
-              categoryId: parsedCategoryId,
-              name: group.name,
-            }),
+            body: JSON.stringify(payload),
           });
           const createBody = await createRes.json().catch(() => null);
           if (!createRes.ok) {
@@ -584,12 +537,14 @@ export default function TournamentSetupPage() {
         }));
         groupStructureSignatureRef.current[categoryId] =
           groupStructureSignature(updated);
+        return updated;
       } catch (err) {
         setError(
           err instanceof Error
             ? err.message
             : "Failed to sync tournament groups",
         );
+        return nextGroups;
       }
     },
     [id, serverGroupIdsByCategory],
@@ -773,39 +728,26 @@ export default function TournamentSetupPage() {
           }),
         );
 
-        const groupTeamRes = await fetch(`${API_URL}/group-teams`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const groupTeamBody: ApiGroupTeamAssignment[] | null =
-          await groupTeamRes.json().catch(() => null);
-        const groupAssignments = Array.isArray(groupTeamBody)
-          ? groupTeamBody
-          : [];
-        const teamIdsByGroupId = new Map<number, number[]>();
-        groupAssignments.forEach((assignment) => {
-          const groupId = Number(assignment.groupId);
-          const teamId = Number(assignment.teamId);
-          if (
-            !Number.isFinite(groupId) ||
-            groupId <= 0 ||
-            !Number.isFinite(teamId) ||
-            teamId <= 0
-          ) {
-            return;
-          }
-          const current = teamIdsByGroupId.get(groupId) ?? [];
-          if (!current.includes(teamId)) current.push(teamId);
-          teamIdsByGroupId.set(groupId, current);
-        });
-
         const nextGroupsMap: Record<string, GroupBucket[]> = {};
         const nextServerIdsMap: Record<string, number[]> = {};
         groupFetches.forEach(({ categoryKey, groups }) => {
           const mappedGroups: GroupBucket[] = groups.map((g) => ({
             id: String(g.id),
             name: String(g.name ?? "Group"),
-            participants: (teamIdsByGroupId.get(Number(g.id)) ?? []).map((teamId) =>
-              String(teamId),
+            participants: Array.from(
+              new Set(
+                [
+                  ...(Array.isArray(g.teamIds) ? g.teamIds : []),
+                  ...((Array.isArray(g.teams) ? g.teams : [])
+                    .map((team) => team?.id)
+                    .filter((teamId) => teamId != null) as Array<
+                    number | string
+                  >),
+                ]
+                  .map((teamId) => Number(teamId))
+                  .filter((teamId) => Number.isFinite(teamId) && teamId > 0)
+                  .map((teamId) => String(teamId)),
+              ),
             ),
           }));
           nextGroupsMap[categoryKey] = mappedGroups;
@@ -1076,6 +1018,30 @@ export default function TournamentSetupPage() {
           body?.message?.[0] || body?.error || "Failed to delete team.",
         );
       }
+
+      const deletedTeamId = String(teamId);
+      const currentGroups = groupsByCategory[categoryId] ?? [];
+      const cleanedGroups = currentGroups.map((group) => ({
+        ...group,
+        participants: (group.participants ?? []).filter(
+          (participant) => String(participant) !== deletedTeamId,
+        ),
+      }));
+      setGroupsByCategory((prev) => {
+        const next = { ...prev, [categoryId]: cleanedGroups };
+        if (id) saveTournamentGroups(id, next);
+        return next;
+      });
+
+      const remainingTeams = (teamsByCategory[categoryId] ?? []).filter(
+        (team) => Number(team.id) !== teamId,
+      );
+      void syncTournamentGroupsForCategory(
+        categoryId,
+        cleanedGroups,
+        remainingTeams,
+      );
+
       setStatusMessage("Team deleted.");
       await loadTeamsForCategory(categoryId);
       setCategoryTeamEditor(categoryId, (current) =>
@@ -1091,7 +1057,14 @@ export default function TournamentSetupPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete team.");
     }
-  }, [loadTeamsForCategory, setCategoryTeamEditor]);
+  }, [
+    groupsByCategory,
+    id,
+    loadTeamsForCategory,
+    setCategoryTeamEditor,
+    syncTournamentGroupsForCategory,
+    teamsByCategory,
+  ]);
 
   React.useEffect(() => {
     if (
@@ -1273,6 +1246,89 @@ export default function TournamentSetupPage() {
       .map(([level, items]) => ({ level, items }));
   }, [categoriesOverview]);
 
+  const selectedCategoryIdFromQuery = React.useMemo(
+    () => String(searchParams.get("categoryId") ?? "").trim(),
+    [searchParams],
+  );
+  const tabFromQuery = React.useMemo(
+    () => String(searchParams.get("tab") ?? "").trim(),
+    [searchParams],
+  );
+
+  const isSetupTab = React.useCallback(
+    (value: string): value is SetupTab =>
+      value === "overview" ||
+      value === "categories" ||
+      value === "teams" ||
+      value === "groups",
+    [],
+  );
+
+  const updateSetupQuery = React.useCallback(
+    (categoryId: string | null, tab?: SetupTab) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (categoryId) {
+          next.set("categoryId", categoryId);
+          if (tab) next.set("tab", tab);
+        } else {
+          next.delete("categoryId");
+          next.delete("tab");
+        }
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+
+  const openCategorySetup = React.useCallback(
+    (categoryId: string, tab: SetupTab = "categories") => {
+      const nextTab: SetupTab = tab === "overview" ? "categories" : tab;
+      setError(null);
+      setSelectedCategoryId(categoryId);
+      setExpandedOverviewCategoryId(null);
+      setActiveTab(nextTab);
+      updateSetupQuery(categoryId, nextTab);
+    },
+    [updateSetupQuery],
+  );
+
+  const backToCategoryList = React.useCallback(() => {
+    setSelectedCategoryId("");
+    setExpandedOverviewCategoryId(null);
+    setActiveTab("overview");
+    updateSetupQuery(null);
+  }, [updateSetupQuery]);
+
+  React.useEffect(() => {
+    if (isSetupTab(tabFromQuery)) {
+      if (tabFromQuery === "overview" && selectedCategoryIdFromQuery) {
+        setActiveTab("categories");
+      } else {
+        setActiveTab(tabFromQuery);
+      }
+    }
+  }, [isSetupTab, selectedCategoryIdFromQuery, tabFromQuery]);
+
+  React.useEffect(() => {
+    if (!selectedCategoryIdFromQuery) return;
+    if (categories.some((category) => category.id === selectedCategoryIdFromQuery)) {
+      setSelectedCategoryId(selectedCategoryIdFromQuery);
+    }
+  }, [categories, selectedCategoryIdFromQuery]);
+
+  React.useEffect(() => {
+    if (!selectedCategoryIdFromQuery) {
+      setSelectedCategoryId("");
+      setExpandedOverviewCategoryId(null);
+      setActiveTab("overview");
+    }
+  }, [selectedCategoryIdFromQuery]);
+
+  const isCategorySetupMode = Boolean(selectedCategoryId);
+  const categoryTabsValue: Exclude<SetupTab, "overview"> =
+    activeTab === "teams" || activeTab === "groups" ? activeTab : "categories";
+
   const saveSetup = () => {
     if (!id) return;
     saveTournamentSetup(id, {
@@ -1283,6 +1339,16 @@ export default function TournamentSetupPage() {
     });
     setStatusMessage("Category setup saved.");
   };
+
+  React.useEffect(() => {
+    if (!id) return;
+    saveTournamentSetup(id, {
+      formats: [],
+      structureMode: "groups_knockout",
+      categories,
+      categoryConfigs,
+    });
+  }, [categoryConfigs, categories, id]);
 
   const applyStructureToAllCategoriesFrom = (categoryId: string) => {
     const source = categoryConfigs[categoryId];
@@ -1398,9 +1464,12 @@ export default function TournamentSetupPage() {
       qualifiedPerGroup,
     );
 
-    persistGroups({
+    const nextGroups = {
       ...groupsByCategory,
       [selectedCategory.id]: generatedGroups,
+    };
+    persistGroups({
+      ...nextGroups,
     });
     setCategoryConfigs((prev) => ({
       ...prev,
@@ -1409,6 +1478,11 @@ export default function TournamentSetupPage() {
         bracketMatches,
       },
     }));
+    void syncTournamentGroupsForCategory(
+      selectedCategory.id,
+      generatedGroups,
+      teamsByCategory[selectedCategory.id] ?? [],
+    );
     setError(null);
     setStatusMessage(`Generated ${groupCount} groups and bracket structure.`);
   };
@@ -1464,9 +1538,12 @@ export default function TournamentSetupPage() {
         qualifiedPerGroup,
       );
 
-      persistGroups({
+      const nextGroups = {
         ...groupsByCategory,
         [categoryId]: generatedGroups,
+      };
+      persistGroups({
+        ...nextGroups,
       });
       setCategoryConfigs((prev) => ({
         ...prev,
@@ -1475,10 +1552,15 @@ export default function TournamentSetupPage() {
           bracketMatches,
         },
       }));
+      void syncTournamentGroupsForCategory(
+        categoryId,
+        generatedGroups,
+        teamsByCategory[categoryId] ?? [],
+      );
       setError(null);
       return true;
     },
-    [categoryConfigs, groupsByCategory],
+    [categoryConfigs, groupsByCategory, syncTournamentGroupsForCategory, teamsByCategory],
   );
 
   const persistGroups = (next: Record<string, GroupBucket[]>) => {
@@ -1744,47 +1826,62 @@ export default function TournamentSetupPage() {
           </Stack>
         </Box>
 
-        {/* Tabs Navigation - Integrated with Hero */}
-        <Box
-          sx={{
-            mb: 2,
-            borderRadius: "0 0 14px 14px",
-            overflow: "hidden",
-            bgcolor: "#F9FAFB",
-            borderBottom: "1px solid #E5E7EB",
-          }}
-        >
-          <Tabs
-            value={activeTab}
-            onChange={(_, value: SetupTab) => {
-              setError(null);
-              setActiveTab(value);
-            }}
-            sx={{
-              minHeight: 56,
-              "& .MuiTabs-indicator": {
-                height: 2,
-                bgcolor: "#8B5CF6",
-              },
-              "& .MuiTab-root": {
-                fontWeight: 600,
-                textTransform: "none",
-                fontSize: "1rem",
-                minHeight: 56,
-                color: "#4A5565",
-                "&.Mui-selected": {
-                  color: "#8B5CF6",
-                  bgcolor: "white",
-                },
-              },
-            }}
-          >
-            <Tab value="overview" label="Overview" />
-            <Tab value="categories" label="Structure" />
-            <Tab value="teams" label="Teams" />
-            <Tab value="groups" label="Groups & Brackets" />
-          </Tabs>
-        </Box>
+        {isCategorySetupMode ? (
+          <Box sx={{ mb: 2 }}>
+            <Stack direction="row" spacing={1} sx={{ mb: 1 }} alignItems="center">
+              <Button
+                startIcon={<ArrowBackRoundedIcon />}
+                variant="text"
+                onClick={backToCategoryList}
+                sx={{ px: 0.5 }}
+              >
+                Back to Category List
+              </Button>
+              <Typography sx={{ color: "#6A7282" }}>
+                {selectedCategoryDisplayName || selectedCategory?.name || "Category Setup"}
+              </Typography>
+            </Stack>
+            <Box
+              sx={{
+                borderRadius: "0 0 14px 14px",
+                overflow: "hidden",
+                bgcolor: "#F9FAFB",
+                borderBottom: "1px solid #E5E7EB",
+              }}
+            >
+              <Tabs
+                value={categoryTabsValue}
+                onChange={(_, value: Exclude<SetupTab, "overview">) => {
+                  setError(null);
+                  setActiveTab(value);
+                  if (selectedCategoryId) updateSetupQuery(selectedCategoryId, value);
+                }}
+                sx={{
+                  minHeight: 56,
+                  "& .MuiTabs-indicator": {
+                    height: 2,
+                    bgcolor: "#8B5CF6",
+                  },
+                  "& .MuiTab-root": {
+                    fontWeight: 600,
+                    textTransform: "none",
+                    fontSize: "1rem",
+                    minHeight: 56,
+                    color: "#4A5565",
+                    "&.Mui-selected": {
+                      color: "#8B5CF6",
+                      bgcolor: "white",
+                    },
+                  },
+                }}
+              >
+                <Tab value="categories" label="Structure" />
+                <Tab value="teams" label="Teams" />
+                <Tab value="groups" label="Groups & Brackets" />
+              </Tabs>
+            </Box>
+          </Box>
+        ) : null}
 
         {error ? (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -1892,9 +1989,7 @@ export default function TournamentSetupPage() {
                                 },
                               }}
                               onClick={() => {
-                                setSelectedCategoryId(item.id);
-                                setExpandedOverviewCategoryId(null);
-                                setActiveTab("categories");
+                                openCategorySetup(item.id, "categories");
                               }}
                             >
                               <Stack spacing={1.5} sx={{ width: "100%" }}>
@@ -2027,9 +2122,7 @@ export default function TournamentSetupPage() {
                                     <IconButton
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        setSelectedCategoryId(item.id);
-                                        setExpandedOverviewCategoryId(null);
-                                        setActiveTab("categories");
+                                        openCategorySetup(item.id, "categories");
                                       }}
                                       sx={{
                                         border: "1px solid #D1D5DC",
@@ -3248,8 +3341,7 @@ export default function TournamentSetupPage() {
                                               <Button
                                                 variant="contained"
                                                 onClick={() => {
-                                                  setSelectedCategoryId(item.id);
-                                                  setActiveTab("groups");
+                                                  openCategorySetup(item.id, "groups");
                                                 }}
                                               >
                                                 Continue to Groups
@@ -3308,8 +3400,6 @@ export default function TournamentSetupPage() {
                                               inlineConfig.structureMode ?? ""
                                             }
                                             onGroupsChange={(nextGroups) => {
-                                              const previousGroups =
-                                                groupsByCategory[item.id] ?? [];
                                               persistGroups({
                                                 ...groupsByCategory,
                                                 [item.id]: nextGroups,
@@ -3317,15 +3407,7 @@ export default function TournamentSetupPage() {
                                               void syncTournamentGroupsForCategory(
                                                 item.id,
                                                 nextGroups,
-                                              );
-                                              void syncGroupTeamAssignmentsForCategory(
-                                                previousGroups,
-                                                nextGroups,
-                                                new Set(
-                                                  inlineTeams.map((team) =>
-                                                    Number(team.id),
-                                                  ),
-                                                ),
+                                                inlineTeams,
                                               );
                                             }}
                                             onGroupCountChange={(count) => {
@@ -3982,7 +4064,12 @@ export default function TournamentSetupPage() {
                   >
                     <Button
                       variant="outlined"
-                      onClick={() => setActiveTab("categories")}
+                      onClick={() => {
+                        setActiveTab("categories");
+                        if (selectedCategoryId) {
+                          updateSetupQuery(selectedCategoryId, "categories");
+                        }
+                      }}
                       sx={{ borderRadius: "10px" }}
                     >
                       Back: Structure
@@ -4002,6 +4089,9 @@ export default function TournamentSetupPage() {
                           [selectedCategoryId]: false,
                         }));
                         setActiveTab("groups");
+                        if (selectedCategoryId) {
+                          updateSetupQuery(selectedCategoryId, "groups");
+                        }
                       }}
                       sx={{
                         bgcolor: "#8B5CF6",
@@ -4073,6 +4163,9 @@ export default function TournamentSetupPage() {
                                 `Continued with ${unassignedPlayersCountForTeamsTab} unassigned player(s) in ${selectedCategoryDisplayName}.`,
                               );
                               setActiveTab("groups");
+                              if (selectedCategoryId) {
+                                updateSetupQuery(selectedCategoryId, "groups");
+                              }
                             }}
                           >
                             Continue Anyway
@@ -4331,10 +4424,10 @@ export default function TournamentSetupPage() {
                   >
                     <Button
                       variant="outlined"
-                      onClick={() => setActiveTab("overview")}
+                      onClick={backToCategoryList}
                       sx={{ borderRadius: 999 }}
                     >
-                      Back: Overview
+                      Back: Category List
                     </Button>
                     <Button
                       variant="contained"
@@ -4347,6 +4440,9 @@ export default function TournamentSetupPage() {
                         }
                         saveSetup();
                         setActiveTab("teams");
+                        if (selectedCategory?.id) {
+                          updateSetupQuery(selectedCategory.id, "teams");
+                        }
                       }}
                       disabled={!canSaveSelectedCategorySetup}
                       sx={{ borderRadius: 999 }}
@@ -4488,8 +4584,6 @@ export default function TournamentSetupPage() {
                         }}
                         structureMode={selectedConfig?.structureMode ?? ""}
                         onGroupsChange={(nextGroups) => {
-                          const previousGroups =
-                            groupsByCategory[selectedCategory.id] ?? [];
                           persistGroups({
                             ...groupsByCategory,
                             [selectedCategory.id]: nextGroups,
@@ -4497,15 +4591,7 @@ export default function TournamentSetupPage() {
                           void syncTournamentGroupsForCategory(
                             selectedCategory.id,
                             nextGroups,
-                          );
-                          void syncGroupTeamAssignmentsForCategory(
-                            previousGroups,
-                            nextGroups,
-                            new Set(
-                              (teamsByCategory[selectedCategory.id] ?? []).map(
-                                (team) => Number(team.id),
-                              ),
-                            ),
+                            teamsByCategory[selectedCategory.id] ?? [],
                           );
                         }}
                         onGroupCountChange={(count) => {
@@ -4538,7 +4624,12 @@ export default function TournamentSetupPage() {
                       >
                         <Button
                           variant="outlined"
-                          onClick={() => setActiveTab("teams")}
+                          onClick={() => {
+                            setActiveTab("teams");
+                            if (selectedCategory?.id) {
+                              updateSetupQuery(selectedCategory.id, "teams");
+                            }
+                          }}
                           sx={{ borderRadius: "10px" }}
                         >
                           Back: Teams
