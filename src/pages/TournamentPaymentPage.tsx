@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   Alert,
   Box,
@@ -17,8 +18,18 @@ import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import LockIcon from "@mui/icons-material/Lock";
 import { useLocation, useNavigate } from "react-router-dom";
-import MockDataFlag from "../Components/Shared/MockDataFlag";
-import { UI_FEATURE_FLAGS } from "../config/featureFlags";
+import { api } from "../api/client";
+
+const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
+
+type SubscribeMePayload = {
+  eventId: number;
+  categories: Array<{
+    id: number;
+    suggestedPlayer?: string;
+    note?: string;
+  }>;
+};
 
 type PaymentState = {
   eventId?: number;
@@ -26,7 +37,47 @@ type PaymentState = {
   currency?: string;
   totalAmount?: number;
   selectedCategoryNames?: string[];
+  subscriptionPayload?: SubscribeMePayload;
 };
+
+function rememberSubscribedEvent(eventId: number) {
+  try {
+    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const current: number[] = Array.isArray(parsed)
+      ? parsed
+          .map((item) => Number(item))
+          .filter((item) => Number.isFinite(item) && item > 0)
+      : [];
+    const next = Array.from(new Set([eventId, ...current])).slice(0, 50);
+    window.localStorage.setItem(
+      UPCOMING_SUBSCRIBED_EVENTS_KEY,
+      JSON.stringify(next),
+    );
+  } catch {
+    // Ignore storage errors in private browsing or locked environments.
+  }
+}
+
+function hasSubscribedEvent(eventId: number): boolean {
+  try {
+    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return false;
+    return parsed.some((item) => Number(item) === Number(eventId));
+  } catch {
+    return false;
+  }
+}
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  return (
+    (err as { response?: { data?: { message?: string[]; error?: string } } })
+      ?.response?.data?.message?.[0] ||
+    (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
+    fallback
+  );
+}
 
 function formatMoney(value: number | undefined, currency: string | undefined): string {
   const amount = Number(value ?? 0);
@@ -39,7 +90,54 @@ export default function TournamentPaymentPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const state = (location.state as PaymentState | null) ?? null;
-  const showMocks = UI_FEATURE_FLAGS.enableMockData;
+  const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const handleConfirmRegistration = async () => {
+    if (!state?.eventId || !state?.subscriptionPayload) {
+      setError("Registration details not found. Please go back and select categories again.");
+      return;
+    }
+    if (hasSubscribedEvent(state.eventId)) {
+      navigate("/tournaments/payment/confirmed", {
+        replace: true,
+        state: {
+          eventId: state.eventId,
+          tournamentName: state.tournamentName || "Tournament",
+          currency: (state.currency || "AUD").toUpperCase(),
+          totalAmount: state.totalAmount,
+          selectedCategoryNames: state.selectedCategoryNames || [],
+          alreadyRegistered: true,
+        },
+      });
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.post(
+        `/events/${state.eventId}/subscriptions/me`,
+        state.subscriptionPayload,
+      );
+      rememberSubscribedEvent(state.eventId);
+      navigate("/tournaments/payment/confirmed", {
+        replace: true,
+        state: {
+          eventId: state.eventId,
+          tournamentName: state.tournamentName || "Tournament",
+          currency: (state.currency || "AUD").toUpperCase(),
+          totalAmount: state.totalAmount,
+          selectedCategoryNames: state.selectedCategoryNames || [],
+          alreadyRegistered: false,
+        },
+      });
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Could not confirm registration."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   if (!state?.eventId) {
     return (
@@ -54,9 +152,21 @@ export default function TournamentPaymentPage() {
     );
   }
 
+  const missingSelectionPayload = !state.subscriptionPayload;
+
   return (
     <Box sx={{ bgcolor: "#F9FAFB", minHeight: "100vh", py: 4 }}>
       <Container maxWidth="lg">
+        {error ? (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        ) : null}
+        {missingSelectionPayload ? (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Missing category selection payload. Go back and confirm registration again.
+          </Alert>
+        ) : null}
         <Button
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate(-1)}
@@ -199,7 +309,6 @@ export default function TournamentPaymentPage() {
                     Registration Summary
                   </Typography>
                 </Stack>
-                {showMocks ? <MockDataFlag label="Checkout mocked" /> : null}
               </Stack>
 
               <Typography sx={{ fontWeight: 700, color: "#111827", mb: 0.5 }}>
@@ -254,8 +363,14 @@ export default function TournamentPaymentPage() {
                 </Stack>
               </Stack>
 
-              <Button fullWidth variant="contained" sx={{ mb: 1.25 }} disabled>
-                Complete Payment (Coming Soon)
+              <Button
+                fullWidth
+                variant="contained"
+                sx={{ mb: 1.25 }}
+                disabled={missingSelectionPayload || submitting}
+                onClick={handleConfirmRegistration}
+              >
+                {submitting ? "Confirming..." : "Confirm Registration"}
               </Button>
               <Button fullWidth variant="outlined" onClick={() => navigate("/dashboard")}>
                 Finish
@@ -263,10 +378,6 @@ export default function TournamentPaymentPage() {
             </Box>
           </Grid>
         </Grid>
-
-        <Alert severity="info" sx={{ mt: 3 }}>
-          Payment confirmation API is not connected yet. This page is ready for backend integration.
-        </Alert>
       </Container>
     </Box>
   );

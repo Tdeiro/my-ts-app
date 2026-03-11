@@ -24,6 +24,25 @@ export type TournamentSetupDraft = {
       groupCount?: number;
       teamsPerGroup?: number;
       qualifiedPerGroup?: number;
+      scheduleStartTime?: string;
+      scheduleEndTime?: string;
+      scheduleDate?: string;
+      scheduleVenue?: string;
+      scheduleBufferMinutes?: number;
+      scheduleItems?: Array<{
+        id: string;
+        matchLabel: string;
+        startTime: string;
+        endTime: string;
+        venue: string;
+        backendMatchId?: number;
+        groupId?: number;
+        round?: string;
+        homeTeamId?: number;
+        awayTeamId?: number;
+        matchDate?: string;
+        status?: string;
+      }>;
       bracketMatches?: Array<{
         id: string;
         round: string;

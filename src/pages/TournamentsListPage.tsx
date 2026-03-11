@@ -33,10 +33,8 @@ import {
   getLoggedInUserId,
   hasCreatorAccess,
   getToken,
-  isPlayerRole,
+  isParticipantRole,
 } from "../auth/tokens";
-import { UI_FEATURE_FLAGS } from "../config/featureFlags";
-import MockDataFlag from "../Components/Shared/MockDataFlag";
 import { designTokens } from "../Theme/designTokens";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
@@ -53,6 +51,9 @@ type ApiEvent = {
   level?: string;
   locationName?: string;
   startDate: string;
+  capacity?: number | string;
+  subscriptionsCount?: number | string;
+  capacityLeft?: number | string;
   status?: string;
   subscriptionStatus?: string;
   entryFee?: number | string;
@@ -61,7 +62,18 @@ type ApiEvent = {
 };
 
 type DashboardApiResp = {
-  events?: ApiEvent[] | null;
+  events?:
+    | Array<
+        | ApiEvent
+        | {
+            event?: ApiEvent | null;
+          }
+      >
+    | null;
+};
+
+type EventDetailsResp = {
+  event?: ApiEvent | null;
 };
 
 type Tournament = {
@@ -73,6 +85,9 @@ type Tournament = {
   level: string;
   locationName: string;
   startDate: string;
+  capacity: number;
+  subscriptionsCount: number;
+  capacityLeft: number;
   entryFee: number;
   currency: string;
   status: "Open";
@@ -102,6 +117,16 @@ function formatTournamentLevelLabel(level?: string): string {
 function mapApiEvent(e: ApiEvent): Tournament {
   const ownerRaw = e.createdBy ?? e.userId ?? e.user_id;
   const ownerId = ownerRaw == null ? null : Number(ownerRaw);
+  const capacity = Number(e.capacity ?? 0);
+  const subscriptionsCount = Number(e.subscriptionsCount ?? 0);
+  const capacityLeftRaw = Number(e.capacityLeft);
+  const safeCapacity = Number.isFinite(capacity) ? Math.max(0, capacity) : 0;
+  const safeSubscriptions = Number.isFinite(subscriptionsCount)
+    ? Math.max(0, subscriptionsCount)
+    : 0;
+  const safeCapacityLeft = Number.isFinite(capacityLeftRaw)
+    ? Math.max(0, capacityLeftRaw)
+    : Math.max(0, safeCapacity - safeSubscriptions);
   return {
     id: String(e.id),
     ownerId: Number.isFinite(ownerId) ? ownerId : null,
@@ -111,6 +136,9 @@ function mapApiEvent(e: ApiEvent): Tournament {
     level: formatTournamentLevelLabel(e.level ?? "All levels"),
     locationName: e.locationName ?? "-",
     startDate: e.startDate,
+    capacity: safeCapacity,
+    subscriptionsCount: safeSubscriptions,
+    capacityLeft: safeCapacityLeft,
     entryFee:
       typeof e.entryFee === "string" ? Number(e.entryFee) : (e.entryFee ?? 0),
     currency: (e.currency ?? "AUD").toUpperCase(),
@@ -152,21 +180,19 @@ function formatDateShort(value: string): string {
 }
 
 function deriveDisplayMeta(item: Tournament): TournamentDisplayMeta {
-  const idSeed = Number(String(item.id).replace(/\D/g, "").slice(-3) || "1");
-  const totalSpots = 48 + (idSeed % 4) * 16;
-  const taken = 8 + (idSeed % Math.max(10, totalSpots - 18));
-  const spotsLeft = Math.max(0, totalSpots - taken);
-  const start = new Date(item.startDate);
-  const deadline = Number.isNaN(start.getTime())
-    ? item.startDate
-    : new Date(start.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
-
+  const totalSpots = Math.max(0, Number(item.capacity) || 0);
+  const spotsLeft = Math.max(
+    0,
+    Number.isFinite(Number(item.capacityLeft))
+      ? Number(item.capacityLeft)
+      : totalSpots - Math.max(0, Number(item.subscriptionsCount) || 0),
+  );
   return {
-    timeLabel: "9:00 AM - 5:00 PM",
-    organizer: `${item.sport} Community Club`,
+    timeLabel: "-",
+    organizer: "-",
     totalSpots,
     spotsLeft,
-    registrationDeadline: formatDate(deadline),
+    registrationDeadline: formatDate(item.startDate),
   };
 }
 
@@ -199,12 +225,23 @@ function readSubscribedEventIds(): Set<string> {
   }
 }
 
+function extractDashboardEvents(events: DashboardApiResp["events"]): ApiEvent[] {
+  if (!Array.isArray(events)) return [];
+  return events
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      if ("event" in item) return item.event ?? null;
+      return item as ApiEvent;
+    })
+    .filter((event): event is ApiEvent => Boolean(event));
+}
+
 export default function TournamentsListPage() {
   const navigate = useNavigate();
   const role = getLoggedInRole();
   const currentUserId = getLoggedInUserId();
   const canCreate = hasCreatorAccess(role);
-  const isPlayer = isPlayerRole(role);
+  const isParticipant = isParticipantRole(role);
 
   const [query, setQuery] = React.useState("");
   const [sportFilter, setSportFilter] = React.useState("All");
@@ -237,6 +274,67 @@ export default function TournamentsListPage() {
     }
 
     try {
+      const enrichOwnedEventsWithDetails = async (
+        source: Tournament[],
+      ): Promise<Tournament[]> => {
+        const ownedIds = source
+          .filter((event) => event.ownerId != null && event.ownerId === Number(currentUserId))
+          .map((event) => Number(event.id))
+          .filter((id) => Number.isFinite(id) && id > 0);
+        if (ownedIds.length === 0) return source;
+
+        const detailed = await Promise.all(
+          ownedIds.map(async (eventId) => {
+            try {
+              const detailRes = await fetch(
+                `${API_URL}/events/${eventId}/details`,
+                {
+                  headers: { Authorization: `Bearer ${token}` },
+                },
+              );
+              const detailBody: EventDetailsResp | null = await detailRes
+                .json()
+                .catch(() => null);
+              if (!detailRes.ok || !detailBody?.event) return null;
+              return detailBody.event;
+            } catch {
+              return null;
+            }
+          }),
+        );
+
+        const byId = new Map(
+          detailed
+            .filter((event): event is ApiEvent => Boolean(event))
+            .map((event) => [String(event.id), event]),
+        );
+
+        return source.map((event) => {
+          const detail = byId.get(String(event.id));
+          if (!detail) return event;
+          const capacity = Number(detail.capacity ?? event.capacity);
+          const subscriptionsCount = Number(
+            detail.subscriptionsCount ?? event.subscriptionsCount,
+          );
+          const capacityLeftRaw = Number(detail.capacityLeft);
+          const safeCapacity = Number.isFinite(capacity)
+            ? Math.max(0, capacity)
+            : event.capacity;
+          const safeSubscriptionsCount = Number.isFinite(subscriptionsCount)
+            ? Math.max(0, subscriptionsCount)
+            : event.subscriptionsCount;
+          const safeCapacityLeft = Number.isFinite(capacityLeftRaw)
+            ? Math.max(0, capacityLeftRaw)
+            : Math.max(0, safeCapacity - safeSubscriptionsCount);
+          return {
+            ...event,
+            capacity: safeCapacity,
+            subscriptionsCount: safeSubscriptionsCount,
+            capacityLeft: safeCapacityLeft,
+          };
+        });
+      };
+
       const dashboardRes = await fetch(`${API_URL}/dashboard`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -244,9 +342,7 @@ export default function TournamentsListPage() {
         .json()
         .catch(() => null);
       if (dashboardRes.ok) {
-        const scopedRaw: ApiEvent[] = Array.isArray(dashboardBody?.events)
-          ? dashboardBody.events
-          : [];
+        const scopedRaw: ApiEvent[] = extractDashboardEvents(dashboardBody?.events);
         const dashboardSubscribed = new Set(
           scopedRaw
             .filter((event) =>
@@ -260,7 +356,7 @@ export default function TournamentsListPage() {
           .filter((e) => e.eventType?.toUpperCase() === "TOURNAMENT")
           .map(mapApiEvent)
           .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
-        setScopedItems(scopedMapped);
+        setScopedItems(await enrichOwnedEventsWithDetails(scopedMapped));
         setSubscribedHintIds(dashboardSubscribed);
       } else {
         setScopedItems([]);
@@ -303,7 +399,7 @@ export default function TournamentsListPage() {
         .map(mapApiEvent)
         .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
 
-      setItems(mapped);
+      setItems(await enrichOwnedEventsWithDetails(mapped));
       setSubscribedHintIds((prev) => new Set([...prev, ...apiSubscribedIds]));
     } catch {
       setError("Network error loading tournaments.");
@@ -339,7 +435,6 @@ export default function TournamentsListPage() {
     return ["All", ...Array.from(s)];
   }, [items]);
 
-  const todayIso = new Date().toISOString().slice(0, 10);
   const mergedPersonalSource = React.useMemo(() => {
     const byId = new Map<string, Tournament>();
     [...items, ...scopedItems].forEach((item) => byId.set(String(item.id), item));
@@ -352,42 +447,33 @@ export default function TournamentsListPage() {
       ),
     [mergedPersonalSource, currentUserId],
   );
+  const subscribedEventIds = React.useMemo(() => {
+    const ids = new Set<string>();
+
+    readSubscribedEventIds().forEach((id) => ids.add(String(id)));
+    subscribedHintIds.forEach((id) => ids.add(String(id)));
+    scopedItems.forEach((item) => {
+      const itemId = String(item.id);
+      const isOwner = item.ownerId != null && item.ownerId === Number(currentUserId);
+      if (isOwner) return;
+      if (
+        isSubscribedLikeStatus(item.subscriptionStatus) ||
+        isSubscribedLikeStatus(item.apiStatus)
+      ) {
+        ids.add(itemId);
+      }
+    });
+
+    return ids;
+  }, [scopedItems, subscribedHintIds, currentUserId]);
   const subscribedItems = React.useMemo(
-    () => {
-      const fromDashboard = scopedItems.filter(
+    () =>
+      mergedPersonalSource.filter(
         (t) =>
-          !(t.ownerId != null && t.ownerId === Number(currentUserId)) &&
-          (!t.startDate || String(t.startDate).slice(0, 10) >= todayIso),
-      );
-
-      // Fallback: include tournaments known from invite subscriptions in local storage.
-      const subscribedIdSet = readSubscribedEventIds();
-      const fromStorage = mergedPersonalSource.filter(
-        (t) =>
-          subscribedIdSet.has(String(t.id)) &&
-          !(t.ownerId != null && t.ownerId === Number(currentUserId)) &&
-          (!t.startDate || String(t.startDate).slice(0, 10) >= todayIso),
-      );
-      const fromApiHints = mergedPersonalSource.filter(
-        (t) =>
-          subscribedHintIds.has(String(t.id)) &&
-          !(t.ownerId != null && t.ownerId === Number(currentUserId)) &&
-          (!t.startDate || String(t.startDate).slice(0, 10) >= todayIso),
-      );
-
-      const byId = new Map<string, Tournament>();
-      [...fromDashboard, ...fromStorage, ...fromApiHints].forEach((item) =>
-        byId.set(String(item.id), item),
-      );
-      return Array.from(byId.values());
-    },
-    [
-      scopedItems,
-      mergedPersonalSource,
-      currentUserId,
-      todayIso,
-      subscribedHintIds,
-    ],
+          subscribedEventIds.has(String(t.id)) &&
+          !(t.ownerId != null && t.ownerId === Number(currentUserId)),
+      ),
+    [mergedPersonalSource, subscribedEventIds, currentUserId],
   );
   const personalIds = React.useMemo(
     () => new Set([...ownedItems, ...subscribedItems].map((item) => String(item.id))),
@@ -397,7 +483,7 @@ export default function TournamentsListPage() {
     () => filtered.filter((item) => !personalIds.has(String(item.id))),
     [filtered, personalIds],
   );
-  const ownedSectionTitle = canCreate && !isPlayer ? "My Tournaments" : "My Events";
+  const ownedSectionTitle = canCreate && !isParticipant ? "My Tournaments" : "My Events";
 
   const handleWithdraw = React.useCallback(
     async (eventId: string) => {
@@ -428,8 +514,6 @@ export default function TournamentsListPage() {
     },
     [loadEvents],
   );
-
-  const hasMockMeta = UI_FEATURE_FLAGS.enableMockData;
 
   return (
     <Box
@@ -508,12 +592,6 @@ export default function TournamentsListPage() {
           </CardContent>
         </Card>
 
-        {hasMockMeta ? (
-          <Box sx={{ mb: 1.5 }}>
-            <MockDataFlag label="Tournament card details (organizer/spots/deadline) use mock display data" />
-          </Box>
-        ) : null}
-
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}
@@ -544,7 +622,10 @@ export default function TournamentsListPage() {
                 const status = statusChipSx();
                 const meta = deriveDisplayMeta(t);
                 const spotPctUsed =
-                  ((meta.totalSpots - meta.spotsLeft) / meta.totalSpots) * 100;
+                  meta.totalSpots > 0
+                    ? ((meta.totalSpots - meta.spotsLeft) / meta.totalSpots) *
+                      100
+                    : 0;
                 return (
                   <Card key={`owned-${t.id}`} sx={{ borderRadius: 2.5, overflow: "hidden" }}>
                     <CardContent sx={{ p: 2 }}>
@@ -609,16 +690,16 @@ export default function TournamentsListPage() {
           </Stack>
         ) : null}
 
-        {isPlayer && subscribedItems.length > 0 ? (
+        {isParticipant && subscribedItems.length > 0 ? (
           <Stack sx={{ mb: 3 }}>
             <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.25 }}>
               <CalendarMonthRoundedIcon sx={{ color: "primary.main", fontSize: 30 }} />
               <Box>
                 <Typography variant="h4" sx={{ fontWeight: 900, lineHeight: 1.1 }}>
-                  My Upcoming Events
+                  My Tournament Invites
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Tournaments you are subscribed to.
+                  Tournaments you are invited to or already registered for.
                 </Typography>
               </Box>
             </Stack>
@@ -632,6 +713,10 @@ export default function TournamentsListPage() {
               {subscribedItems.map((t) => {
                 const status = statusChipSx();
                 const meta = deriveDisplayMeta(t);
+                const isSubscribed =
+                  isSubscribedLikeStatus(t.subscriptionStatus) ||
+                  isSubscribedLikeStatus(t.apiStatus) ||
+                  subscribedEventIds.has(String(t.id));
                 return (
                   <Card key={`subscribed-${t.id}`} sx={{ borderRadius: 2.5, overflow: "hidden" }}>
                     <CardContent sx={{ p: 2 }}>
@@ -658,14 +743,32 @@ export default function TournamentsListPage() {
                       </Stack>
                       <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                         <Button
-                          variant="outlined"
-                          color="error"
+                          variant="contained"
                           fullWidth
-                          disabled={Boolean(withdrawingById[t.id])}
-                          onClick={() => void handleWithdraw(t.id)}
+                          onClick={() => navigate(`/tournaments/${t.id}`)}
                           sx={{ borderRadius: 2 }}
                         >
-                          {withdrawingById[t.id] ? "Withdrawing..." : "Withdraw"}
+                          View Tournament
+                        </Button>
+                        <Button
+                          variant={isSubscribed ? "outlined" : "contained"}
+                          color={isSubscribed ? "error" : "primary"}
+                          fullWidth
+                          disabled={isSubscribed ? Boolean(withdrawingById[t.id]) : false}
+                          onClick={() =>
+                            isSubscribed
+                              ? void handleWithdraw(t.id)
+                              : navigate(
+                                  `/tournaments/invite?inviteTournamentId=${encodeURIComponent(t.id)}`,
+                                )
+                          }
+                          sx={{ borderRadius: 2 }}
+                        >
+                          {isSubscribed
+                            ? withdrawingById[t.id]
+                              ? "Withdrawing..."
+                              : "Withdraw"
+                            : "Complete Registration"}
                         </Button>
                       </Stack>
                     </CardContent>
@@ -712,9 +815,17 @@ export default function TournamentsListPage() {
           >
             {discoverItems.map((t) => {
               const isOwner = t.ownerId != null && t.ownerId === Number(currentUserId);
+              const isSubscribedTournament =
+                isSubscribedLikeStatus(t.subscriptionStatus) ||
+                isSubscribedLikeStatus(t.apiStatus) ||
+                subscribedEventIds.has(String(t.id));
               const status = statusChipSx();
               const meta = deriveDisplayMeta(t);
-              const spotPctUsed = ((meta.totalSpots - meta.spotsLeft) / meta.totalSpots) * 100;
+              const spotPctUsed =
+                meta.totalSpots > 0
+                  ? ((meta.totalSpots - meta.spotsLeft) / meta.totalSpots) *
+                    100
+                  : 0;
 
               return (
                 <Card key={t.id} sx={{ borderRadius: 2.5, overflow: "hidden" }}>
@@ -749,14 +860,12 @@ export default function TournamentsListPage() {
                             <MetaRow icon={<AccessTimeRoundedIcon fontSize="small" />} text={meta.timeLabel} />
                         </Stack>
 
-                        {hasMockMeta ? (
-                          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.75 }}>
-                            <StarRoundedIcon sx={{ color: "warning.main", fontSize: 16 }} />
-                            <Typography variant="body2" color="text.secondary">
-                              {meta.organizer}
-                            </Typography>
-                          </Stack>
-                        ) : null}
+                        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.75 }}>
+                          <StarRoundedIcon sx={{ color: "warning.main", fontSize: 16 }} />
+                          <Typography variant="body2" color="text.secondary">
+                            {meta.organizer}
+                          </Typography>
+                        </Stack>
                       </Box>
                     </Stack>
 
@@ -831,6 +940,16 @@ export default function TournamentsListPage() {
                             Manage Tournament
                           </Button>
                         </>
+                      ) : isParticipant && isSubscribedTournament ? (
+                        <Button
+                          variant="outlined"
+                          fullWidth
+                          onClick={() => navigate(`/tournaments/${t.id}`)}
+                          endIcon={<ChevronRightRoundedIcon />}
+                          sx={{ borderRadius: 2 }}
+                        >
+                          View Tournament
+                        </Button>
                       ) : (
                         <Button
                           variant="contained"

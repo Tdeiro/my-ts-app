@@ -30,9 +30,9 @@ import {
 } from "@mui/material";
 import { useNavigate, useParams } from "react-router-dom";
 import { getToken } from "../auth/tokens";
+import { parseTournamentCategoriesResponse } from "../Utils/tournamentCategoriesApi";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
-const ENABLE_SPECIAL_PRICING_RULE_MOCK = true;
 
 type TournamentForm = {
   name: string;
@@ -64,6 +64,7 @@ type TournamentCategoryForm = {
   format: "SINGLES" | "DOUBLES" | "MIXED";
   gender: "Women" | "Men";
   price: number;
+  specialPrice?: number | null;
 };
 
 type CategoryPricingRule = {
@@ -152,6 +153,16 @@ function teamsLimitSizeFromFormat(
 ): number {
   if (format === "SINGLES") return 1;
   return 2;
+}
+
+function resolveCategorySpecialPrice(
+  basePrice: number,
+  pricingRule: CategoryPricingRule,
+): number {
+  if (pricingRule.enabled) {
+    return Math.max(0, Number(pricingRule.specialPricePerCategory || 0));
+  }
+  return Math.max(0, Number(basePrice || 0));
 }
 
 function buildAutoCategoryName(category: TournamentCategoryForm): string {
@@ -359,11 +370,9 @@ export default function AddTournamentPage() {
           ) as CategoryPricingRule["currency"],
         }));
         setCreatedTournamentId(Number(id));
-        const rawCategories = Array.isArray(categoriesBody)
-          ? categoriesBody
-          : (categoriesBody?.data ?? []);
+        const rawCategories = parseTournamentCategoriesResponse(categoriesBody);
         const mappedCategories: TournamentCategoryForm[] = rawCategories.map(
-          (c: any) => ({
+          (c) => ({
             id: crypto.randomUUID(),
             backendId: Number(c.id),
             name: String(c.name ?? ""),
@@ -379,9 +388,32 @@ export default function AddTournamentPage() {
               0,
               Number(c.price ?? c.entryFee ?? c.fee ?? 0) || 0,
             ),
+            specialPrice:
+              c.specialPrice == null
+                ? null
+                : Math.max(0, Number(c.specialPrice ?? 0) || 0),
           }),
         );
         setSavedCategories(mappedCategories);
+        const firstCategoryCurrency = String(
+          rawCategories.find((category) => category.currency)?.currency ?? "",
+        ).toUpperCase();
+        if (["AUD", "USD", "EUR", "BRL"].includes(firstCategoryCurrency)) {
+          setCategoryPricingRule((prev) => ({
+            ...prev,
+            currency: firstCategoryCurrency as CategoryPricingRule["currency"],
+          }));
+        }
+        const firstSpecialPrice = mappedCategories
+          .map((category) => Number(category.specialPrice))
+          .find((value) => Number.isFinite(value) && value >= 0);
+        if (Number.isFinite(firstSpecialPrice)) {
+          setCategoryPricingRule((prev) => ({
+            ...prev,
+            enabled: true,
+            specialPricePerCategory: Math.max(0, Number(firstSpecialPrice)),
+          }));
+        }
         setLoadedCategoryIds(
           mappedCategories
             .map((c) => Number(c.backendId))
@@ -677,16 +709,22 @@ export default function AddTournamentPage() {
         format: TournamentCategoryForm["format"];
         gender: TournamentCategoryForm["gender"];
         price: number;
+        specialPrice: number;
       }> = savedCategories.reduce((acc, source) => {
         const baseName = source.name.trim();
         if (!baseName) return acc;
+        const basePrice = Math.max(0, Number(source.price || 0));
         acc.push({
           backendId: source.backendId,
           name: baseName,
           level: source.level,
           format: source.format,
           gender: source.gender,
-          price: Math.max(0, Number(source.price || 0)),
+          price: basePrice,
+          specialPrice: resolveCategorySpecialPrice(
+            basePrice,
+            categoryPricingRule,
+          ),
         });
         return acc;
       }, [] as Array<{
@@ -696,6 +734,7 @@ export default function AddTournamentPage() {
         format: TournamentCategoryForm["format"];
         gender: TournamentCategoryForm["gender"];
         price: number;
+        specialPrice: number;
       }>);
 
       if (isEditMode) {
@@ -723,6 +762,7 @@ export default function AddTournamentPage() {
                   gender: category.gender,
                   teamsLimitSize: teamsLimitSizeFromFormat(category.format),
                   price: category.price,
+                  specialPrice: category.specialPrice,
                   currency: categoryPricingRule.currency || "AUD",
                 }),
               },
@@ -749,6 +789,7 @@ export default function AddTournamentPage() {
                 gender: category.gender,
                 teamsLimitSize: teamsLimitSizeFromFormat(category.format),
                 price: category.price,
+                specialPrice: category.specialPrice,
                 currency: categoryPricingRule.currency || "AUD",
               }),
             });
@@ -793,6 +834,10 @@ export default function AddTournamentPage() {
             gender: c.gender,
             teamsLimitSize: teamsLimitSizeFromFormat(c.format),
             price: Math.max(0, Number(c.price || 0)),
+            specialPrice: resolveCategorySpecialPrice(
+              Math.max(0, Number(c.price || 0)),
+              categoryPricingRule,
+            ),
             currency: categoryPricingRule.currency || "AUD",
           }))
           .filter((c) => c.name);
@@ -1537,19 +1582,18 @@ export default function AddTournamentPage() {
                   </Typography>
                 </Box>
 
-                {ENABLE_SPECIAL_PRICING_RULE_MOCK ? (
-                  <Alert
-                    severity="info"
-                    sx={{
-                      borderRadius: 2,
-                      border: "1px solid #BFDBFE",
-                      bgcolor: "#EFF6FF",
-                    }}
-                  >
-                    Special pricing rule is currently UI-only (mocked). Category
-                    base price is persisted per category.
-                  </Alert>
-                ) : null}
+                <Alert
+                  severity="info"
+                  sx={{
+                    borderRadius: 2,
+                    border: "1px solid #BFDBFE",
+                    bgcolor: "#EFF6FF",
+                  }}
+                >
+                  Category pricing rules are persisted. If enabled, special
+                  price is applied per category when a player subscribes to 2+
+                  categories.
+                </Alert>
 
                 <Card
                   sx={{

@@ -28,10 +28,9 @@ import {
   RevenueMiniBars,
   SectionCard,
 } from "../Components/Shared/DashboardDesign";
-import { UI_FEATURE_FLAGS } from "../config/featureFlags";
-import { coachDashboardMock } from "../mocks/ui";
 import { designTokens } from "../Theme/designTokens";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
 
 type DashboardState = {
   loading: boolean;
@@ -89,6 +88,9 @@ type DashboardViewData = {
 type ApiEvent = {
   id: number | string;
   createdBy?: number | string;
+  subscriptionsCount?: number | string;
+  capacityLeft?: number | string;
+  categoriesCount?: number | string;
   userId?: number | string;
   user_id?: number | string;
   name?: string;
@@ -96,6 +98,7 @@ type ApiEvent = {
   eventType?: string;
   startDate?: string;
   status?: string;
+  subscriptionStatus?: string;
   entryFee?: number | string;
 };
 
@@ -115,9 +118,32 @@ type ApiClass = {
 };
 
 type DashboardApiResp = {
-  events?: ApiEvent[] | null;
+  events?:
+    | Array<
+        | ApiEvent
+        | {
+            event?: ApiEvent | null;
+          }
+      >
+    | null;
   classes?: ApiClass[] | null;
 };
+
+function isSubscribedLikeStatus(value?: string): boolean {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return ["REGISTERED", "SUBSCRIBED", "CONFIRMED", "ACTIVE", "APPROVED"].includes(normalized);
+}
+
+function extractDashboardEvents(events: DashboardApiResp["events"]): ApiEvent[] {
+  if (!Array.isArray(events)) return [];
+  return events
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      if ("event" in item) return item.event ?? null;
+      return item as ApiEvent;
+    })
+    .filter((event): event is ApiEvent => Boolean(event));
+}
 
 function parseJwt(token: string) {
   try {
@@ -171,6 +197,19 @@ function daysUntil(dateStr: string): number {
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
+function isOwnedByCurrentUser(
+  event: ApiEvent,
+  currentUserId: number,
+  assumeCreatorScope: boolean,
+): boolean {
+  const ownerRaw = event.createdBy ?? event.userId ?? event.user_id;
+  const ownerId = Number(ownerRaw);
+  if (Number.isFinite(ownerId) && Number.isFinite(currentUserId)) {
+    return ownerId === currentUserId;
+  }
+  return assumeCreatorScope;
+}
+
 function getMonday(date: Date): Date {
   const d = new Date(date);
   const day = d.getDay();
@@ -203,6 +242,32 @@ function toMoney(value: number): string {
     currency: "AUD",
     maximumFractionDigits: 0,
   });
+}
+
+function readSubscribedEventIds(): number[] {
+  try {
+    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item) && item > 0);
+  } catch {
+    return [];
+  }
+}
+
+function removeSubscribedEventId(eventId: number) {
+  try {
+    const ids = readSubscribedEventIds();
+    const next = ids.filter((id) => Number(id) !== Number(eventId));
+    window.localStorage.setItem(
+      UPCOMING_SUBSCRIBED_EVENTS_KEY,
+      JSON.stringify(next),
+    );
+  } catch {
+    // Ignore storage errors in private browsing or locked environments.
+  }
 }
 
 export default function Dashboard() {
@@ -279,6 +344,7 @@ export default function Dashboard() {
           ),
         },
       }));
+      removeSubscribedEventId(eventId);
     } catch (e: any) {
       setState((s) => ({
         ...s,
@@ -306,14 +372,20 @@ export default function Dashboard() {
       setState((s) => ({ ...s, loading: true, error: null }));
 
       try {
-        const dashboardRes = await fetch(`${API_URL}/dashboard`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const dashboardBody = await dashboardRes.json().catch(() => null);
+        const [summaryRes, dashboardRes] = await Promise.all([
+          fetch(`${API_URL}/dashboard/summary`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${API_URL}/dashboard`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => null),
+        ]);
+        const dashboardBody = await summaryRes.json().catch(() => null);
+        const dashboardStatusBody = await dashboardRes?.json().catch(() => null);
 
         if (cancelled) return;
 
-        if (!dashboardRes.ok) {
+        if (!summaryRes.ok) {
           const message =
             dashboardBody?.message?.[0] ||
             dashboardBody?.error ||
@@ -321,7 +393,7 @@ export default function Dashboard() {
           setState((s) => ({
             ...s,
             loading: false,
-            apiStatus: dashboardRes.status,
+            apiStatus: summaryRes.status,
             error: message,
           }));
           return;
@@ -332,12 +404,28 @@ export default function Dashboard() {
           dashboardBody && typeof dashboardBody === "object"
             ? dashboardBody
             : {};
-        const scopedEvents: ApiEvent[] = Array.isArray(payload.events)
-          ? payload.events
-          : [];
-        const scopedClasses: ApiClass[] = Array.isArray(payload.classes)
-          ? payload.classes
-          : [];
+        const scopedEvents: ApiEvent[] = extractDashboardEvents(payload.events);
+        const statusPayload: DashboardApiResp =
+          dashboardStatusBody && typeof dashboardStatusBody === "object"
+            ? dashboardStatusBody
+            : {};
+        const dashboardStatusEvents: ApiEvent[] = extractDashboardEvents(
+          statusPayload.events,
+        );
+        const statusById = new Map(
+          dashboardStatusEvents.map((event) => [String(event.id), event]),
+        );
+        const enrichedEvents: ApiEvent[] = scopedEvents.map((event) => {
+          const statusSource = statusById.get(String(event.id));
+          return {
+            ...event,
+            status: event.status ?? statusSource?.status,
+            subscriptionStatus:
+              event.subscriptionStatus ?? statusSource?.subscriptionStatus,
+          };
+        });
+        // Classes are not ready in this endpoint yet.
+        const scopedClasses: ApiClass[] = [];
 
         const todayStr = toDateOnly(new Date().toISOString());
         const weekStart = getMonday(new Date());
@@ -348,11 +436,52 @@ export default function Dashboard() {
         const previousWeekEnd = new Date(weekEnd);
         previousWeekEnd.setDate(weekEnd.getDate() - 7);
         const weekRangeLabel = `${formatShortDate(weekStart)} - ${formatShortDate(weekEnd)}`;
-        const tournaments = scopedEvents.filter(
+        const tournaments = enrichedEvents.filter(
           (e) => String(e.eventType ?? "").toUpperCase() === "TOURNAMENT",
         );
-        const joinedTournaments = tournaments
-          .filter((t) => Number(t.createdBy) !== currentUserId)
+        const subscribedByStatusIds = new Set(
+          tournaments
+            .filter((t) =>
+              isSubscribedLikeStatus(t.subscriptionStatus) ||
+              isSubscribedLikeStatus(t.status),
+            )
+            .map((t) => Number(t.id))
+            .filter((id) => Number.isFinite(id)),
+        );
+        const subscribedByStorageIds = new Set(readSubscribedEventIds());
+        const subscribedIds = new Set<number>([
+          ...subscribedByStatusIds,
+          ...subscribedByStorageIds,
+        ]);
+        const tournamentsById = new Map<number, ApiEvent>(
+          tournaments.map((t) => [Number(t.id), t]),
+        );
+        const missingSubscribedIds = Array.from(subscribedIds).filter(
+          (id) => !tournamentsById.has(id),
+        );
+        const missingSubscribedEvents = await Promise.all(
+          missingSubscribedIds.map(async (eventId) => {
+            try {
+              const res = await fetch(`${API_URL}/events/${eventId}`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              const body = (await res.json().catch(() => null)) as ApiEvent | null;
+              if (!res.ok || !body) return null;
+              return body;
+            } catch {
+              return null;
+            }
+          }),
+        );
+        missingSubscribedEvents
+          .filter((event): event is ApiEvent => Boolean(event))
+          .forEach((event) => {
+            if (String(event.eventType ?? "").toUpperCase() !== "TOURNAMENT") return;
+            tournamentsById.set(Number(event.id), event);
+          });
+        const joinedTournaments = Array.from(subscribedIds)
+          .map((eventId) => tournamentsById.get(eventId))
+          .filter((event): event is ApiEvent => event != null)
           .sort((a, b) =>
             toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)),
           )
@@ -363,7 +492,7 @@ export default function Dashboard() {
             when: toDateOnly(t.startDate) || "TBD",
           }));
         const myTournaments = tournaments
-          .filter((t) => Number(t.createdBy) === currentUserId)
+          .filter((t) => isOwnedByCurrentUser(t, currentUserId, canCreate))
           .sort((a, b) =>
             toDateOnly(a.startDate).localeCompare(toDateOnly(b.startDate)),
           )
@@ -582,7 +711,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [token, user?.id]);
+  }, [token, user?.id, canCreate]);
 
   const userDisplayName =
     String(user?.fullName ?? user?.email ?? "user")
@@ -593,37 +722,31 @@ export default function Dashboard() {
   const derivedCoachScheduleDays = buildCoachScheduleDaysFromWeeklyClasses(
     viewData.weeklyClasses,
   );
-  const hasRealCoachScheduleItems = derivedCoachScheduleDays.some(
-    (day) => day.items.length > 0,
-  );
-  const shouldUseCoachMock =
-    UI_FEATURE_FLAGS.enableMockData &&
-    !isParticipant &&
-    !hasRealCoachScheduleItems;
-  const coachData = shouldUseCoachMock ? coachDashboardMock : null;
-  const coachWeekRangeLabel =
-    coachData?.weekRangeLabel ?? viewData.weekRangeLabel;
-  const coachWeekSessions = coachData?.weekSessions ?? viewData.weekSessions;
-  const coachWeekStudents = coachData?.weekStudents ?? viewData.weekStudents;
-  const coachActiveTournaments =
-    coachData?.activeTournaments ?? viewData.activeTournaments;
-  const coachWeekRevenue = coachData?.weekRevenue ?? viewData.weekRevenue;
-  const coachPreviousWeekRevenue =
-    coachData?.previousWeekRevenue ?? viewData.previousWeekRevenue;
-  const coachRevenueByDay = coachData?.revenueByDay ?? viewData.revenueByDay;
-  const coachManagedTournamentsCount =
-    coachData?.tournamentsManagingCount ?? managedTournamentsCount;
-  const coachRegisteredCount =
-    coachData?.registeredCount ?? registeredTournamentsCount;
-  const coachTodaySessions = coachData?.todaySessions ?? viewData.todaySessions;
+  const coachWeekRangeLabel = viewData.weekRangeLabel;
+  const coachWeekSessions = viewData.weekSessions;
+  const coachWeekStudents = viewData.weekStudents;
+  const coachActiveTournaments = viewData.activeTournaments;
+  const coachWeekRevenue = viewData.weekRevenue;
+  const coachPreviousWeekRevenue = viewData.previousWeekRevenue;
+  const coachRevenueByDay = viewData.revenueByDay;
+  const coachManagedTournamentsCount = managedTournamentsCount;
+  const coachRegisteredCount = registeredTournamentsCount;
+  const coachTodaySessions = viewData.todaySessions;
+  const firstRegisteredTournamentId = viewData.joinedTournaments[0]?.eventId;
+  const handleOpenMyTournament = React.useCallback(() => {
+    if (firstRegisteredTournamentId != null) {
+      navigate(`/tournaments/${encodeURIComponent(firstRegisteredTournamentId)}`);
+      return;
+    }
+    navigate("/tournaments");
+  }, [firstRegisteredTournamentId, navigate]);
   const revenueGrowthPct =
     coachPreviousWeekRevenue > 0
       ? ((coachWeekRevenue - coachPreviousWeekRevenue) /
           coachPreviousWeekRevenue) *
         100
       : null;
-  const coachScheduleDays: CoachScheduleDay[] =
-    coachData?.scheduleDays ?? derivedCoachScheduleDays;
+  const coachScheduleDays: CoachScheduleDay[] = derivedCoachScheduleDays;
 
   return (
     <Box
@@ -834,14 +957,6 @@ export default function Dashboard() {
 
             <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
               <NavigateSummaryCard
-                title="Explore Classes"
-                count={viewData.openClasses.length}
-                subtitle="Open sessions"
-                icon={<CalendarMonthRoundedIcon fontSize="small" />}
-                color="default"
-                onClick={() => navigate("/classes")}
-              />
-              <NavigateSummaryCard
                 title="Explore Tournaments"
                 count={viewData.openTournaments.length}
                 subtitle="Available now"
@@ -855,7 +970,7 @@ export default function Dashboard() {
                 subtitle="Registered"
                 icon={<EmojiEventsRoundedIcon fontSize="small" />}
                 color="warning"
-                onClick={() => navigate("/events/upcoming")}
+                onClick={handleOpenMyTournament}
               />
             </Stack>
 
@@ -917,7 +1032,7 @@ export default function Dashboard() {
                           variant="outlined"
                           onClick={() =>
                             navigate(
-                              `/events/upcoming?eventId=${encodeURIComponent(item.id)}`,
+                              `/tournaments/${encodeURIComponent(item.id)}`,
                             )
                           }
                           sx={{
@@ -991,7 +1106,7 @@ export default function Dashboard() {
                           variant="outlined"
                           onClick={() =>
                             navigate(
-                              `/events/upcoming?eventId=${encodeURIComponent(String(item.eventId))}`,
+                              `/tournaments/${encodeURIComponent(item.eventId)}`,
                             )
                           }
                           sx={{
@@ -1069,7 +1184,7 @@ export default function Dashboard() {
                   </Stack>
                   <Button
                     variant="outlined"
-                    onClick={() => navigate("/revenue")}
+                    onClick={() => navigate("/tournaments")}
                     sx={{
                       borderRadius: 2,
                       borderWidth: "1.5px",
@@ -1079,7 +1194,7 @@ export default function Dashboard() {
                       },
                     }}
                   >
-                    View Analytics
+                    View Tournaments
                   </Button>
                 </Stack>
 
@@ -1349,7 +1464,7 @@ export default function Dashboard() {
                 subtitle="Active Events"
                 icon={<SettingsRoundedIcon fontSize="small" />}
                 color="warning"
-                onClick={() => navigate("/events/upcoming")}
+                onClick={() => navigate("/tournaments")}
               />
               <NavigateSummaryCard
                 title="My Tournaments"
@@ -1357,7 +1472,7 @@ export default function Dashboard() {
                 subtitle="Registered"
                 icon={<EmojiEventsRoundedIcon fontSize="small" />}
                 color="primary"
-                onClick={() => navigate("/events/upcoming")}
+                onClick={handleOpenMyTournament}
               />
               <NavigateSummaryCard
                 title="Today's Classes"

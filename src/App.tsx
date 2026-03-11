@@ -3,25 +3,21 @@ import { BrowserRouter, Routes, Route, Outlet } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import AppShell from "./Components/Shared/Menu/AppShell";
 import TournamentsListPage from "./pages/TournamentsListPage";
-import ClassesPage from "./pages/ClassesPage";
 import CoachRegisterPage from "./pages/CoachRegisterPage";
 import LandingPage from "./pages/LandingPage";
 import RequireAuth from "./Components/RequireAuth";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import AddEventPage from "./pages/AddEventPage";
-import CreateClassPage from "./pages/CreateClassPage";
 import RequireCreateAccess from "./Components/RequireCreateAccess";
 import TournamentSetupPage from "./pages/TournamentSetupPage";
-import TournamentGroupsPage from "./pages/TournamentGroupsPage";
-import TeamsPage from "./pages/TeamsPage";
+import RunTournamentPage from "./pages/RunTournamentPage";
 import PlayerTournamentInvitePage from "./pages/PlayerTournamentInvitePage";
 import TournamentPaymentPage from "./pages/TournamentPaymentPage";
-import UpcomingEventsPage from "./pages/UpcomingEventsPage";
-import RevenueAnalyticsPage from "./pages/RevenueAnalyticsPage";
+import TournamentPaymentConfirmedPage from "./pages/TournamentPaymentConfirmedPage";
 import AccountBillingPage from "./pages/AccountBillingPage";
 import AccountCheckoutPage from "./pages/AccountCheckoutPage";
-import SettingsPage from "./pages/SettingsPage";
+import TournamentViewPage from "./pages/TournamentViewPage";
 
 function Layout() {
   return (
@@ -48,13 +44,12 @@ function App() {
           >
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/tournaments" element={<TournamentsListPage />} />
-            <Route path="/events/upcoming" element={<UpcomingEventsPage />} />
-            <Route path="/revenue" element={<RevenueAnalyticsPage />} />
             <Route path="/account" element={<AccountBillingPage />} />
             <Route path="/account/checkout" element={<AccountCheckoutPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/tournaments/invite" element={<PlayerTournamentInvitePage />} />
             <Route path="/tournaments/payment" element={<TournamentPaymentPage />} />
+            <Route path="/tournaments/payment/confirmed" element={<TournamentPaymentConfirmedPage />} />
+            <Route path="/tournaments/:id" element={<TournamentViewPage />} />
             <Route
               path="/tournaments/new"
               element={
@@ -80,35 +75,10 @@ function App() {
               }
             />
             <Route
-              path="/tournaments/:id/groups"
+              path="/tournaments/:id/run"
               element={
                 <RequireCreateAccess>
-                  <TournamentGroupsPage />
-                </RequireCreateAccess>
-              }
-            />
-            <Route path="/classes" element={<ClassesPage />} />
-            <Route
-              path="/teams"
-              element={
-                <RequireCreateAccess>
-                  <TeamsPage />
-                </RequireCreateAccess>
-              }
-            />
-            <Route
-              path="/classes/new"
-              element={
-                <RequireCreateAccess>
-                  <CreateClassPage />
-                </RequireCreateAccess>
-              }
-            />
-            <Route
-              path="/classes/:id/edit"
-              element={
-                <RequireCreateAccess>
-                  <CreateClassPage />
+                  <RunTournamentPage />
                 </RequireCreateAccess>
               }
             />

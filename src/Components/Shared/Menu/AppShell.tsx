@@ -16,7 +16,6 @@ import {
   Stack,
   Menu,
   MenuItem,
-  TextField,
   Tooltip,
   Typography,
   Button,
@@ -28,15 +27,9 @@ import MenuIcon from "@mui/icons-material/Menu";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import DashboardIcon from "@mui/icons-material/DashboardRounded";
 import EmojiEventsIcon from "@mui/icons-material/EmojiEventsRounded";
-import EventAvailableRoundedIcon from "@mui/icons-material/EventAvailableRounded";
-import CalendarMonthIcon from "@mui/icons-material/CalendarMonthRounded";
-import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
-import PaidRoundedIcon from "@mui/icons-material/PaidRounded";
 import CreditCardRoundedIcon from "@mui/icons-material/CreditCardRounded";
-import SettingsIcon from "@mui/icons-material/SettingsRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import KeyboardArrowDownRoundedIcon from "@mui/icons-material/KeyboardArrowDownRounded";
-import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import StarRateIcon from "@mui/icons-material/StarRate";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -72,24 +65,6 @@ const baseNavItems: NavItem[] = [
     match: "prefix",
   },
   {
-    label: "Revenue & Analytics",
-    to: "/revenue",
-    icon: <PaidRoundedIcon />,
-    match: "prefix",
-  },
-  {
-    label: "Upcoming Events",
-    to: "/events/upcoming",
-    icon: <EventAvailableRoundedIcon />,
-    match: "prefix",
-  },
-  {
-    label: "Classes",
-    to: "/classes",
-    icon: <CalendarMonthIcon />,
-    match: "prefix",
-  },
-  {
     label: "Account & Billing",
     to: "/account",
     icon: <CreditCardRoundedIcon />,
@@ -100,7 +75,6 @@ const baseNavItems: NavItem[] = [
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = React.useState(true);
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const [search, setSearch] = React.useState("");
   const [menuAnchor, setMenuAnchor] = React.useState<null | HTMLElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -108,21 +82,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const role = getLoggedInRole();
   const canManageTeams = hasCreatorAccess(role);
-  const navItems = React.useMemo(
-    () =>
-      canManageTeams
-        ? [
-            ...baseNavItems,
-            {
-              label: "Teams",
-              to: "/teams",
-              icon: <GroupsRoundedIcon />,
-              match: "prefix" as const,
-            },
-          ]
-        : baseNavItems.filter((item) => item.to !== "/revenue"),
-    [canManageTeams],
-  );
+  const navItems = baseNavItems;
   const userName = React.useMemo(() => {
     const token = getToken();
     if (!token) return "User";
@@ -254,33 +214,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </Box>
 
               <Box sx={{ flexGrow: 1 }} />
-
-              <TextField
-                size="small"
-                placeholder="Search classes, tournaments..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                sx={{
-                  display: { xs: "none", sm: "block" },
-                  minWidth: { xs: 150, sm: 260, md: 320 },
-                  maxWidth: 380,
-                  mr: 1,
-                  "& .MuiOutlinedInput-root": {
-                    bgcolor: "#F9FAFB",
-                    borderRadius: 999,
-                  },
-                }}
-                slotProps={{
-                  input: {
-                    startAdornment: (
-                      <SearchRoundedIcon
-                        fontSize="small"
-                        style={{ marginRight: 8, opacity: 0.6 }}
-                      />
-                    ),
-                  },
-                }}
-              />
 
               <Stack direction="row" spacing={1.25} alignItems="center">
                 {canManageTeams ? (
@@ -486,32 +419,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
               <Box sx={{ flexGrow: 1 }} />
 
-              <Divider />
-
-              {/* Footer */}
-              <List sx={{ px: 1, py: 1 }}>
-                <ListItem disablePadding>
-                  <ListItemButton
-                    onClick={() => handleNavigate("/settings")}
-                    sx={{
-                      borderRadius: 2,
-                      px: 1.25,
-                      py: 1.05,
-                      "&:hover": { bgcolor: "#F9FAFB" },
-                    }}
-                  >
-                    <ListItemIcon
-                      sx={{ minWidth: 38, color: "text.secondary" }}
-                    >
-                      <SettingsIcon />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary="Settings"
-                      primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }}
-                    />
-                  </ListItemButton>
-                </ListItem>
-              </List>
             </Drawer>
 
             {/* Main content */}

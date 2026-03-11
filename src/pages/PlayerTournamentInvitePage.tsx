@@ -29,6 +29,8 @@ import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 
+const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
+
 type EventDetailsCategoryDto = {
   id: number | string;
   name?: string;
@@ -56,7 +58,22 @@ type EventDetailsDto = {
   categories?: EventDetailsCategoryDto[];
 };
 
-const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
+type DashboardEventDto = {
+  id?: number | string;
+  status?: string;
+  subscriptionStatus?: string;
+  eventType?: string;
+};
+type DashboardApiResp = {
+  events?:
+    | Array<
+        | DashboardEventDto
+        | {
+            event?: DashboardEventDto | null;
+          }
+      >
+    | null;
+};
 
 type SubscribeMePayload = {
   eventId: number;
@@ -111,25 +128,6 @@ function parseInviteTournamentId(raw: string | null): number | null {
   return parsed;
 }
 
-function rememberSubscribedEvent(eventId: number) {
-  try {
-    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    const current: number[] = Array.isArray(parsed)
-      ? parsed
-          .map((item) => Number(item))
-          .filter((item) => Number.isFinite(item) && item > 0)
-      : [];
-    const next = Array.from(new Set([eventId, ...current])).slice(0, 50);
-    window.localStorage.setItem(
-      UPCOMING_SUBSCRIBED_EVENTS_KEY,
-      JSON.stringify(next),
-    );
-  } catch {
-    // Ignore storage errors in private browsing or locked environments.
-  }
-}
-
 function getErrorMessage(err: unknown, fallback: string): string {
   return (
     (err as { response?: { data?: { message?: string[]; error?: string } } })
@@ -137,6 +135,40 @@ function getErrorMessage(err: unknown, fallback: string): string {
     (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
     fallback
   );
+}
+
+function isSubscribedLikeStatus(value?: string): boolean {
+  const status = String(value ?? "").trim().toUpperCase();
+  return ["REGISTERED", "SUBSCRIBED", "CONFIRMED", "ACTIVE", "APPROVED"].includes(status);
+}
+
+function readSubscribedEventIds(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item > 0)
+        .map((item) => String(item)),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function extractDashboardEvents(
+  events: DashboardApiResp["events"],
+): DashboardEventDto[] {
+  if (!Array.isArray(events)) return [];
+  return events
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      if ("event" in item) return item.event ?? null;
+      return item as DashboardEventDto;
+    })
+    .filter((event): event is DashboardEventDto => Boolean(event));
 }
 
 function normalizeGender(value?: string): "Men" | "Women" | "Mixed" {
@@ -612,10 +644,10 @@ function TournamentInviteContent({
         <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB" }}>
           <Box sx={{ p: { xs: 2, md: 3 }, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <Box>
-              <Typography sx={{ fontSize: 14, color: "#6B7280" }}>Total Amount Paid</Typography>
+              <Typography sx={{ fontSize: 14, color: "#6B7280" }}>Total Amount Due</Typography>
               <Typography sx={{ fontSize: 42, fontWeight: 900, color: "#9333EA", lineHeight: 1.05 }}>${totalFee} {tournament.currency}</Typography>
               <Typography sx={{ fontSize: 13, color: "#6B7280" }}>
-                {selectedCategories.length > 0 ? "Payment completed" : "Select a category to continue"}
+                {selectedCategories.length > 0 ? "Confirm on payment page to complete registration" : "Select a category to continue"}
               </Typography>
             </Box>
 
@@ -647,6 +679,7 @@ export default function PlayerTournamentInvitePage() {
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<string | null>(null);
   const [event, setEvent] = React.useState<EventDetailsDto | null>(null);
+  const [alreadyRegistered, setAlreadyRegistered] = React.useState(false);
 
   React.useEffect(() => {
     if (!inviteTournamentId) return;
@@ -656,8 +689,31 @@ export default function PlayerTournamentInvitePage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await api.get<EventDetailsDto>(`/events/${inviteTournamentId}`);
-        if (!cancelled) setEvent(res.data);
+        const [eventRes, dashboardRes] = await Promise.all([
+          api.get<EventDetailsDto>(`/events/${inviteTournamentId}`),
+          api.get<DashboardApiResp>("/dashboard").catch(() => null),
+        ]);
+        if (cancelled) return;
+
+        setEvent(eventRes.data);
+
+        const dashboardEvents = extractDashboardEvents(dashboardRes?.data?.events);
+        const fromStorage = readSubscribedEventIds().has(String(inviteTournamentId));
+        const fromDashboard = dashboardEvents.some((item) => {
+          const matchesId = String(item?.id ?? "") === String(inviteTournamentId);
+          const isTournament = String(item?.eventType ?? "").toUpperCase() === "TOURNAMENT";
+          if (!matchesId || !isTournament) return false;
+          return (
+            isSubscribedLikeStatus(item?.subscriptionStatus) ||
+            isSubscribedLikeStatus(item?.status)
+          );
+        });
+
+        const registered = fromDashboard || fromStorage;
+        setAlreadyRegistered(registered);
+        if (registered) {
+          setSuccess("You are already registered for this tournament.");
+        }
       } catch (err: unknown) {
         if (!cancelled) setError(getErrorMessage(err, "Could not load tournament details."));
       } finally {
@@ -673,6 +729,10 @@ export default function PlayerTournamentInvitePage() {
 
   const handleConfirm = async (selected: SelectedCategory[]) => {
     if (!inviteTournamentId) return;
+    if (alreadyRegistered) {
+      navigate(`/tournaments/${inviteTournamentId}`);
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -687,10 +747,6 @@ export default function PlayerTournamentInvitePage() {
         })),
       };
 
-      await api.post(`/events/${inviteTournamentId}/subscriptions/me`, payload);
-      rememberSubscribedEvent(inviteTournamentId);
-      setSuccess("Registration confirmed.");
-
       const totalAmount = selected.reduce((sum, item) => sum + Number(item.fee || 0), 0);
       navigate("/tournaments/payment", {
         state: {
@@ -699,6 +755,7 @@ export default function PlayerTournamentInvitePage() {
           currency: String(event?.currency || "AUD").toUpperCase(),
           totalAmount,
           selectedCategoryNames: selected.map((c) => c.name),
+          subscriptionPayload: payload,
         },
       });
     } catch (err: unknown) {
@@ -752,10 +809,20 @@ export default function PlayerTournamentInvitePage() {
           <Alert severity="success">{success}</Alert>
         </Container>
       ) : null}
+      {alreadyRegistered ? (
+        <Container maxWidth="md" sx={{ py: 1 }}>
+          <Button
+            variant="outlined"
+            onClick={() => navigate(`/tournaments/${inviteTournamentId}`)}
+          >
+            View Tournament
+          </Button>
+        </Container>
+      ) : null}
       <TournamentInviteContent
         tournament={inviteUi}
         categories={categories}
-        readOnly={isReadOnlyView}
+        readOnly={isReadOnlyView || alreadyRegistered}
         onBack={() => navigate("/dashboard")}
         onConfirm={handleConfirm}
         submitting={submitting}

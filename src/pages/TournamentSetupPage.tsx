@@ -7,17 +7,20 @@ import {
   CardContent,
   Chip,
   Collapse,
+  CircularProgress,
   Divider,
   IconButton,
+  MenuItem,
   Slide,
   Stack,
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
-import { useParams, useSearchParams } from "react-router-dom";
-import { getLoggedInUserId, getToken } from "../auth/tokens";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { getToken } from "../auth/tokens";
 import {
   type GroupBucket,
   loadTournamentGroups,
@@ -29,7 +32,6 @@ import {
 import TournamentPhaseBuilder, {
   generateBracketSkeleton,
   generateGroupsSkeleton,
-  type BuilderBracketMatch,
 } from "../Components/Shared/TournamentPhaseBuilder";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 import LocationOnOutlinedIcon from "@mui/icons-material/LocationOnOutlined";
@@ -37,232 +39,106 @@ import CalendarMonthOutlinedIcon from "@mui/icons-material/CalendarMonthOutlined
 import ShuffleOutlinedIcon from "@mui/icons-material/ShuffleOutlined";
 import NavigateNextRoundedIcon from "@mui/icons-material/NavigateNextRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import {
+  entryLabelFromFormat,
+  extractLevelFromCategoryName,
+  formatMinutesToTime,
+  fromApiTime,
+  getTeamDisplayName,
+  groupLetter,
+  inferDisciplineFromCategory,
+  inferFormatFromCategoryName,
+  normalizeMatchIdentity,
+  normalizeRoundForApi,
+  parseTimeToMinutes,
+  stripLevelPrefixFromCategoryName,
+  STRUCTURE_OPTIONS,
+  toApiTime,
+} from "./tournament-setup/helpers";
+import { useTournamentSetupNavigation } from "./tournament-setup/hooks";
+import {
+  type ApiEvent,
+  type ApiEventDetailsResponse,
+  type ApiEventSubscription,
+  type ApiMatchDto,
+  type ApiTournamentCategory,
+  type ApiTournamentGroup,
+  type CategoryScheduleItem,
+  type CategorySetupConfig,
+  type RegisteredPlayer,
+  type ScheduleDraftInput,
+  type SetupTab,
+  type StructureMode,
+  type TeamDto,
+  type TeamEditorState,
+  type TournamentFormat,
+} from "./tournament-setup/types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
-type ApiEvent = {
-  id: number | string;
-  userId?: number | string;
-  user_id?: number | string;
-  name?: string;
-  eventType?: string;
-  sport?: string;
-  format?: string;
-  level?: string;
-  locationName?: string;
-  startDate?: string;
+type ApiStructureType =
+  | "GROUP_PHASE_KO"
+  | "KNOCKOUT_ONLY"
+  | "GROUP_PHASE_ONLY"
+  | "SWISS";
+
+type ApiTournamentCategoryStructure = {
+  categoryId?: number | string;
+  structureType?: string;
+  numberOfGroups?: number | string;
+  teamsPerGroup?: number | string;
+  qualifiedPerGroup?: number | string;
 };
 
-type ApiTournamentCategory = {
-  id: number | string;
-  eventId?: number | string;
-  name?: string;
-  level?: string;
-  minAge?: number | string | null;
-  maxAge?: number | string | null;
-  gender?: string;
-};
-
-type ApiTournamentGroup = {
-  id: number;
-  categoryId: number;
-  name: string;
-  teamIds?: Array<number | string>;
-  teams?: Array<{
-    id?: number | string;
-    name?: string;
-    autoNameFromMembers?: boolean;
-    members?: TeamMemberDto[];
-  }>;
-};
-
-type ApiEventSubscriptionCategory = {
-  id?: number | string;
-  suggestedPlayer?: string | null;
-  note?: string | null;
-};
-
-type ApiEventSubscription = {
-  eventId?: number | string;
-  userId?: number | string;
-  userFullName?: string;
-  userEmail?: string;
-  status?: string;
-  source?: string;
-  categories?: ApiEventSubscriptionCategory[];
-  joinedAt?: string;
-};
-
-type TeamMemberDto = {
-  userId: number;
-  userFullName?: string;
-  role?: string;
-  joinedAt?: string;
-};
-
-type TeamDto = {
-  id: number;
-  categoryId: number;
-  name?: string;
-  autoNameFromMembers?: boolean;
-  createdAt?: string;
-  members?: TeamMemberDto[];
-};
-
-type RegisteredPlayer = {
-  id: string;
-  name: string;
-  email: string;
-  preferredPartner: string | null;
-  categoryIds: string[];
-};
-
-type TeamEditorState = {
-  name: string;
-  memberUserIds: string[];
-  autoNameFromMembers: boolean;
-  editingTeamId: number | null;
-};
-
-type StructureMode =
-  | "groups_knockout"
-  | "knockout_only"
-  | "group_phase_only"
-  | "swiss";
-type TournamentFormat = "Singles" | "Doubles" | "Teams";
-type SetupTab = "overview" | "categories" | "teams" | "groups";
-type CategorySetupConfig = {
-  formats: TournamentFormat[];
-  structureMode: StructureMode | "";
-  groupCount?: number;
-  teamsPerGroup?: number;
-  qualifiedPerGroup?: number;
-  bracketMatches?: BuilderBracketMatch[];
-};
-
-const STRUCTURE_OPTIONS: Array<{
-  id: StructureMode;
-  title: string;
-  subtitle: string;
-}> = [
-  {
-    id: "groups_knockout",
-    title: "Group Phase + Knockout",
-    subtitle: "Round-robin groups then finals",
-  },
-  {
-    id: "knockout_only",
-    title: "Knockout Only",
-    subtitle: "Fast elimination format",
-  },
-  {
-    id: "group_phase_only",
-    title: "Group Phase Only",
-    subtitle: "Standings-based competition",
-  },
-  {
-    id: "swiss",
-    title: "Swiss Rounds",
-    subtitle: "Pair by score each round",
-  },
-];
-
-function inferDisciplineFromCategory(
-  raw: ApiTournamentCategory,
-): TournamentCategory["discipline"] {
-  const name = String(raw.name ?? "").toLowerCase();
-  const gender = String(raw.gender ?? "").toLowerCase();
-  if (name.includes("team")) return "Teams";
-  if (name.includes("mixed") || gender.includes("mixed"))
-    return "Mixed Doubles";
-  if (gender.includes("women") || gender.includes("female"))
-    return "Doubles Female";
-  if (gender.includes("men") || gender.includes("male")) return "Doubles Male";
-  return "Singles";
+function toApiStructureType(mode: StructureMode): ApiStructureType {
+  if (mode === "groups_knockout") return "GROUP_PHASE_KO";
+  if (mode === "knockout_only") return "KNOCKOUT_ONLY";
+  if (mode === "group_phase_only") return "GROUP_PHASE_ONLY";
+  return "SWISS";
 }
 
-function inferFormatFromCategoryName(name?: string): TournamentFormat {
-  const normalized = String(name ?? "").toLowerCase();
-  if (normalized.includes("team")) return "Teams";
-  if (normalized.includes("double") || normalized.includes("mixed"))
-    return "Doubles";
-  return "Singles";
+function fromApiStructureType(type?: string): StructureMode | "" {
+  const normalized = String(type ?? "").trim().toUpperCase();
+  if (normalized === "GROUP_PHASE_KO") return "groups_knockout";
+  if (normalized === "KNOCKOUT_ONLY") return "knockout_only";
+  if (normalized === "GROUP_PHASE_ONLY") return "group_phase_only";
+  if (normalized === "SWISS") return "swiss";
+  return "";
 }
 
-function groupLetter(index: number): string {
-  return String.fromCharCode(65 + index);
+function parseStructureResponse(
+  body: unknown,
+): ApiTournamentCategoryStructure | null {
+  if (!body || typeof body !== "object") return null;
+  const source = body as Record<string, unknown>;
+  const nested =
+    source.data && typeof source.data === "object"
+      ? (source.data as Record<string, unknown>)
+      : source;
+  if (!nested) return null;
+  const hasStructureType = Boolean(
+    String(nested.structureType ?? "").trim().length,
+  );
+  if (!hasStructureType) return null;
+  return {
+    categoryId: nested.categoryId as number | string | undefined,
+    structureType: nested.structureType as string | undefined,
+    numberOfGroups: nested.numberOfGroups as number | string | undefined,
+    teamsPerGroup: nested.teamsPerGroup as number | string | undefined,
+    qualifiedPerGroup: nested.qualifiedPerGroup as number | string | undefined,
+  };
 }
 
-function getTeamDisplayName(team: TeamDto): string {
-  const explicitName = String(team.name ?? "").trim();
-  if (explicitName) return explicitName;
-  const memberNames = (team.members ?? [])
-    .map((member) => String(member.userFullName ?? "").trim())
-    .filter(Boolean);
-  if (memberNames.length > 0) return memberNames.join(" / ");
-  return `Team #${team.id}`;
-}
-
-function entryLabelFromFormat(format?: TournamentFormat): string {
-  if (format === "Singles") return "Player";
-  if (format === "Doubles") return "Pair";
-  return "Team";
-}
-
-function extractLevelFromCategoryName(name?: string): string | null {
-  const normalized = String(name ?? "").trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized.includes("advanced")) return "Advanced";
-  if (normalized.includes("intermediate")) return "Intermediate";
-  if (normalized.includes("beginner")) return "Beginner";
-  if (normalized.includes("open")) return "Open";
-  return null;
-}
-
-function stripLevelPrefixFromCategoryName(
-  name: string,
-  sectionLevel: string,
-): string {
-  const source = String(name ?? "").trim();
-  if (!source) return "";
-
-  const normalizedSection = String(sectionLevel).trim().toLowerCase();
-  if (!normalizedSection || normalizedSection === "other") return source;
-
-  const levelPattern =
-    normalizedSection === "advanced"
-      ? /\badvanced\b/gi
-      : normalizedSection === "intermediate"
-        ? /\bintermediate\b/gi
-        : normalizedSection === "beginner"
-          ? /\bbeginner\b/gi
-          : normalizedSection === "open"
-            ? /\bopen\b/gi
-            : null;
-
-  if (!levelPattern) return source;
-
-  // Remove level token even when separators are inconsistent, then normalize label.
-  const withoutLevel = source
-    .replace(levelPattern, "")
-    .replace(/\s*[-–—:]\s*/g, " - ")
-    .replace(/\s{2,}/g, " ")
-    .replace(/\s*-\s*-\s*/g, " - ")
-    .replace(/^\s*-\s*|\s*-\s*$/g, "")
-    .trim();
-
-  if (!withoutLevel) return source;
-
-  const parts = withoutLevel
-    .split(/\s*-\s*/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  return parts.length > 0 ? parts.join(" - ") : source;
+function toSafeCount(value: unknown): number | undefined {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.max(0, parsed);
 }
 
 export default function TournamentSetupPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [loading, setLoading] = React.useState(true);
@@ -290,6 +166,8 @@ export default function TournamentSetupPage() {
   >({});
   const [confirmedStructureByCategory, setConfirmedStructureByCategory] =
     React.useState<Record<string, boolean>>({});
+  const [hasPersistedStructureByCategory, setHasPersistedStructureByCategory] =
+    React.useState<Record<string, boolean>>({});
   const [registeredPlayers, setRegisteredPlayers] = React.useState<
     RegisteredPlayer[]
   >([]);
@@ -316,6 +194,22 @@ export default function TournamentSetupPage() {
   >({});
   const [serverGroupIdsByCategory, setServerGroupIdsByCategory] =
     React.useState<Record<string, number[]>>({});
+  const [scheduleCreatorOpenByCategory, setScheduleCreatorOpenByCategory] =
+    React.useState<Record<string, boolean>>({});
+  const [scheduleDraftByCategory, setScheduleDraftByCategory] = React.useState<
+    Record<string, ScheduleDraftInput>
+  >({});
+  const [matchesPostingByCategory, setMatchesPostingByCategory] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [editingScheduleItemByCategory, setEditingScheduleItemByCategory] =
+    React.useState<Record<string, string | null>>({});
+  const [finalizingSetupByCategory, setFinalizingSetupByCategory] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [finalizedSetupByCategory, setFinalizedSetupByCategory] = React.useState<
+    Record<string, boolean>
+  >({});
   const groupStructureSignatureRef = React.useRef<Record<string, string>>({});
 
   React.useEffect(() => {
@@ -332,6 +226,85 @@ export default function TournamentSetupPage() {
         return `${g.id}::${g.name}::${participants}`;
       })
       .join("||");
+
+  const syncCategoryStructure = React.useCallback(
+    async (categoryId: string, cfg?: CategorySetupConfig): Promise<boolean> => {
+      const token = getToken();
+      if (!token) return false;
+      const parsedCategoryId = Number(categoryId);
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
+        return false;
+      }
+
+      const alreadyPersisted =
+        hasPersistedStructureByCategory[categoryId] ?? false;
+      const mode = cfg?.structureMode ?? "";
+
+      try {
+        if (!mode) {
+          if (!alreadyPersisted) return true;
+          const deleteRes = await fetch(
+            `${API_URL}/tournament-category-structures/${encodeURIComponent(parsedCategoryId)}`,
+            {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${token}` },
+            },
+          );
+          const deleteBody = await deleteRes.json().catch(() => null);
+          if (!deleteRes.ok) {
+            throw new Error(
+              deleteBody?.message?.[0] ||
+                deleteBody?.error ||
+                "Failed to delete structure.",
+            );
+          }
+          setHasPersistedStructureByCategory((prev) => ({
+            ...prev,
+            [categoryId]: false,
+          }));
+          return true;
+        }
+
+        const payload = {
+          categoryId: parsedCategoryId,
+          structureType: toApiStructureType(mode),
+          numberOfGroups: Math.max(0, Number(cfg?.groupCount ?? 0)),
+          teamsPerGroup: Math.max(0, Number(cfg?.teamsPerGroup ?? 0)),
+          qualifiedPerGroup: Math.max(0, Number(cfg?.qualifiedPerGroup ?? 0)),
+        };
+
+        const endpoint = alreadyPersisted
+          ? `${API_URL}/tournament-category-structures/${encodeURIComponent(parsedCategoryId)}`
+          : `${API_URL}/tournament-category-structures`;
+        const method = alreadyPersisted ? "PUT" : "POST";
+        const res = await fetch(endpoint, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            body?.message?.[0] || body?.error || "Failed to save structure.",
+          );
+        }
+        setHasPersistedStructureByCategory((prev) => ({
+          ...prev,
+          [categoryId]: true,
+        }));
+        return true;
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to sync structure.",
+        );
+        return false;
+      }
+    },
+    [hasPersistedStructureByCategory],
+  );
 
   const syncTournamentGroupsForCategory = React.useCallback(
     async (
@@ -559,68 +532,92 @@ export default function TournamentSetupPage() {
       setError(null);
 
       const token = getToken();
-      const userId = getLoggedInUserId();
 
-      if (!token || userId === null) {
+      if (!token) {
         setError("Invalid session. Please sign in again.");
         setLoading(false);
         return;
       }
 
       try {
-        const [eventRes, categoriesRes] = await Promise.all([
-          fetch(`${API_URL}/events`, {
+        const detailsRes = await fetch(
+          `${API_URL}/events/${encodeURIComponent(id)}/details`,
+          {
             headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch(`${API_URL}/tournament-categories?eventId=${id}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-
-        const data = await eventRes.json().catch(() => null);
-        const categoriesData = await categoriesRes.json().catch(() => null);
-        if (!eventRes.ok) {
-          throw new Error(
-            data?.message?.[0] ||
-              data?.error ||
-              `Failed to load tournament (${eventRes.status})`,
-          );
-        }
-        if (!categoriesRes.ok) {
-          throw new Error(
-            categoriesData?.message?.[0] ||
-              categoriesData?.error ||
-              `Failed to load tournament categories (${categoriesRes.status})`,
-          );
-        }
-
-        const raw: ApiEvent[] = Array.isArray(data) ? data : (data?.data ?? []);
-        const hasOwnerField = raw.some(
-          (e) => e.userId != null || e.user_id != null,
+          },
         );
-        const own = hasOwnerField
-          ? raw.filter((e) => Number(e.userId ?? e.user_id) === userId)
-          : raw;
+        const detailsBody: ApiEventDetailsResponse | null = await detailsRes
+          .json()
+          .catch(() => null);
+        if (!detailsRes.ok) {
+          throw new Error(
+            (detailsBody as any)?.message?.[0] ||
+              (detailsBody as any)?.error ||
+              `Failed to load tournament (${detailsRes.status})`,
+          );
+        }
 
-        const selected =
-          own.find(
-            (e) =>
-              String(e.id) === String(id) &&
-              String(e.eventType ?? "").toUpperCase() === "TOURNAMENT",
-          ) ?? null;
+        const selected = detailsBody?.event ?? null;
 
         if (!selected) {
           throw new Error("Tournament not found or you do not have access.");
+        }
+        if (String(selected.eventType ?? "").toUpperCase() !== "TOURNAMENT") {
+          throw new Error("Selected event is not a tournament.");
         }
 
         if (cancelled) return;
         setEvent(selected);
         const saved = loadTournamentSetup(String(selected.id));
         const rawCategories: ApiTournamentCategory[] = Array.isArray(
-          categoriesData,
+          selected.categories,
         )
-          ? categoriesData
-          : (categoriesData?.data ?? []);
+          ? selected.categories
+          : [];
+        const structureByCategory: Record<
+          string,
+          ApiTournamentCategoryStructure | null
+        > = {};
+        const persistedStructureByCategory: Record<string, boolean> = {};
+        await Promise.all(
+          rawCategories.map(async (cat) => {
+            const categoryKey = String(cat.id);
+            const parsedCategoryId = Number(cat.id);
+            if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
+              structureByCategory[categoryKey] = null;
+              persistedStructureByCategory[categoryKey] = false;
+              return;
+            }
+            try {
+              const structureRes = await fetch(
+                `${API_URL}/tournament-category-structures/${encodeURIComponent(parsedCategoryId)}`,
+                {
+                  headers: { Authorization: `Bearer ${token}` },
+                },
+              );
+              if (structureRes.status === 404) {
+                structureByCategory[categoryKey] = null;
+                persistedStructureByCategory[categoryKey] = false;
+                return;
+              }
+              const structureBody = await structureRes.json().catch(() => null);
+              if (!structureRes.ok) {
+                throw new Error(
+                  structureBody?.message?.[0] ||
+                    structureBody?.error ||
+                    "Failed to load category structure.",
+                );
+              }
+              const parsed = parseStructureResponse(structureBody);
+              structureByCategory[categoryKey] = parsed;
+              persistedStructureByCategory[categoryKey] = Boolean(parsed);
+            } catch {
+              structureByCategory[categoryKey] = null;
+              persistedStructureByCategory[categoryKey] = false;
+            }
+          }),
+        );
+        setHasPersistedStructureByCategory(persistedStructureByCategory);
         const savedCategories = saved?.categories ?? [];
         const backendMappedCategories: TournamentCategory[] = rawCategories.map(
           (cat, idx) => {
@@ -651,21 +648,82 @@ export default function TournamentSetupPage() {
               : saved.categories;
           sourceCategories.forEach((cat) => {
             const current = savedConfigs[String(cat.id)];
+            const backendStructure = structureByCategory[String(cat.id)];
+            const backendStructureMode = fromApiStructureType(
+              backendStructure?.structureType,
+            );
             computedConfigs[String(cat.id)] = {
               formats: [inferFormatFromCategoryName(cat.name)],
-              structureMode: (current?.structureMode as StructureMode) ?? "",
+              structureMode:
+                backendStructureMode ||
+                ((current?.structureMode as StructureMode) ?? ""),
               groupCount:
-                typeof current?.groupCount === "number"
+                toSafeCount(backendStructure?.numberOfGroups) ??
+                (typeof current?.groupCount === "number"
                   ? current.groupCount
-                  : undefined,
+                  : undefined),
               teamsPerGroup:
-                typeof current?.teamsPerGroup === "number"
+                toSafeCount(backendStructure?.teamsPerGroup) ??
+                (typeof current?.teamsPerGroup === "number"
                   ? current.teamsPerGroup
-                  : undefined,
+                  : undefined),
               qualifiedPerGroup:
-                typeof current?.qualifiedPerGroup === "number"
+                toSafeCount(backendStructure?.qualifiedPerGroup) ??
+                (typeof current?.qualifiedPerGroup === "number"
                   ? current.qualifiedPerGroup
+                  : undefined),
+              scheduleStartTime:
+                typeof current?.scheduleStartTime === "string"
+                  ? current.scheduleStartTime
                   : undefined,
+              scheduleEndTime:
+                typeof current?.scheduleEndTime === "string"
+                  ? current.scheduleEndTime
+                  : undefined,
+              scheduleDate:
+                typeof current?.scheduleDate === "string"
+                  ? current.scheduleDate
+                  : undefined,
+              scheduleVenue:
+                typeof current?.scheduleVenue === "string"
+                  ? current.scheduleVenue
+                  : undefined,
+              scheduleBufferMinutes:
+                typeof current?.scheduleBufferMinutes === "number"
+                  ? current.scheduleBufferMinutes
+                  : undefined,
+              scheduleItems: Array.isArray(current?.scheduleItems)
+                ? current.scheduleItems.map((item) => ({
+                    id: String(item.id),
+                    matchLabel: String(item.matchLabel ?? ""),
+                    startTime: String(item.startTime ?? ""),
+                    endTime: String(item.endTime ?? ""),
+                    venue: String(item.venue ?? ""),
+                    backendMatchId:
+                      Number.isFinite(Number((item as any).backendMatchId)) &&
+                      Number((item as any).backendMatchId) > 0
+                        ? Number((item as any).backendMatchId)
+                        : undefined,
+                    groupId:
+                      Number.isFinite(Number((item as any).groupId)) &&
+                      Number((item as any).groupId) > 0
+                        ? Number((item as any).groupId)
+                        : undefined,
+                    round: String((item as any).round ?? ""),
+                    homeTeamId:
+                      Number.isFinite(Number((item as any).homeTeamId)) &&
+                      Number((item as any).homeTeamId) > 0
+                        ? Number((item as any).homeTeamId)
+                        : undefined,
+                    awayTeamId:
+                      Number.isFinite(Number((item as any).awayTeamId)) &&
+                      Number((item as any).awayTeamId) > 0
+                        ? Number((item as any).awayTeamId)
+                        : undefined,
+                    matchDate: String((item as any).matchDate ?? ""),
+                    status: String((item as any).status ?? "SCHEDULED"),
+                  }))
+                : [],
               bracketMatches: Array.isArray(current?.bracketMatches)
                 ? current.bracketMatches.map((m) => ({
                     id: String(m.id),
@@ -689,9 +747,18 @@ export default function TournamentSetupPage() {
           setCategories(backendMappedCategories);
           const computedConfigs: Record<string, CategorySetupConfig> = {};
           backendMappedCategories.forEach((cat) => {
+            const backendStructure = structureByCategory[String(cat.id)];
+            const backendStructureMode = fromApiStructureType(
+              backendStructure?.structureType,
+            );
             computedConfigs[String(cat.id)] = {
               formats: [inferFormatFromCategoryName(cat.name)],
-              structureMode: "",
+              structureMode: backendStructureMode,
+              groupCount: toSafeCount(backendStructure?.numberOfGroups),
+              teamsPerGroup: toSafeCount(backendStructure?.teamsPerGroup),
+              qualifiedPerGroup: toSafeCount(
+                backendStructure?.qualifiedPerGroup,
+              ),
               bracketMatches: [],
             };
           });
@@ -1068,7 +1135,10 @@ export default function TournamentSetupPage() {
 
   React.useEffect(() => {
     if (
-      (activeTab !== "teams" && activeTab !== "groups" && activeTab !== "overview") ||
+      (activeTab !== "teams" &&
+        activeTab !== "groups" &&
+        activeTab !== "overview" &&
+        activeTab !== "schedule") ||
       !selectedCategoryId
     ) {
       return;
@@ -1115,6 +1185,7 @@ export default function TournamentSetupPage() {
         structureMode: "",
       })
     : undefined;
+  const selectedConfigResolved = selectedConfig;
   const requiresGroupStructure =
     selectedConfig?.structureMode === "groups_knockout";
   const hasGroupStructureConfig = Boolean(
@@ -1136,6 +1207,60 @@ export default function TournamentSetupPage() {
   const selectedCategoryTeamsForTab = selectedCategory
     ? (teamsByCategory[selectedCategory.id] ?? [])
     : [];
+  const selectedTargetTeamsForStructure =
+    selectedConfig?.structureMode === "groups_knockout"
+      ? Math.max(
+          0,
+          Number(selectedConfig.groupCount ?? 0) *
+            Number(selectedConfig.teamsPerGroup ?? 0),
+        )
+      : 0;
+  const selectedExpectedScheduleKeys = React.useMemo(() => {
+    if (!selectedCategory || !selectedConfig) return [];
+    return Array.from(
+      new Set(
+        buildScheduleItemsForCategory(selectedCategory.id, selectedConfig)
+          .map((item) => normalizeMatchIdentity(item))
+          .filter((key): key is string => Boolean(key)),
+      ),
+    );
+  }, [buildScheduleItemsForCategory, selectedCategory, selectedConfig]);
+  const selectedScheduledMatchKeys = React.useMemo(() => {
+    if (!selectedConfig) return new Set<string>();
+    return new Set(
+      (selectedConfig.scheduleItems ?? [])
+        .map((item) => normalizeMatchIdentity(item))
+        .filter((key): key is string => Boolean(key)),
+    );
+  }, [selectedConfig]);
+  const selectedMissingScheduleCount = React.useMemo(() => {
+    if (selectedExpectedScheduleKeys.length === 0) return 0;
+    return selectedExpectedScheduleKeys.filter(
+      (key) => !selectedScheduledMatchKeys.has(key),
+    ).length;
+  }, [selectedExpectedScheduleKeys, selectedScheduledMatchKeys]);
+  const selectedCategoryIsFinalized = Boolean(
+    selectedCategory ? finalizedSetupByCategory[selectedCategory.id] : false,
+  );
+  const selectedCategoryIsFinalizing = Boolean(
+    selectedCategory ? finalizingSetupByCategory[selectedCategory.id] : false,
+  );
+  const canFinalizeSelectedCategory = Boolean(
+    selectedCategory &&
+      selectedExpectedScheduleKeys.length > 0 &&
+      selectedMissingScheduleCount === 0 &&
+      !selectedCategoryIsFinalizing &&
+      !selectedCategoryIsFinalized,
+  );
+  const finalizeDisabledReason = !selectedCategory
+    ? "Select a category first."
+    : selectedExpectedScheduleKeys.length === 0
+      ? "No schedulable matches found yet."
+      : selectedMissingScheduleCount > 0
+        ? `Schedule all matches first. ${selectedMissingScheduleCount} match(es) still missing.`
+        : selectedCategoryIsFinalized
+          ? "This category setup is already finalized."
+          : "Finalize is currently unavailable.";
   const selectedCategoryPlayersForTab = selectedCategory
     ? registeredPlayers.filter((player) =>
         player.categoryIds.includes(selectedCategory.id),
@@ -1160,23 +1285,29 @@ export default function TournamentSetupPage() {
           id: string;
           name: string;
           format: TournamentFormat;
+          hasTeams: boolean;
           structure: string;
           hasGroups: boolean;
           hasBracket: boolean;
+          hasSchedule: boolean;
         }
       >();
       const regular: Array<{
         id: string;
         name: string;
         format: TournamentFormat;
+        hasTeams: boolean;
         structure: string;
         hasGroups: boolean;
         hasBracket: boolean;
+        hasSchedule: boolean;
       }> = [];
 
       categories.forEach((cat) => {
         const cfg = categoryConfigs[cat.id];
+        const teams = teamsByCategory[cat.id] ?? [];
         const groups = groupsByCategory[cat.id] ?? [];
+        const hasTeams = teams.length > 0;
         const hasGroups =
           groups.length > 0 &&
           groups.some((g) =>
@@ -1184,6 +1315,7 @@ export default function TournamentSetupPage() {
           );
         const hasBracket = (cfg?.bracketMatches?.length ?? 0) > 0;
         const format = inferFormatFromCategoryName(cat.name);
+        const hasSchedule = (cfg?.scheduleItems?.length ?? 0) > 0;
         const isMixed =
           String(cat.discipline ?? "")
             .toLowerCase()
@@ -1197,16 +1329,21 @@ export default function TournamentSetupPage() {
               id: cat.id,
               name: `${level} - Mixed`,
               format,
+              hasTeams,
               structure: cfg?.structureMode ?? "",
               hasGroups,
               hasBracket,
+              hasSchedule,
             });
           } else {
             dedupedMixed.set(key, {
               ...previous,
+              format: previous.format || format,
+              hasTeams: previous.hasTeams || hasTeams,
               structure: previous.structure || (cfg?.structureMode ?? ""),
               hasGroups: previous.hasGroups || hasGroups,
               hasBracket: previous.hasBracket || hasBracket,
+              hasSchedule: previous.hasSchedule || hasSchedule,
             });
           }
           return;
@@ -1215,15 +1352,17 @@ export default function TournamentSetupPage() {
           id: cat.id,
           name: cat.name,
           format,
+          hasTeams,
           structure: cfg?.structureMode ?? "",
           hasGroups,
           hasBracket,
+          hasSchedule,
         });
       });
 
       return [...regular, ...Array.from(dedupedMixed.values())];
     },
-    [categories, categoryConfigs, groupsByCategory],
+    [categories, categoryConfigs, groupsByCategory, teamsByCategory],
   );
   const groupedCategoriesOverview = React.useMemo(() => {
     const levelOrder = ["Advanced", "Intermediate", "Beginner", "Open", "Other"];
@@ -1246,91 +1385,31 @@ export default function TournamentSetupPage() {
       .map(([level, items]) => ({ level, items }));
   }, [categoriesOverview]);
 
-  const selectedCategoryIdFromQuery = React.useMemo(
-    () => String(searchParams.get("categoryId") ?? "").trim(),
-    [searchParams],
-  );
-  const tabFromQuery = React.useMemo(
-    () => String(searchParams.get("tab") ?? "").trim(),
-    [searchParams],
-  );
-
-  const isSetupTab = React.useCallback(
-    (value: string): value is SetupTab =>
-      value === "overview" ||
-      value === "categories" ||
-      value === "teams" ||
-      value === "groups",
-    [],
-  );
-
-  const updateSetupQuery = React.useCallback(
-    (categoryId: string | null, tab?: SetupTab) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        if (categoryId) {
-          next.set("categoryId", categoryId);
-          if (tab) next.set("tab", tab);
-        } else {
-          next.delete("categoryId");
-          next.delete("tab");
-        }
-        return next;
-      });
-    },
-    [setSearchParams],
-  );
-
-  const openCategorySetup = React.useCallback(
-    (categoryId: string, tab: SetupTab = "categories") => {
-      const nextTab: SetupTab = tab === "overview" ? "categories" : tab;
-      setError(null);
-      setSelectedCategoryId(categoryId);
-      setExpandedOverviewCategoryId(null);
-      setActiveTab(nextTab);
-      updateSetupQuery(categoryId, nextTab);
-    },
-    [updateSetupQuery],
-  );
-
-  const backToCategoryList = React.useCallback(() => {
-    setSelectedCategoryId("");
-    setExpandedOverviewCategoryId(null);
-    setActiveTab("overview");
-    updateSetupQuery(null);
-  }, [updateSetupQuery]);
-
-  React.useEffect(() => {
-    if (isSetupTab(tabFromQuery)) {
-      if (tabFromQuery === "overview" && selectedCategoryIdFromQuery) {
-        setActiveTab("categories");
-      } else {
-        setActiveTab(tabFromQuery);
-      }
-    }
-  }, [isSetupTab, selectedCategoryIdFromQuery, tabFromQuery]);
-
-  React.useEffect(() => {
-    if (!selectedCategoryIdFromQuery) return;
-    if (categories.some((category) => category.id === selectedCategoryIdFromQuery)) {
-      setSelectedCategoryId(selectedCategoryIdFromQuery);
-    }
-  }, [categories, selectedCategoryIdFromQuery]);
-
-  React.useEffect(() => {
-    if (!selectedCategoryIdFromQuery) {
-      setSelectedCategoryId("");
-      setExpandedOverviewCategoryId(null);
-      setActiveTab("overview");
-    }
-  }, [selectedCategoryIdFromQuery]);
+  const { openCategorySetup, backToCategoryList, updateSetupQuery } =
+    useTournamentSetupNavigation({
+      categories,
+      searchParams,
+      setSearchParams,
+      setError,
+      setSelectedCategoryId,
+      setExpandedOverviewCategoryId,
+      setActiveTab,
+    });
 
   const isCategorySetupMode = Boolean(selectedCategoryId);
   const categoryTabsValue: Exclude<SetupTab, "overview"> =
-    activeTab === "teams" || activeTab === "groups" ? activeTab : "categories";
+    activeTab === "teams" || activeTab === "groups" || activeTab === "schedule"
+      ? activeTab
+      : "categories";
 
-  const saveSetup = () => {
-    if (!id) return;
+  const saveSetup = async (): Promise<boolean> => {
+    if (!id) return false;
+    const structureSyncResults = await Promise.all(
+      categories.map((cat) =>
+        syncCategoryStructure(cat.id, categoryConfigs[cat.id]),
+      ),
+    );
+    if (structureSyncResults.some((ok) => !ok)) return false;
     saveTournamentSetup(id, {
       formats: [],
       structureMode: "groups_knockout",
@@ -1338,6 +1417,7 @@ export default function TournamentSetupPage() {
       categoryConfigs,
     });
     setStatusMessage("Category setup saved.");
+    return true;
   };
 
   React.useEffect(() => {
@@ -1569,6 +1649,572 @@ export default function TournamentSetupPage() {
     saveTournamentGroups(id, next);
   };
 
+  function buildScheduleItemsForCategory(
+    categoryId: string,
+    cfg: CategorySetupConfig,
+  ): CategoryScheduleItem[] {
+      const groups = groupsByCategory[categoryId] ?? [];
+      const teams = teamsByCategory[categoryId] ?? [];
+      const teamNameById = new Map(
+        teams.map((team) => [String(team.id), getTeamDisplayName(team)] as const),
+      );
+      const resolveLabel = (value: string) => {
+        const key = String(value ?? "").trim();
+        return teamNameById.get(key) ?? (key || "TBD");
+      };
+
+      const scheduledDate =
+        String(cfg.scheduleDate ?? "").trim() ||
+        (event?.startDate ? String(event.startDate).slice(0, 10) : "");
+      const generatedMatches: Array<{
+        label: string;
+        groupId?: number;
+        round: string;
+        homeTeamId?: number;
+        awayTeamId?: number;
+      }> = [];
+      groups.forEach((group) => {
+        const numericGroupId = Number(group.id);
+        const groupId =
+          Number.isFinite(numericGroupId) && numericGroupId > 0
+            ? numericGroupId
+            : undefined;
+        const participants = (group.participants ?? [])
+          .map((participant) => String(participant ?? "").trim())
+          .filter(Boolean);
+        for (let i = 0; i < participants.length; i += 1) {
+          for (let j = i + 1; j < participants.length; j += 1) {
+            const homeTeamId = Number(participants[i]);
+            const awayTeamId = Number(participants[j]);
+            generatedMatches.push({
+              label: `${group.name}: ${resolveLabel(participants[i])} vs ${resolveLabel(participants[j])}`,
+              groupId,
+              round: "GROUP",
+              homeTeamId:
+                Number.isFinite(homeTeamId) && homeTeamId > 0 ? homeTeamId : undefined,
+              awayTeamId:
+                Number.isFinite(awayTeamId) && awayTeamId > 0 ? awayTeamId : undefined,
+            });
+          }
+        }
+      });
+
+      (cfg.bracketMatches ?? []).forEach((match) => {
+        const homeTeamId = Number(String(match.home ?? "").trim());
+        const awayTeamId = Number(String(match.away ?? "").trim());
+        generatedMatches.push({
+          label: `${match.name}: ${resolveLabel(String(match.home ?? ""))} vs ${resolveLabel(String(match.away ?? ""))}`,
+          round: normalizeRoundForApi(match.round),
+          homeTeamId:
+            Number.isFinite(homeTeamId) && homeTeamId > 0 ? homeTeamId : undefined,
+          awayTeamId:
+            Number.isFinite(awayTeamId) && awayTeamId > 0 ? awayTeamId : undefined,
+        });
+      });
+
+      const uniqueMatches = Array.from(
+        new Map(
+          generatedMatches
+            .filter((item) => item.label)
+            .map((item) => [
+              `${item.groupId ?? "na"}::${item.round}::${item.homeTeamId ?? "na"}::${item.awayTeamId ?? "na"}::${item.label}`,
+              item,
+            ]),
+        ).values(),
+      );
+      if (uniqueMatches.length === 0) return [];
+
+      const venues = String(cfg.scheduleVenue ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const effectiveVenues = venues.length > 0 ? venues : ["Court 1"];
+
+      const startMinutes = parseTimeToMinutes(cfg.scheduleStartTime) ?? 9 * 60;
+      const endMinutes = parseTimeToMinutes(cfg.scheduleEndTime) ?? 18 * 60;
+      const requestedBufferMinutes = Math.max(
+        0,
+        Number(cfg.scheduleBufferMinutes ?? 10),
+      );
+      const rounds = Math.max(1, Math.ceil(uniqueMatches.length / effectiveVenues.length));
+      const totalWindow = Math.max(1, endMinutes - startMinutes);
+      const slotSpan = Math.max(1, Math.floor(totalWindow / rounds));
+      const bufferMinutes = Math.min(requestedBufferMinutes, Math.max(0, slotSpan - 1));
+      const matchDuration = Math.max(1, slotSpan - bufferMinutes);
+
+      return uniqueMatches.map((item, idx) => {
+        const roundIndex = Math.floor(idx / effectiveVenues.length);
+        const venue = effectiveVenues[idx % effectiveVenues.length];
+        const itemStart = startMinutes + roundIndex * slotSpan;
+        const itemEnd = Math.min(endMinutes, itemStart + matchDuration);
+        return {
+          id: `sched_${categoryId}_${idx + 1}`,
+          matchLabel: item.label,
+          startTime: formatMinutesToTime(itemStart),
+          endTime: formatMinutesToTime(itemEnd),
+          venue,
+          groupId: item.groupId,
+          round: item.round,
+          homeTeamId: item.homeTeamId,
+          awayTeamId: item.awayTeamId,
+          matchDate: scheduledDate,
+          status: "SCHEDULED",
+        };
+      });
+  }
+
+  const createMatchViaApi = React.useCallback(
+    async (
+      categoryId: string,
+      item: Omit<CategoryScheduleItem, "id"> & { id?: string },
+    ): Promise<CategoryScheduleItem | null> => {
+      const token = getToken();
+      if (!token) return null;
+      const parsedCategoryId = Number(categoryId);
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return null;
+      if (
+        !Number.isFinite(Number(item.homeTeamId)) ||
+        Number(item.homeTeamId) <= 0 ||
+        !Number.isFinite(Number(item.awayTeamId)) ||
+        Number(item.awayTeamId) <= 0
+      ) {
+        return null;
+      }
+
+      const payload = {
+        ...(Number.isFinite(Number(item.groupId)) && Number(item.groupId) > 0
+          ? { groupId: Number(item.groupId) }
+          : { categoryId: parsedCategoryId }),
+        round: String(item.round ?? "GROUP"),
+        homeTeamId: Number(item.homeTeamId),
+        awayTeamId: Number(item.awayTeamId),
+        matchDate: String(item.matchDate ?? ""),
+        startTime: toApiTime(item.startTime),
+        venue: String(item.venue ?? ""),
+        status: String(item.status ?? "SCHEDULED"),
+      };
+
+      const res = await fetch(`${API_URL}/matches`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.message?.[0] || body?.error || "Failed to create match.");
+      }
+      const backendMatchId = Number(body?.id ?? body?.data?.id);
+      return {
+        ...item,
+        id: item.id ?? `sched_${categoryId}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+        backendMatchId:
+          Number.isFinite(backendMatchId) && backendMatchId > 0
+            ? backendMatchId
+            : undefined,
+      };
+    },
+    [],
+  );
+
+  const updateMatchViaApi = React.useCallback(
+    async (categoryId: string, item: CategoryScheduleItem): Promise<boolean> => {
+      const token = getToken();
+      if (!token) return false;
+      const matchId = Number(item.backendMatchId);
+      if (!Number.isFinite(matchId) || matchId <= 0) return false;
+      const parsedCategoryId = Number(categoryId);
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return false;
+
+      const payload = {
+        ...(Number.isFinite(Number(item.groupId)) && Number(item.groupId) > 0
+          ? { groupId: Number(item.groupId) }
+          : { categoryId: parsedCategoryId }),
+        round: String(item.round ?? "GROUP"),
+        homeTeamId: Number(item.homeTeamId),
+        awayTeamId: Number(item.awayTeamId),
+        matchDate: String(item.matchDate ?? ""),
+        startTime: toApiTime(item.startTime),
+        venue: String(item.venue ?? ""),
+        status: String(item.status ?? "SCHEDULED"),
+      };
+
+      const res = await fetch(`${API_URL}/matches/${matchId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.message?.[0] || body?.error || "Failed to update match.");
+      }
+      return true;
+    },
+    [],
+  );
+
+  const deleteMatchViaApi = React.useCallback(async (backendMatchId?: number) => {
+    const token = getToken();
+    if (!token) return;
+    const parsedId = Number(backendMatchId);
+    if (!Number.isFinite(parsedId) || parsedId <= 0) return;
+    const res = await fetch(`${API_URL}/matches/${parsedId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(body?.message?.[0] || body?.error || "Failed to delete match.");
+    }
+  }, []);
+
+  const loadMatchesForCategory = React.useCallback(
+    async (categoryId: string) => {
+      const token = getToken();
+      if (!token) return;
+      const parsedCategoryId = Number(categoryId);
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return;
+
+      try {
+        const res = await fetch(`${API_URL}/matches?categoryId=${parsedCategoryId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            body?.message?.[0] || body?.error || "Failed to load matches.",
+          );
+        }
+
+        const rawItems: ApiMatchDto[] = Array.isArray(body)
+          ? body
+          : Array.isArray(body?.data)
+            ? body.data
+            : Array.isArray(body?.items)
+              ? body.items
+              : Array.isArray(body?.results)
+                ? body.results
+                : [];
+        const teams = teamsByCategory[categoryId] ?? [];
+        const teamNameById = new Map(
+          teams.map((team) => [Number(team.id), getTeamDisplayName(team)] as const),
+        );
+        const mappedItems = rawItems.reduce<CategoryScheduleItem[]>(
+          (acc, item, idx) => {
+            const row = item as Record<string, any>;
+            const backendMatchId = Number(item.id ?? row.matchId ?? row.match_id);
+            const homeTeamId = Number(
+              item.homeTeamId ??
+                row.home_team_id ??
+                row.homeTeam?.id ??
+                row.home_team?.id,
+            );
+            const awayTeamId = Number(
+              item.awayTeamId ??
+                row.away_team_id ??
+                row.awayTeam?.id ??
+                row.away_team?.id,
+            );
+            if (
+              !Number.isFinite(backendMatchId) ||
+              backendMatchId <= 0 ||
+              !Number.isFinite(homeTeamId) ||
+              homeTeamId <= 0 ||
+              !Number.isFinite(awayTeamId) ||
+              awayTeamId <= 0
+            ) {
+              return acc;
+            }
+            const groupId = Number(item.groupId ?? row.group?.id ?? row.group_id);
+            const homeName =
+              String(
+                item.homeTeamName ??
+                  row.homeTeam?.name ??
+                  row.home_team?.name ??
+                  "",
+              ).trim() ||
+              teamNameById.get(homeTeamId) ||
+              `Team #${homeTeamId}`;
+            const awayName =
+              String(
+                item.awayTeamName ??
+                  row.awayTeam?.name ??
+                  row.away_team?.name ??
+                  "",
+              ).trim() ||
+              teamNameById.get(awayTeamId) ||
+              `Team #${awayTeamId}`;
+            acc.push({
+              id: `sched_${categoryId}_${backendMatchId}_${idx + 1}`,
+              backendMatchId,
+              groupId: Number.isFinite(groupId) && groupId > 0 ? groupId : undefined,
+              round: String(item.round ?? row.stage ?? "GROUP"),
+              homeTeamId,
+              awayTeamId,
+              matchDate: String(item.matchDate ?? row.match_date ?? ""),
+              startTime: fromApiTime(item.startTime ?? row.start_time),
+              endTime: "",
+              venue: String(item.venue ?? row.court ?? row.field ?? ""),
+              status: String(item.status ?? row.matchStatus ?? "SCHEDULED"),
+              matchLabel: `${homeName} vs ${awayName}`,
+            });
+            return acc;
+          },
+          [],
+        );
+
+        setCategoryConfigs((prev) => {
+          const current = prev[categoryId];
+          if (!current) return prev;
+          const existingItems = current.scheduleItems ?? [];
+          const localOnlyItems = existingItems.filter(
+            (row) =>
+              !Number.isFinite(Number(row.backendMatchId)) ||
+              Number(row.backendMatchId) <= 0,
+          );
+          const merged = [...localOnlyItems, ...mappedItems];
+          const dedupedByIdentity = Array.from(
+            new Map(
+              merged.map((row) => [
+                Number.isFinite(Number(row.backendMatchId)) && Number(row.backendMatchId) > 0
+                  ? `backend:${Number(row.backendMatchId)}`
+                  : `local:${normalizeMatchIdentity(row) ?? row.id}`,
+                row,
+              ]),
+            ).values(),
+          );
+          return {
+            ...prev,
+            [categoryId]: {
+              ...current,
+              scheduleItems: dedupedByIdentity,
+            },
+          };
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load matches.");
+      }
+    },
+    [teamsByCategory],
+  );
+
+  React.useEffect(() => {
+    if (activeTab !== "schedule" || !selectedCategoryId) return;
+    void loadMatchesForCategory(selectedCategoryId);
+  }, [activeTab, selectedCategoryId, loadMatchesForCategory]);
+
+  const getScheduleDraft = React.useCallback(
+    (categoryId: string, cfg?: CategorySetupConfig): ScheduleDraftInput => {
+      const fallbackDate =
+        String(cfg?.scheduleDate ?? "").trim() ||
+        (event?.startDate ? String(event.startDate).slice(0, 10) : "");
+      return (
+        scheduleDraftByCategory[categoryId] ?? {
+          groupId: "",
+          round: "GROUP",
+          homeTeamId: "",
+          awayTeamId: "",
+          matchDate: fallbackDate,
+          startTime: String(cfg?.scheduleStartTime ?? ""),
+          venue:
+            String(cfg?.scheduleVenue ?? "")
+              .split(",")
+              .map((value) => value.trim())
+              .filter(Boolean)[0] ?? "",
+          status: "SCHEDULED",
+        }
+      );
+    },
+    [event?.startDate, scheduleDraftByCategory],
+  );
+
+  const setScheduleDraft = React.useCallback(
+    (
+      categoryId: string,
+      updater: (current: ScheduleDraftInput) => ScheduleDraftInput,
+      cfg?: CategorySetupConfig,
+    ) => {
+      setScheduleDraftByCategory((prev) => {
+        const current = prev[categoryId] ?? getScheduleDraft(categoryId, cfg);
+        return { ...prev, [categoryId]: updater(current) };
+      });
+    },
+    [getScheduleDraft],
+  );
+
+  const createManualMatchForCategory = React.useCallback(
+    async (categoryId: string, cfg: CategorySetupConfig) => {
+      const draft = getScheduleDraft(categoryId, cfg);
+      const homeTeamId = Number(draft.homeTeamId);
+      const awayTeamId = Number(draft.awayTeamId);
+      if (!Number.isFinite(homeTeamId) || homeTeamId <= 0) {
+        setError("Select a valid Home Team.");
+        return;
+      }
+      if (!Number.isFinite(awayTeamId) || awayTeamId <= 0) {
+        setError("Select a valid Away Team.");
+        return;
+      }
+      if (homeTeamId === awayTeamId) {
+        setError("Home and away team must be different.");
+        return;
+      }
+      if (!draft.matchDate || !draft.startTime || !draft.venue.trim()) {
+        setError("Match date, start time, and court/field are required.");
+        return;
+      }
+      const candidateIdentity = normalizeMatchIdentity({
+        groupId:
+          Number.isFinite(Number(draft.groupId)) && Number(draft.groupId) > 0
+            ? Number(draft.groupId)
+            : undefined,
+        round: draft.round || "GROUP",
+        homeTeamId,
+        awayTeamId,
+      });
+      const existingKeys = new Set(
+        (cfg.scheduleItems ?? [])
+          .map((item) => normalizeMatchIdentity(item))
+          .filter((key): key is string => Boolean(key)),
+      );
+      if (candidateIdentity && existingKeys.has(candidateIdentity)) {
+        setError("This match already exists in the schedule.");
+        return;
+      }
+
+      setMatchesPostingByCategory((prev) => ({ ...prev, [categoryId]: true }));
+      setError(null);
+      try {
+        const teams = teamsByCategory[categoryId] ?? [];
+        const nameById = new Map(teams.map((team) => [Number(team.id), getTeamDisplayName(team)]));
+        const created = await createMatchViaApi(categoryId, {
+          matchLabel: `${nameById.get(homeTeamId) ?? `Team #${homeTeamId}`} vs ${nameById.get(awayTeamId) ?? `Team #${awayTeamId}`}`,
+          startTime: draft.startTime,
+          endTime: "",
+          venue: draft.venue.trim(),
+          groupId:
+            Number.isFinite(Number(draft.groupId)) && Number(draft.groupId) > 0
+              ? Number(draft.groupId)
+              : undefined,
+          round: draft.round || "GROUP",
+          homeTeamId,
+          awayTeamId,
+          matchDate: draft.matchDate,
+          status: draft.status || "SCHEDULED",
+        });
+        if (!created) {
+          setError("Could not create match with current details.");
+          return;
+        }
+        setCategoryConfigs((prev) => {
+          const current = prev[categoryId] ?? cfg;
+          return {
+            ...prev,
+            [categoryId]: {
+              ...current,
+              scheduleItems: [...(current.scheduleItems ?? []), created],
+            },
+          };
+        });
+        setScheduleDraft(categoryId, (current) => ({
+          ...current,
+          homeTeamId: "",
+          awayTeamId: "",
+        }), cfg);
+        setStatusMessage("Match created.");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create match.");
+      } finally {
+        setMatchesPostingByCategory((prev) => ({ ...prev, [categoryId]: false }));
+      }
+    },
+    [createMatchViaApi, getScheduleDraft, setScheduleDraft, teamsByCategory],
+  );
+
+  const createRandomMatchesForCategory = React.useCallback(
+    async (categoryId: string, cfg: CategorySetupConfig) => {
+      const startMinutes = parseTimeToMinutes(cfg.scheduleStartTime);
+      const endMinutes = parseTimeToMinutes(cfg.scheduleEndTime);
+      if (
+        startMinutes != null &&
+        endMinutes != null &&
+        Number.isFinite(startMinutes) &&
+        Number.isFinite(endMinutes) &&
+        endMinutes <= startMinutes
+      ) {
+        setError("End time must be later than start time to generate matches.");
+        return;
+      }
+      setMatchesPostingByCategory((prev) => ({ ...prev, [categoryId]: true }));
+      setError(null);
+      try {
+        const generatedItems = buildScheduleItemsForCategory(categoryId, cfg).filter(
+          (item) =>
+            Number.isFinite(Number(item.homeTeamId)) &&
+            Number(item.homeTeamId) > 0 &&
+            Number.isFinite(Number(item.awayTeamId)) &&
+            Number(item.awayTeamId) > 0,
+        );
+        const existingKeys = new Set(
+          (cfg.scheduleItems ?? [])
+            .map((item) => normalizeMatchIdentity(item))
+            .filter((key): key is string => Boolean(key)),
+        );
+        const dedupedItems = generatedItems.filter((item) => {
+          const key = normalizeMatchIdentity(item);
+          if (!key) return false;
+          if (existingKeys.has(key)) return false;
+          existingKeys.add(key);
+          return true;
+        });
+        if (dedupedItems.length === 0) {
+          setError("No valid team-vs-team matches available to generate.");
+          return;
+        }
+        const createdItems: CategoryScheduleItem[] = [];
+        for (const item of dedupedItems) {
+          const created = await createMatchViaApi(categoryId, item);
+          if (created) createdItems.push(created);
+        }
+        setCategoryConfigs((prev) => {
+          const current = prev[categoryId] ?? cfg;
+          return {
+            ...prev,
+            [categoryId]: {
+              ...current,
+              scheduleItems: [...(current.scheduleItems ?? []), ...createdItems],
+            },
+          };
+        });
+        setStatusMessage(
+          `Randomly generated and created ${createdItems.length} match(es) without duplicates.`,
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to generate matches.");
+      } finally {
+        setMatchesPostingByCategory((prev) => ({ ...prev, [categoryId]: false }));
+      }
+    },
+    [buildScheduleItemsForCategory, createMatchViaApi],
+  );
+
+  const finalizeCategorySetup = React.useCallback(async (categoryId: string) => {
+    setError(null);
+    setFinalizingSetupByCategory((prev) => ({ ...prev, [categoryId]: true }));
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      setFinalizedSetupByCategory((prev) => ({ ...prev, [categoryId]: true }));
+      setStatusMessage("Category setup finalized.");
+    } finally {
+      setFinalizingSetupByCategory((prev) => ({ ...prev, [categoryId]: false }));
+    }
+  }, []);
+
   return (
     <Box
       component="main"
@@ -1701,127 +2347,163 @@ export default function TournamentSetupPage() {
               </Box>
             </Stack>
 
-            {/* Right: Stats Cards */}
-            <Stack direction="row" spacing={1.5}>
-              {/* Registered */}
-              <Box
-                sx={{
-                  width: 95,
-                  height: 74,
-                  borderRadius: "14px",
-                  bgcolor: "rgba(255, 255, 255, 0.1)",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  px: 2,
-                }}
-              >
-                <Typography
+            {/* Right: Stats + Action */}
+            <Stack spacing={1.25} alignItems={{ xs: "stretch", lg: "flex-end" }}>
+              <Stack direction="row" spacing={1.5}>
+                {/* Registered */}
+                <Box
                   sx={{
-                    fontSize: "1.5rem",
-                    fontWeight: 700,
-                    color: "#FFFFFF",
-                    lineHeight: 1,
-                    mb: 0.5,
+                    width: 95,
+                    height: 74,
+                    borderRadius: "14px",
+                    bgcolor: "rgba(255, 255, 255, 0.1)",
+                    border: "1px solid rgba(255, 255, 255, 0.2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    px: 2,
                   }}
                 >
-                  0
-                </Typography>
-                <Typography
-                  sx={{
-                    fontSize: "0.75rem",
-                    color: "#FFEDD4",
-                    textAlign: "center",
-                  }}
-                >
-                  Registered
-                </Typography>
-              </Box>
+                  <Typography
+                    sx={{
+                      fontSize: "1.5rem",
+                      fontWeight: 700,
+                      color: "#FFFFFF",
+                      lineHeight: 1,
+                      mb: 0.5,
+                    }}
+                  >
+                    0
+                  </Typography>
+                  <Typography
+                    sx={{
+                      fontSize: "0.75rem",
+                      color: "#FFEDD4",
+                      textAlign: "center",
+                    }}
+                  >
+                    Registered
+                  </Typography>
+                </Box>
 
-              {/* Categories */}
-              <Box
-                sx={{
-                  width: 95,
-                  height: 74,
-                  borderRadius: "14px",
-                  bgcolor: "rgba(255, 255, 255, 0.1)",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  px: 2,
-                }}
-              >
-                <Typography
+                {/* Categories */}
+                <Box
                   sx={{
-                    fontSize: "1.5rem",
-                    fontWeight: 700,
-                    color: "#FFFFFF",
-                    lineHeight: 1,
-                    mb: 0.5,
+                    width: 95,
+                    height: 74,
+                    borderRadius: "14px",
+                    bgcolor: "rgba(255, 255, 255, 0.1)",
+                    border: "1px solid rgba(255, 255, 255, 0.2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    px: 2,
                   }}
                 >
-                  {categories.length}
-                </Typography>
-                <Typography
-                  sx={{
-                    fontSize: "0.75rem",
-                    color: "#FFEDD4",
-                    textAlign: "center",
-                  }}
-                >
-                  Categories
-                </Typography>
-              </Box>
+                  <Typography
+                    sx={{
+                      fontSize: "1.5rem",
+                      fontWeight: 700,
+                      color: "#FFFFFF",
+                      lineHeight: 1,
+                      mb: 0.5,
+                    }}
+                  >
+                    {categories.length}
+                  </Typography>
+                  <Typography
+                    sx={{
+                      fontSize: "0.75rem",
+                      color: "#FFEDD4",
+                      textAlign: "center",
+                    }}
+                  >
+                    Categories
+                  </Typography>
+                </Box>
 
-              {/* Complete % */}
-              <Box
+                {/* Complete % */}
+                <Box
+                  sx={{
+                    width: 95,
+                    height: 74,
+                    borderRadius: "14px",
+                    bgcolor: "rgba(255, 255, 255, 0.1)",
+                    border: "1px solid rgba(255, 255, 255, 0.2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    px: 2,
+                  }}
+                >
+                  <Typography
+                    sx={{
+                      fontSize: "1.5rem",
+                      fontWeight: 700,
+                      color: "#FFFFFF",
+                      lineHeight: 1,
+                      mb: 0.5,
+                    }}
+                  >
+                    {categories.length > 0
+                      ? Math.round(
+                          (categoriesOverview.filter(
+                            (c) =>
+                              c.hasTeams &&
+                              Boolean(c.structure) &&
+                              ((c.structure === "groups_knockout" &&
+                                c.hasGroups &&
+                                c.hasBracket) ||
+                                ((c.structure === "group_phase_only" ||
+                                  c.structure === "swiss") &&
+                                  c.hasGroups) ||
+                                (c.structure === "knockout_only" &&
+                                  c.hasBracket)) &&
+                              c.hasSchedule,
+                          ).length /
+                            categories.length) *
+                            100,
+                        )
+                      : 0}
+                    %
+                  </Typography>
+                  <Typography
+                    sx={{
+                      fontSize: "0.75rem",
+                      color: "#FFEDD4",
+                      textAlign: "center",
+                    }}
+                  >
+                    Complete
+                  </Typography>
+                </Box>
+              </Stack>
+              <Button
+                variant="contained"
+                startIcon={<PlayArrowRoundedIcon />}
+                onClick={() => {
+                  if (!id) return;
+                  navigate(`/tournaments/${id}/run`);
+                }}
                 sx={{
-                  width: 95,
-                  height: 74,
-                  borderRadius: "14px",
-                  bgcolor: "rgba(255, 255, 255, 0.1)",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  px: 2,
+                  borderRadius: "12px",
+                  textTransform: "none",
+                  fontWeight: 700,
+                  minHeight: 42,
+                  px: 2.25,
+                  bgcolor: "#FFFFFF",
+                  color: "#FFFFFF",
+                  boxShadow: "0 8px 16px rgba(0, 0, 0, 0.16)",
+                  "&:hover": {
+                    bgcolor: "#FFF7ED",
+                  },
                 }}
               >
-                <Typography
-                  sx={{
-                    fontSize: "1.5rem",
-                    fontWeight: 700,
-                    color: "#FFFFFF",
-                    lineHeight: 1,
-                    mb: 0.5,
-                  }}
-                >
-                  {categories.length > 0
-                    ? Math.round(
-                        (categoriesOverview.filter(
-                          (c) => c.format && c.structure && c.hasGroups,
-                        ).length /
-                          categories.length) *
-                          100,
-                      )
-                    : 0}
-                  %
-                </Typography>
-                <Typography
-                  sx={{
-                    fontSize: "0.75rem",
-                    color: "#FFEDD4",
-                    textAlign: "center",
-                  }}
-                >
-                  Complete
-                </Typography>
-              </Box>
+                Run Tournament
+              </Button>
             </Stack>
           </Stack>
         </Box>
@@ -1875,9 +2557,10 @@ export default function TournamentSetupPage() {
                   },
                 }}
               >
-                <Tab value="categories" label="Structure" />
                 <Tab value="teams" label="Teams" />
+                <Tab value="categories" label="Structure" />
                 <Tab value="groups" label="Groups & Brackets" />
+                <Tab value="schedule" label="Schedule" />
               </Tabs>
             </Box>
           </Box>
@@ -1932,7 +2615,7 @@ export default function TournamentSetupPage() {
                         2. Open the category page to configure its setup.
                       </Typography>
                       <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
-                        3. Complete Structure, Teams, then Groups & Brackets.
+                        3. Complete Teams, Structure, then Groups & Brackets.
                       </Typography>
                       <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
                         4. Return here and continue with the next category.
@@ -1988,9 +2671,9 @@ export default function TournamentSetupPage() {
                                   boxShadow: "0 2px 8px rgba(139,92,246,0.1)",
                                 },
                               }}
-                              onClick={() => {
-                                openCategorySetup(item.id, "categories");
-                              }}
+                                  onClick={() => {
+                                    openCategorySetup(item.id, "teams");
+                                  }}
                             >
                               <Stack spacing={1.5} sx={{ width: "100%" }}>
                                 <Stack
@@ -2049,13 +2732,13 @@ export default function TournamentSetupPage() {
                                     <Chip
                                       size="medium"
                                       label={
-                                        item.format
-                                          ? `Format: ${item.format}`
-                                          : "Format: Pending"
+                                        item.hasTeams
+                                          ? "Teams: Set"
+                                          : "Teams: Pending"
                                       }
                                       sx={{
-                                        bgcolor: item.format ? "#8B5CF6" : "#E5E7EB",
-                                        color: item.format ? "white" : "#4A5565",
+                                        bgcolor: item.hasTeams ? "#8B5CF6" : "#E5E7EB",
+                                        color: item.hasTeams ? "white" : "#4A5565",
                                         fontWeight: 700,
                                         border: "none",
                                         fontSize: "0.75rem",
@@ -2085,13 +2768,44 @@ export default function TournamentSetupPage() {
                                     <Chip
                                       size="medium"
                                       label={
-                                        item.hasGroups
-                                          ? "Groups: Created"
-                                          : "Groups: Pending"
+                                        item.structure === "groups_knockout"
+                                          ? item.hasGroups && item.hasBracket
+                                            ? "Groups & Brackets: Set"
+                                            : "Groups & Brackets: Pending"
+                                          : item.structure === "group_phase_only" ||
+                                              item.structure === "swiss"
+                                            ? item.hasGroups
+                                              ? "Groups & Brackets: Set"
+                                              : "Groups & Brackets: Pending"
+                                            : item.structure === "knockout_only"
+                                              ? item.hasBracket
+                                                ? "Groups & Brackets: Set"
+                                                : "Groups & Brackets: Pending"
+                                              : "Groups & Brackets: Pending"
                                       }
                                       sx={{
-                                        bgcolor: item.hasGroups ? "#8B5CF6" : "#E5E7EB",
-                                        color: item.hasGroups ? "white" : "#4A5565",
+                                        bgcolor:
+                                          (item.structure === "groups_knockout" &&
+                                            item.hasGroups &&
+                                            item.hasBracket) ||
+                                          ((item.structure === "group_phase_only" ||
+                                            item.structure === "swiss") &&
+                                            item.hasGroups) ||
+                                          (item.structure === "knockout_only" &&
+                                            item.hasBracket)
+                                            ? "#8B5CF6"
+                                            : "#E5E7EB",
+                                        color:
+                                          (item.structure === "groups_knockout" &&
+                                            item.hasGroups &&
+                                            item.hasBracket) ||
+                                          ((item.structure === "group_phase_only" ||
+                                            item.structure === "swiss") &&
+                                            item.hasGroups) ||
+                                          (item.structure === "knockout_only" &&
+                                            item.hasBracket)
+                                            ? "white"
+                                            : "#4A5565",
                                         fontWeight: 700,
                                         border: "none",
                                         fontSize: "0.75rem",
@@ -2103,13 +2817,13 @@ export default function TournamentSetupPage() {
                                     <Chip
                                       size="medium"
                                       label={
-                                        item.hasBracket
-                                          ? "Bracket: Created"
-                                          : "Bracket: Pending"
+                                        item.hasSchedule
+                                          ? "Schedule: Set"
+                                          : "Schedule: Pending"
                                       }
                                       sx={{
-                                        bgcolor: item.hasBracket ? "#8B5CF6" : "#E5E7EB",
-                                        color: item.hasBracket ? "white" : "#4A5565",
+                                        bgcolor: item.hasSchedule ? "#8B5CF6" : "#E5E7EB",
+                                        color: item.hasSchedule ? "white" : "#4A5565",
                                         fontWeight: 700,
                                         border: "none",
                                         fontSize: "0.75rem",
@@ -2122,7 +2836,7 @@ export default function TournamentSetupPage() {
                                     <IconButton
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        openCategorySetup(item.id, "categories");
+                                        openCategorySetup(item.id, "teams");
                                       }}
                                       sx={{
                                         border: "1px solid #D1D5DC",
@@ -2472,7 +3186,12 @@ export default function TournamentSetupPage() {
                                             <Button
                                               variant="contained"
                                               disabled={!isInlineStructureReady}
-                                              onClick={() => {
+                                              onClick={async () => {
+                                                const ok = await syncCategoryStructure(
+                                                  item.id,
+                                                  inlineConfig,
+                                                );
+                                                if (!ok) return;
                                                 setConfirmedStructureByCategory(
                                                   (prev) => ({
                                                     ...prev,
@@ -4064,15 +4783,10 @@ export default function TournamentSetupPage() {
                   >
                     <Button
                       variant="outlined"
-                      onClick={() => {
-                        setActiveTab("categories");
-                        if (selectedCategoryId) {
-                          updateSetupQuery(selectedCategoryId, "categories");
-                        }
-                      }}
+                      onClick={backToCategoryList}
                       sx={{ borderRadius: "10px" }}
                     >
-                      Back: Structure
+                      Back: Category List
                     </Button>
                     <Button
                       variant="contained"
@@ -4088,9 +4802,9 @@ export default function TournamentSetupPage() {
                           ...prev,
                           [selectedCategoryId]: false,
                         }));
-                        setActiveTab("groups");
+                        setActiveTab("categories");
                         if (selectedCategoryId) {
-                          updateSetupQuery(selectedCategoryId, "groups");
+                          updateSetupQuery(selectedCategoryId, "categories");
                         }
                       }}
                       sx={{
@@ -4109,7 +4823,7 @@ export default function TournamentSetupPage() {
                         },
                       }}
                     >
-                      Next: Groups & Brackets →
+                      Next: Structure →
                     </Button>
                   </Box>
                   {showTeamsTabContinueWarning ? (
@@ -4162,9 +4876,9 @@ export default function TournamentSetupPage() {
                               setStatusMessage(
                                 `Continued with ${unassignedPlayersCountForTeamsTab} unassigned player(s) in ${selectedCategoryDisplayName}.`,
                               );
-                              setActiveTab("groups");
+                              setActiveTab("categories");
                               if (selectedCategoryId) {
-                                updateSetupQuery(selectedCategoryId, "groups");
+                                updateSetupQuery(selectedCategoryId, "categories");
                               }
                             }}
                           >
@@ -4259,14 +4973,46 @@ export default function TournamentSetupPage() {
                       Instructions
                     </Typography>
                     <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      1. Pick the structure for this category.
+                      1. Confirm teams for this category.
                     </Typography>
                     <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      2. If needed, set group inputs.
+                      2. Pick the structure and set group inputs if needed.
                     </Typography>
                     <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      3. Continue to Teams and then Groups & Brackets.
+                      3. Continue to Groups & Brackets.
                     </Typography>
+                  </Box>
+                  <Box
+                    sx={{
+                      mb: 2,
+                      p: 1.5,
+                      borderRadius: "10px",
+                      bgcolor: "#F9FAFB",
+                      border: "1px solid #E5E7EB",
+                    }}
+                  >
+                    <Stack
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={1}
+                      justifyContent="space-between"
+                      alignItems={{ xs: "flex-start", sm: "center" }}
+                    >
+                      <Typography sx={{ fontWeight: 700, color: "#101828", fontSize: "0.9rem" }}>
+                        Teams available for this category
+                      </Typography>
+                      <Chip
+                        size="small"
+                        label={`${selectedCategoryTeamsForTab.length} team${selectedCategoryTeamsForTab.length === 1 ? "" : "s"}`}
+                        sx={{ fontWeight: 700 }}
+                      />
+                    </Stack>
+                    {selectedTargetTeamsForStructure > 0 ? (
+                      <Typography sx={{ color: "#4A5565", fontSize: "0.8125rem", mt: 0.75 }}>
+                        Current structure needs about {selectedTargetTeamsForStructure} teams
+                        ({selectedConfig?.groupCount ?? 0} groups x{" "}
+                        {selectedConfig?.teamsPerGroup ?? 0} teams/group).
+                      </Typography>
+                    ) : null}
                   </Box>
                   <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
                     Structure
@@ -4411,7 +5157,7 @@ export default function TournamentSetupPage() {
                         sx={{ mt: 1, display: "block" }}
                       >
                         Groups and bracket will be auto-generated when you click
-                        Next: Teams.
+                        Next: Groups & Brackets.
                       </Typography>
                     </>
                   ) : null}
@@ -4424,30 +5170,36 @@ export default function TournamentSetupPage() {
                   >
                     <Button
                       variant="outlined"
-                      onClick={backToCategoryList}
+                      onClick={() => {
+                        setActiveTab("teams");
+                        if (selectedCategory?.id) {
+                          updateSetupQuery(selectedCategory.id, "teams");
+                        }
+                      }}
                       sx={{ borderRadius: 999 }}
                     >
-                      Back: Category List
+                      Back: Teams
                     </Button>
                     <Button
                       variant="contained"
-                      onClick={() => {
+                      onClick={async () => {
+                        const saved = await saveSetup();
+                        if (!saved) return;
                         if (
                           selectedConfig?.structureMode === "groups_knockout" &&
                           hasGroupStructureConfig
                         ) {
                           generateGroupsAndBracketForSelectedCategory();
                         }
-                        saveSetup();
-                        setActiveTab("teams");
+                        setActiveTab("groups");
                         if (selectedCategory?.id) {
-                          updateSetupQuery(selectedCategory.id, "teams");
+                          updateSetupQuery(selectedCategory.id, "groups");
                         }
                       }}
                       disabled={!canSaveSelectedCategorySetup}
                       sx={{ borderRadius: 999 }}
                     >
-                      Next: Teams
+                      Next: Groups & Brackets
                     </Button>
                   </Stack>
                 </CardContent>
@@ -4459,7 +5211,7 @@ export default function TournamentSetupPage() {
                 <CardContent sx={{ p: 3 }}>
                   {!selectedCategory ? (
                     <Alert severity="info">
-                      Select a category in the Structure tab first.
+                      Select a category in the Teams tab first.
                     </Alert>
                   ) : (
                     <Stack spacing={1.25}>
@@ -4618,23 +5370,1349 @@ export default function TournamentSetupPage() {
                       <Box
                         sx={{
                           display: "flex",
-                          justifyContent: "flex-start",
+                          justifyContent: "space-between",
                           pt: 1,
                         }}
                       >
                         <Button
                           variant="outlined"
                           onClick={() => {
-                            setActiveTab("teams");
+                            setActiveTab("categories");
                             if (selectedCategory?.id) {
-                              updateSetupQuery(selectedCategory.id, "teams");
+                              updateSetupQuery(selectedCategory.id, "categories");
                             }
                           }}
                           sx={{ borderRadius: "10px" }}
                         >
-                          Back: Teams
+                          Back: Structure
+                        </Button>
+                        <Button
+                          variant="contained"
+                          onClick={() => {
+                            setActiveTab("schedule");
+                            if (selectedCategory?.id) {
+                              updateSetupQuery(selectedCategory.id, "schedule");
+                            }
+                          }}
+                          sx={{ borderRadius: "10px" }}
+                        >
+                          Next: Schedule
                         </Button>
                       </Box>
+                    </Stack>
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {activeTab === "schedule" ? (
+              <Card>
+                <CardContent sx={{ p: 3 }}>
+                  {!selectedCategory ? (
+                    <Alert severity="info">
+                      Select a category in the Teams tab first.
+                    </Alert>
+                  ) : (
+                    <Stack spacing={2}>
+                      <Box
+                        sx={{
+                          p: 1.5,
+                          borderRadius: "14px",
+                          border: "1.5px solid #8B5CF6",
+                          bgcolor: "#FFFFFF",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 1.5,
+                        }}
+                      >
+                        <Stack
+                          direction="row"
+                          spacing={1.5}
+                          alignItems="center"
+                          sx={{ minWidth: 0 }}
+                        >
+                          <Box
+                            sx={{
+                              width: 48,
+                              height: 48,
+                              borderRadius: "10px",
+                              bgcolor: "#FFEDD4",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0,
+                            }}
+                          >
+                            <CalendarMonthOutlinedIcon
+                              sx={{ fontSize: 24, color: "#F54900" }}
+                            />
+                          </Box>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography
+                              sx={{
+                                fontSize: "0.9rem",
+                                fontWeight: 700,
+                                color: "#6A7282",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.04em",
+                              }}
+                            >
+                              {selectedCategoryLevel}
+                            </Typography>
+                            <Typography
+                              sx={{
+                                fontSize: "1.45rem",
+                                fontWeight: 700,
+                                color: "#101828",
+                                lineHeight: 1.2,
+                              }}
+                            >
+                              {selectedCategoryDisplayName}
+                            </Typography>
+                          </Box>
+                        </Stack>
+                        <Tooltip
+                          title={canFinalizeSelectedCategory ? "" : finalizeDisabledReason}
+                          arrow
+                          disableHoverListener={canFinalizeSelectedCategory}
+                        >
+                          <span>
+                            <Button
+                              variant="contained"
+                              onClick={() =>
+                                selectedCategory
+                                  ? void finalizeCategorySetup(selectedCategory.id)
+                                  : undefined
+                              }
+                              disabled={
+                                selectedCategoryIsFinalized ||
+                                selectedCategoryIsFinalizing ||
+                                !canFinalizeSelectedCategory
+                              }
+                              sx={{
+                                borderRadius: "10px",
+                                textTransform: "none",
+                                minWidth: 150,
+                              }}
+                            >
+                              {selectedCategoryIsFinalizing
+                                ? "Finalizing..."
+                                : selectedCategoryIsFinalized
+                                  ? "Setup Finalized"
+                                  : "Finalize Setup"}
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      </Box>
+
+                      {selectedCategoryIsFinalizing ? (
+                        <Box
+                          sx={{
+                            p: 3,
+                            borderRadius: "12px",
+                            border: "1px solid #E5E7EB",
+                            bgcolor: "#FFFFFF",
+                            textAlign: "center",
+                          }}
+                        >
+                          <CircularProgress size={28} sx={{ color: "#F54900", mb: 1 }} />
+                          <Typography sx={{ fontWeight: 700, color: "#101828", mb: 0.5 }}>
+                            Finalizing setup...
+                          </Typography>
+                          <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
+                            We are locking this category schedule now.
+                          </Typography>
+                        </Box>
+                      ) : selectedCategoryIsFinalized ? (
+                        <Box
+                          sx={{
+                            p: 3,
+                            borderRadius: "12px",
+                            border: "1px solid #BBF7D0",
+                            bgcolor: "#F0FDF4",
+                            textAlign: "center",
+                          }}
+                        >
+                          <Typography sx={{ fontWeight: 800, color: "#166534", mb: 0.5 }}>
+                            You are all set
+                          </Typography>
+                          <Typography sx={{ color: "#166534", fontSize: "0.95rem", mb: 2 }}>
+                            Setup is finalized. You can now view and run matches from the Run
+                            Tournament page.
+                          </Typography>
+                          <Button
+                            variant="contained"
+                            onClick={() => {
+                              if (!id) return;
+                              navigate(`/tournaments/${id}/run`);
+                            }}
+                            sx={{
+                              borderRadius: "10px",
+                              textTransform: "none",
+                              fontWeight: 700,
+                            }}
+                          >
+                            Go to Run Tournament
+                          </Button>
+                        </Box>
+                      ) : (
+                        <>
+
+                      <Box
+                        sx={{
+                          p: 1.5,
+                          borderRadius: "10px",
+                          bgcolor: "#F9FAFB",
+                          border: "1px solid #E5E7EB",
+                        }}
+                      >
+                        <Typography
+                          sx={{
+                            fontWeight: 700,
+                            color: "#101828",
+                            fontSize: "0.95rem",
+                            mb: 0.5,
+                          }}
+                        >
+                          Category Schedule
+                        </Typography>
+                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
+                          Define when this category starts/ends, where it runs, and the
+                          match buffer.
+                        </Typography>
+                      </Box>
+
+                      <Stack
+                        direction={{ xs: "column", md: "row" }}
+                        spacing={1.25}
+                      >
+                        <TextField
+                          label="Match date"
+                          type="date"
+                          fullWidth
+                          value={
+                            selectedConfig?.scheduleDate ??
+                            (event?.startDate ? String(event.startDate).slice(0, 10) : "")
+                          }
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                scheduleDate: e.target.value,
+                              },
+                            }));
+                          }}
+                          InputLabelProps={{ shrink: true }}
+                        />
+                        <TextField
+                          label="Start time"
+                          type="time"
+                          fullWidth
+                          value={selectedConfig?.scheduleStartTime ?? ""}
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                scheduleStartTime: e.target.value,
+                              },
+                            }));
+                          }}
+                          InputLabelProps={{ shrink: true }}
+                        />
+                        <TextField
+                          label="End time"
+                          type="time"
+                          fullWidth
+                          value={selectedConfig?.scheduleEndTime ?? ""}
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                scheduleEndTime: e.target.value,
+                              },
+                            }));
+                          }}
+                          InputLabelProps={{ shrink: true }}
+                        />
+                      </Stack>
+                      <Stack
+                        direction={{ xs: "column", md: "row" }}
+                        spacing={1.25}
+                      >
+                        <TextField
+                          label="Court / Field"
+                          fullWidth
+                          value={selectedConfig?.scheduleVenue ?? ""}
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                scheduleVenue: e.target.value,
+                              },
+                            }));
+                          }}
+                        />
+                        <TextField
+                          label="Buffer (minutes)"
+                          type="number"
+                          fullWidth
+                          value={selectedConfig?.scheduleBufferMinutes ?? ""}
+                          onChange={(e) => {
+                            if (!selectedCategory || !selectedConfig) return;
+                            const raw = Number(e.target.value);
+                            setCategoryConfigs((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]: {
+                                ...selectedConfig,
+                                scheduleBufferMinutes:
+                                  Number.isFinite(raw) && raw >= 0 ? raw : 0,
+                              },
+                            }));
+                          }}
+                          inputProps={{ min: 0, step: 5 }}
+                        />
+                      </Stack>
+
+                      <Box
+                        sx={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          pt: 1,
+                        }}
+                      >
+                        <Button
+                          variant="outlined"
+                          onClick={() => {
+                            setActiveTab("groups");
+                            if (selectedCategory?.id) {
+                              updateSetupQuery(selectedCategory.id, "groups");
+                            }
+                          }}
+                          sx={{ borderRadius: "10px" }}
+                        >
+                          Back: Groups & Brackets
+                        </Button>
+                        <Button
+                          variant="contained"
+                          onClick={() => {
+                            if (!selectedCategory) return;
+                            setScheduleCreatorOpenByCategory((prev) => ({
+                              ...prev,
+                              [selectedCategory.id]:
+                                !Boolean(prev[selectedCategory.id]),
+                            }));
+                          }}
+                          sx={{ borderRadius: "10px" }}
+                        >
+                          Create Schedule
+                        </Button>
+                      </Box>
+
+                      {selectedCategory && selectedConfig && scheduleCreatorOpenByCategory[selectedCategory.id] ? (
+                        <Box
+                          sx={{
+                            mt: 1,
+                            p: 1.5,
+                            borderRadius: "10px",
+                            bgcolor: "#F9FAFB",
+                            border: "1px solid #E5E7EB",
+                          }}
+                        >
+                          <Stack
+                            direction={{ xs: "column", md: "row" }}
+                            spacing={1}
+                            justifyContent="space-between"
+                            alignItems={{ md: "center" }}
+                            sx={{ mb: 1.25 }}
+                          >
+                            <Typography
+                              sx={{
+                                fontWeight: 700,
+                                color: "#101828",
+                                fontSize: "0.95rem",
+                              }}
+                            >
+                              Create Matches
+                            </Typography>
+                            <Button
+                              variant="outlined"
+                              onClick={() =>
+                                void createRandomMatchesForCategory(
+                                  selectedCategory.id,
+                                  selectedConfig,
+                                )
+                              }
+                              disabled={Boolean(matchesPostingByCategory[selectedCategory.id])}
+                              sx={{ borderRadius: "10px", textTransform: "none" }}
+                            >
+                              Randomly Generate Matches
+                            </Button>
+                          </Stack>
+
+                          {(() => {
+                            const draft = getScheduleDraft(
+                              selectedCategory.id,
+                              selectedConfig,
+                            );
+                            const categoryGroups =
+                              groupsByCategory[selectedCategory.id] ?? [];
+                            const categoryTeams =
+                              teamsByCategory[selectedCategory.id] ?? [];
+                            const selectedGroup = categoryGroups.find(
+                              (group) => String(group.id) === String(draft.groupId),
+                            );
+                            const groupTeamIds = new Set(
+                              (selectedGroup?.participants ?? [])
+                                .map((participant) => Number(String(participant).trim()))
+                                .filter((teamId) => Number.isFinite(teamId) && teamId > 0),
+                            );
+                            const selectableTeams =
+                              selectedGroup != null
+                                ? categoryTeams.filter((team) =>
+                                    groupTeamIds.has(Number(team.id)),
+                                  )
+                                : categoryTeams;
+                            return (
+                              <Stack spacing={1}>
+                                <Stack
+                                  direction={{ xs: "column", md: "row" }}
+                                  spacing={1}
+                                >
+                                  <TextField
+                                    label="Group (optional)"
+                                    select
+                                    fullWidth
+                                    value={draft.groupId}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          groupId: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                  >
+                                    <MenuItem value="">No Group</MenuItem>
+                                    {categoryGroups.map((group) => (
+                                      <MenuItem key={group.id} value={String(group.id)}>
+                                        {group.name}
+                                      </MenuItem>
+                                    ))}
+                                  </TextField>
+                                  <TextField
+                                    label="Round"
+                                    select
+                                    fullWidth
+                                    value={draft.round}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          round: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                  >
+                                    <MenuItem value="GROUP">GROUP</MenuItem>
+                                    <MenuItem value="QUARTERFINAL">QUARTERFINAL</MenuItem>
+                                    <MenuItem value="SEMIFINAL">SEMIFINAL</MenuItem>
+                                    <MenuItem value="FINAL">FINAL</MenuItem>
+                                  </TextField>
+                                </Stack>
+
+                                <Stack
+                                  direction={{ xs: "column", md: "row" }}
+                                  spacing={1}
+                                >
+                                  <TextField
+                                    label="Home Team"
+                                    select
+                                    fullWidth
+                                    value={draft.homeTeamId}
+                                    disabled={selectedGroup != null && selectableTeams.length === 0}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          homeTeamId: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                  >
+                                    <MenuItem value="">Select home team</MenuItem>
+                                    {selectableTeams.map((team) => (
+                                      <MenuItem key={`home-${team.id}`} value={String(team.id)}>
+                                        {getTeamDisplayName(team)}
+                                      </MenuItem>
+                                    ))}
+                                  </TextField>
+                                  <TextField
+                                    label="Away Team"
+                                    select
+                                    fullWidth
+                                    value={draft.awayTeamId}
+                                    disabled={selectedGroup != null && selectableTeams.length === 0}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          awayTeamId: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                  >
+                                    <MenuItem value="">Select away team</MenuItem>
+                                    {selectableTeams.map((team) => (
+                                      <MenuItem key={`away-${team.id}`} value={String(team.id)}>
+                                        {getTeamDisplayName(team)}
+                                      </MenuItem>
+                                    ))}
+                                  </TextField>
+                                </Stack>
+
+                                <Stack
+                                  direction={{ xs: "column", md: "row" }}
+                                  spacing={1}
+                                >
+                                  <TextField
+                                    label="Match date"
+                                    type="date"
+                                    fullWidth
+                                    value={draft.matchDate}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          matchDate: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                    InputLabelProps={{ shrink: true }}
+                                  />
+                                  <TextField
+                                    label="Start time"
+                                    type="time"
+                                    fullWidth
+                                    value={draft.startTime}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          startTime: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                    InputLabelProps={{ shrink: true }}
+                                  />
+                                  <TextField
+                                    label="Court / Field"
+                                    fullWidth
+                                    value={draft.venue}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          venue: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                  />
+                                  <TextField
+                                    label="Status"
+                                    select
+                                    fullWidth
+                                    value={draft.status}
+                                    onChange={(e) =>
+                                      setScheduleDraft(
+                                        selectedCategory.id,
+                                        (current) => ({
+                                          ...current,
+                                          status: e.target.value,
+                                        }),
+                                        selectedConfig,
+                                      )
+                                    }
+                                  >
+                                    <MenuItem value="SCHEDULED">SCHEDULED</MenuItem>
+                                    <MenuItem value="IN_PROGRESS">IN_PROGRESS</MenuItem>
+                                    <MenuItem value="COMPLETED">COMPLETED</MenuItem>
+                                  </TextField>
+                                </Stack>
+
+                                <Box
+                                  sx={{
+                                    display: "flex",
+                                    justifyContent: "flex-end",
+                                  }}
+                                >
+                                  <Button
+                                    variant="contained"
+                                    onClick={() =>
+                                      void createManualMatchForCategory(
+                                        selectedCategory.id,
+                                        selectedConfig,
+                                      )
+                                    }
+                                    disabled={Boolean(
+                                      matchesPostingByCategory[selectedCategory.id],
+                                    )}
+                                    sx={{ borderRadius: "10px" }}
+                                  >
+                                    Add Match
+                                  </Button>
+                                </Box>
+                              </Stack>
+                            );
+                          })()}
+                        </Box>
+                      ) : null}
+
+                      {(selectedConfig?.scheduleItems?.length ?? 0) > 0 ? (
+                        <Box
+                          sx={{
+                            mt: 1,
+                            p: 1.5,
+                            borderRadius: "10px",
+                            bgcolor: "#F9FAFB",
+                            border: "1px solid #E5E7EB",
+                          }}
+                        >
+                          <Typography
+                            sx={{
+                              fontWeight: 700,
+                              color: "#101828",
+                              fontSize: "0.95rem",
+                              mb: 1,
+                            }}
+                          >
+                            Schedule Overview
+                          </Typography>
+                          {(() => {
+                            const currentConfig: CategorySetupConfig =
+                              selectedConfigResolved ?? {
+                                formats: [inferFormatFromCategoryName(selectedCategory.name)],
+                                structureMode: "",
+                                bracketMatches: [],
+                              };
+                            const selectedConfig = currentConfig;
+                            const categoryGroups =
+                              groupsByCategory[selectedCategory.id] ?? [];
+                            const groupNameById = new Map(
+                              categoryGroups
+                                .map((group) => [Number(group.id), group.name] as const)
+                                .filter(([groupId]) => Number.isFinite(groupId) && groupId > 0),
+                            );
+                            const grouped = new Map<string, CategoryScheduleItem[]>();
+                            (selectedConfig?.scheduleItems ?? []).forEach((item) => {
+                              const groupId = Number(item.groupId);
+                              const key =
+                                Number.isFinite(groupId) && groupId > 0
+                                  ? groupNameById.get(groupId) ?? `Group ${groupId}`
+                                  : "No Group";
+                              const current = grouped.get(key) ?? [];
+                              grouped.set(key, [...current, item]);
+                            });
+                            const ordered = Array.from(grouped.entries()).sort((a, b) => {
+                              if (a[0] === "No Group") return 1;
+                              if (b[0] === "No Group") return -1;
+                              return a[0].localeCompare(b[0]);
+                            });
+                            return (
+                              <Stack spacing={1.5}>
+                                {ordered.map(([groupName, matches]) => (
+                                  <Box key={groupName}>
+                                    <Typography
+                                      sx={{
+                                        fontWeight: 700,
+                                        fontSize: "0.85rem",
+                                        color: "#6A7282",
+                                        textTransform: "uppercase",
+                                        letterSpacing: "0.03em",
+                                        mb: 0.75,
+                                      }}
+                                    >
+                                      {groupName}
+                                    </Typography>
+                                    <Stack spacing={1}>
+                                      {matches.map((item, idx) => (
+                                        <Box
+                                          key={item.id}
+                                          sx={{
+                                            p: 1.25,
+                                            borderRadius: "10px",
+                                            border: "1px solid #E5E7EB",
+                                            bgcolor: "#FFFFFF",
+                                          }}
+                                        >
+                                          {(() => {
+                                            const categoryTeams =
+                                              teamsByCategory[selectedCategory.id] ?? [];
+                                            const teamNameById = new Map(
+                                              categoryTeams.map((team) => [
+                                                Number(team.id),
+                                                getTeamDisplayName(team),
+                                              ]),
+                                            );
+                                            const isEditing =
+                                              editingScheduleItemByCategory[
+                                                selectedCategory.id
+                                              ] === item.id;
+                                            const selectedGroup = categoryGroups.find(
+                                              (group) =>
+                                                String(group.id) === String(item.groupId ?? ""),
+                                            );
+                                            const groupTeamIds = new Set(
+                                              (selectedGroup?.participants ?? [])
+                                                .map((participant) =>
+                                                  Number(String(participant).trim()),
+                                                )
+                                                .filter(
+                                                  (teamId) =>
+                                                    Number.isFinite(teamId) &&
+                                                    teamId > 0,
+                                                ),
+                                            );
+                                            const selectableTeams =
+                                              selectedGroup != null
+                                                ? categoryTeams.filter((team) =>
+                                                    groupTeamIds.has(Number(team.id)),
+                                                  )
+                                                : categoryTeams;
+                                            const homeLabel =
+                                              teamNameById.get(Number(item.homeTeamId)) ??
+                                              `Team #${item.homeTeamId ?? "?"}`;
+                                            const awayLabel =
+                                              teamNameById.get(Number(item.awayTeamId)) ??
+                                              `Team #${item.awayTeamId ?? "?"}`;
+
+                                            if (!isEditing) {
+                                              return (
+                                                <Stack spacing={0.75}>
+                                                  <Stack
+                                                    direction={{ xs: "column", md: "row" }}
+                                                    spacing={0.75}
+                                                    alignItems={{ md: "center" }}
+                                                  >
+                                                    <Typography
+                                                      sx={{
+                                                        fontWeight: 600,
+                                                        color: "#111827",
+                                                        flex: 1,
+                                                      }}
+                                                    >
+                                                      {homeLabel} vs {awayLabel}
+                                                    </Typography>
+                                                    <Typography
+                                                      sx={{ color: "#4B5563", minWidth: 80 }}
+                                                    >
+                                                      {item.startTime}
+                                                    </Typography>
+                                                    <Typography
+                                                      sx={{ color: "#4B5563", minWidth: 120 }}
+                                                    >
+                                                      {item.matchDate || "-"}
+                                                    </Typography>
+                                                    <Typography
+                                                      sx={{ color: "#4B5563", minWidth: 120 }}
+                                                    >
+                                                      {item.venue}
+                                                    </Typography>
+                                                    <Typography
+                                                      sx={{ color: "#4B5563", minWidth: 110 }}
+                                                    >
+                                                      {item.status || "SCHEDULED"}
+                                                    </Typography>
+                                                  </Stack>
+                                                  <Stack
+                                                    direction="row"
+                                                    spacing={1}
+                                                    justifyContent="flex-end"
+                                                  >
+                                                    <Button
+                                                      size="small"
+                                                      variant="outlined"
+                                                      onClick={() =>
+                                                        setEditingScheduleItemByCategory(
+                                                          (prev) => ({
+                                                            ...prev,
+                                                            [selectedCategory.id]: item.id,
+                                                          }),
+                                                        )
+                                                      }
+                                                      sx={{ borderRadius: "8px" }}
+                                                    >
+                                                      Edit
+                                                    </Button>
+                                                    <Button
+                                                      size="small"
+                                                      color="error"
+                                                      variant="outlined"
+                                                      onClick={() => {
+                                                        void (async () => {
+                                                          setMatchesPostingByCategory((prev) => ({
+                                                            ...prev,
+                                                            [selectedCategory.id]: true,
+                                                          }));
+                                                          setError(null);
+                                                          try {
+                                                            await deleteMatchViaApi(
+                                                              item.backendMatchId,
+                                                            );
+                                                            setCategoryConfigs((prev) => ({
+                                                              ...prev,
+                                                              [selectedCategory.id]: {
+                                                                ...selectedConfig,
+                                                                scheduleItems: (
+                                                                  selectedConfig.scheduleItems ??
+                                                                  []
+                                                                ).filter(
+                                                                  (row) =>
+                                                                    row.id !== item.id,
+                                                                ),
+                                                              },
+                                                            }));
+                                                            setEditingScheduleItemByCategory(
+                                                              (prev) => ({
+                                                                ...prev,
+                                                                [selectedCategory.id]:
+                                                                  prev[selectedCategory.id] ===
+                                                                  item.id
+                                                                    ? null
+                                                                    : prev[
+                                                                        selectedCategory.id
+                                                                      ],
+                                                              }),
+                                                            );
+                                                            setStatusMessage(
+                                                              "Match deleted.",
+                                                            );
+                                                          } catch (err) {
+                                                            setError(
+                                                              err instanceof Error
+                                                                ? err.message
+                                                                : "Failed to delete match.",
+                                                            );
+                                                          } finally {
+                                                            setMatchesPostingByCategory(
+                                                              (prev) => ({
+                                                                ...prev,
+                                                                [selectedCategory.id]: false,
+                                                              }),
+                                                            );
+                                                          }
+                                                        })();
+                                                      }}
+                                                      sx={{ borderRadius: "8px" }}
+                                                    >
+                                                      Delete
+                                                    </Button>
+                                                  </Stack>
+                                                </Stack>
+                                              );
+                                            }
+
+                                            return (
+                                              <Stack spacing={1}>
+                                                <Stack
+                                                  direction={{ xs: "column", md: "row" }}
+                                                  spacing={1}
+                                                >
+                                                  <TextField
+                                                    label="Group"
+                                                    select
+                                                    fullWidth
+                                                    value={String(item.groupId ?? "")}
+                                                    onChange={(e) => {
+                                                      const value = e.target.value;
+                                                      const numeric =
+                                                        Number.isFinite(Number(value)) &&
+                                                        Number(value) > 0
+                                                          ? Number(value)
+                                                          : undefined;
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  groupId: numeric,
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }));
+                                                    }}
+                                                  >
+                                                    <MenuItem value="">No Group</MenuItem>
+                                                    {categoryGroups.map((group) => (
+                                                      <MenuItem
+                                                        key={`edit-g-${group.id}`}
+                                                        value={String(group.id)}
+                                                      >
+                                                        {group.name}
+                                                      </MenuItem>
+                                                    ))}
+                                                  </TextField>
+                                                  <TextField
+                                                    label="Round"
+                                                    select
+                                                    fullWidth
+                                                    value={String(item.round ?? "GROUP")}
+                                                    onChange={(e) =>
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  round: e.target.value,
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }))
+                                                    }
+                                                  >
+                                                    <MenuItem value="GROUP">GROUP</MenuItem>
+                                                    <MenuItem value="QUARTERFINAL">
+                                                      QUARTERFINAL
+                                                    </MenuItem>
+                                                    <MenuItem value="SEMIFINAL">
+                                                      SEMIFINAL
+                                                    </MenuItem>
+                                                    <MenuItem value="FINAL">FINAL</MenuItem>
+                                                  </TextField>
+                                                </Stack>
+
+                                                <Stack
+                                                  direction={{ xs: "column", md: "row" }}
+                                                  spacing={1}
+                                                >
+                                                  <TextField
+                                                    label="Home Team"
+                                                    select
+                                                    fullWidth
+                                                    value={String(item.homeTeamId ?? "")}
+                                                    onChange={(e) =>
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  homeTeamId: Number(
+                                                                    e.target.value,
+                                                                  ),
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }))
+                                                    }
+                                                    disabled={
+                                                      selectedGroup != null &&
+                                                      selectableTeams.length === 0
+                                                    }
+                                                  >
+                                                    <MenuItem value="">
+                                                      Select home team
+                                                    </MenuItem>
+                                                    {selectableTeams.map((team) => (
+                                                      <MenuItem
+                                                        key={`edit-home-${team.id}`}
+                                                        value={String(team.id)}
+                                                      >
+                                                        {getTeamDisplayName(team)}
+                                                      </MenuItem>
+                                                    ))}
+                                                  </TextField>
+                                                  <TextField
+                                                    label="Away Team"
+                                                    select
+                                                    fullWidth
+                                                    value={String(item.awayTeamId ?? "")}
+                                                    onChange={(e) =>
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  awayTeamId: Number(
+                                                                    e.target.value,
+                                                                  ),
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }))
+                                                    }
+                                                    disabled={
+                                                      selectedGroup != null &&
+                                                      selectableTeams.length === 0
+                                                    }
+                                                  >
+                                                    <MenuItem value="">
+                                                      Select away team
+                                                    </MenuItem>
+                                                    {selectableTeams.map((team) => (
+                                                      <MenuItem
+                                                        key={`edit-away-${team.id}`}
+                                                        value={String(team.id)}
+                                                      >
+                                                        {getTeamDisplayName(team)}
+                                                      </MenuItem>
+                                                    ))}
+                                                  </TextField>
+                                                </Stack>
+
+                                                <Stack
+                                                  direction={{ xs: "column", md: "row" }}
+                                                  spacing={1}
+                                                >
+                                                  <TextField
+                                                    label="Match date"
+                                                    type="date"
+                                                    fullWidth
+                                                    value={String(item.matchDate ?? "")}
+                                                    onChange={(e) =>
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  matchDate: e.target.value,
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }))
+                                                    }
+                                                    InputLabelProps={{ shrink: true }}
+                                                  />
+                                                  <TextField
+                                                    label="Start time"
+                                                    type="time"
+                                                    fullWidth
+                                                    value={item.startTime}
+                                                    onChange={(e) =>
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  startTime: e.target.value,
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }))
+                                                    }
+                                                    InputLabelProps={{ shrink: true }}
+                                                  />
+                                                  <TextField
+                                                    label="Court / Field"
+                                                    fullWidth
+                                                    value={item.venue}
+                                                    onChange={(e) =>
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  venue: e.target.value,
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }))
+                                                    }
+                                                  />
+                                                  <TextField
+                                                    label="Status"
+                                                    select
+                                                    fullWidth
+                                                    value={String(item.status ?? "SCHEDULED")}
+                                                    onChange={(e) =>
+                                                      setCategoryConfigs((prev) => ({
+                                                        ...prev,
+                                                        [selectedCategory.id]: {
+                                                          ...selectedConfig,
+                                                          scheduleItems: (
+                                                            selectedConfig.scheduleItems ??
+                                                            []
+                                                          ).map((row) =>
+                                                            row.id === item.id
+                                                              ? {
+                                                                  ...row,
+                                                                  status: e.target.value,
+                                                                }
+                                                              : row,
+                                                          ),
+                                                        },
+                                                      }))
+                                                    }
+                                                  >
+                                                    <MenuItem value="SCHEDULED">
+                                                      SCHEDULED
+                                                    </MenuItem>
+                                                    <MenuItem value="IN_PROGRESS">
+                                                      IN_PROGRESS
+                                                    </MenuItem>
+                                                    <MenuItem value="COMPLETED">
+                                                      COMPLETED
+                                                    </MenuItem>
+                                                  </TextField>
+                                                </Stack>
+
+                                                <Stack
+                                                  direction="row"
+                                                  spacing={1}
+                                                  justifyContent="flex-end"
+                                                >
+                                                  <Button
+                                                    size="small"
+                                                    variant="outlined"
+                                                    onClick={() =>
+                                                      setEditingScheduleItemByCategory(
+                                                        (prev) => ({
+                                                          ...prev,
+                                                          [selectedCategory.id]: null,
+                                                        }),
+                                                      )
+                                                    }
+                                                    sx={{ borderRadius: "8px" }}
+                                                  >
+                                                    Cancel
+                                                  </Button>
+                                                  <Button
+                                                    size="small"
+                                                    variant="contained"
+                                                    onClick={() => {
+                                                      void (async () => {
+                                                        const homeTeamId = Number(
+                                                          item.homeTeamId,
+                                                        );
+                                                        const awayTeamId = Number(
+                                                          item.awayTeamId,
+                                                        );
+                                                        if (
+                                                          !Number.isFinite(homeTeamId) ||
+                                                          homeTeamId <= 0 ||
+                                                          !Number.isFinite(awayTeamId) ||
+                                                          awayTeamId <= 0
+                                                        ) {
+                                                          setError(
+                                                            "Home and away teams are required.",
+                                                          );
+                                                          return;
+                                                        }
+                                                        if (homeTeamId === awayTeamId) {
+                                                          setError(
+                                                            "Home and away team must be different.",
+                                                          );
+                                                          return;
+                                                        }
+                                                        if (
+                                                          !String(item.matchDate ?? "").trim() ||
+                                                          !String(item.startTime ?? "").trim() ||
+                                                          !String(item.venue ?? "")
+                                                            .trim()
+                                                        ) {
+                                                          setError(
+                                                            "Match date, start time, and venue are required.",
+                                                          );
+                                                          return;
+                                                        }
+
+                                                        const duplicateKey =
+                                                          normalizeMatchIdentity(item);
+                                                        const hasDuplicate =
+                                                          Boolean(duplicateKey) &&
+                                                          (selectedConfig.scheduleItems ?? [])
+                                                            .filter(
+                                                              (row) =>
+                                                                row.id !== item.id,
+                                                            )
+                                                            .map((row) =>
+                                                              normalizeMatchIdentity(row),
+                                                            )
+                                                            .filter(Boolean)
+                                                            .includes(duplicateKey);
+                                                        if (hasDuplicate) {
+                                                          setError(
+                                                            "Another match with the same teams/group/round already exists.",
+                                                          );
+                                                          return;
+                                                        }
+
+                                                        setMatchesPostingByCategory(
+                                                          (prev) => ({
+                                                            ...prev,
+                                                            [selectedCategory.id]: true,
+                                                          }),
+                                                        );
+                                                        setError(null);
+                                                        try {
+                                                          const nextLabel = `${
+                                                            teamNameById.get(
+                                                              Number(item.homeTeamId),
+                                                            ) ??
+                                                            `Team #${item.homeTeamId ?? "?"}`
+                                                          } vs ${
+                                                            teamNameById.get(
+                                                              Number(item.awayTeamId),
+                                                            ) ??
+                                                            `Team #${item.awayTeamId ?? "?"}`
+                                                          }`;
+                                                          let nextRow: CategoryScheduleItem = {
+                                                            ...item,
+                                                            matchLabel: nextLabel,
+                                                          };
+                                                          if (
+                                                            Number.isFinite(
+                                                              Number(item.backendMatchId),
+                                                            ) &&
+                                                            Number(item.backendMatchId) > 0
+                                                          ) {
+                                                            await updateMatchViaApi(
+                                                              selectedCategory.id,
+                                                              nextRow,
+                                                            );
+                                                          } else {
+                                                            const created =
+                                                              await createMatchViaApi(
+                                                                selectedCategory.id,
+                                                                nextRow,
+                                                              );
+                                                            if (created) nextRow = created;
+                                                          }
+                                                          setCategoryConfigs((prev) => ({
+                                                            ...prev,
+                                                            [selectedCategory.id]: {
+                                                              ...selectedConfig,
+                                                              scheduleItems: (
+                                                                selectedConfig.scheduleItems ??
+                                                                []
+                                                              ).map((row) =>
+                                                                row.id === item.id
+                                                                  ? nextRow
+                                                                  : row,
+                                                              ),
+                                                            },
+                                                          }));
+                                                          setEditingScheduleItemByCategory(
+                                                            (prev) => ({
+                                                              ...prev,
+                                                              [selectedCategory.id]: null,
+                                                            }),
+                                                          );
+                                                          setStatusMessage(
+                                                            "Match updated.",
+                                                          );
+                                                        } catch (err) {
+                                                          setError(
+                                                            err instanceof Error
+                                                              ? err.message
+                                                              : "Failed to update match.",
+                                                          );
+                                                        } finally {
+                                                          setMatchesPostingByCategory(
+                                                            (prev) => ({
+                                                              ...prev,
+                                                              [selectedCategory.id]:
+                                                                false,
+                                                            }),
+                                                          );
+                                                        }
+                                                      })();
+                                                    }}
+                                                    sx={{ borderRadius: "8px" }}
+                                                  >
+                                                    Save
+                                                  </Button>
+                                                </Stack>
+                                              </Stack>
+                                            );
+                                          })()}
+                                          <Typography
+                                            sx={{ mt: 0.75, color: "#6B7280", fontSize: "0.8rem" }}
+                                          >
+                                            Match {idx + 1}
+                                          </Typography>
+                                        </Box>
+                                      ))}
+                                    </Stack>
+                                  </Box>
+                                ))}
+                              </Stack>
+                            );
+                          })()}
+                        </Box>
+                      ) : null}
+                        </>
+                      )}
                     </Stack>
                   )}
                 </CardContent>
