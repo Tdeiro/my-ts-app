@@ -7,7 +7,6 @@ import {
   CardContent,
   Chip,
   Collapse,
-  CircularProgress,
   Divider,
   IconButton,
   MenuItem,
@@ -16,7 +15,6 @@ import {
   Tab,
   Tabs,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -59,6 +57,7 @@ import {
 import { useTournamentSetupNavigation } from "./tournament-setup/hooks";
 import {
   type ApiEvent,
+  type ApiEventDetailsCategory,
   type ApiEventDetailsResponse,
   type ApiEventSubscription,
   type ApiMatchDto,
@@ -74,6 +73,10 @@ import {
   type TeamEditorState,
   type TournamentFormat,
 } from "./tournament-setup/types";
+import { TeamsTab } from "./tournament-setup/TeamsTab";
+import { StructureTab } from "./tournament-setup/StructureTab";
+import { GroupsTab } from "./tournament-setup/GroupsTab";
+import { ScheduleTab } from "./tournament-setup/ScheduleTab";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -136,6 +139,64 @@ function toSafeCount(value: unknown): number | undefined {
   return Math.max(0, parsed);
 }
 
+function mapEmbeddedGroups(category: ApiTournamentCategory): GroupBucket[] {
+  const groups = (Array.isArray((category as ApiEventDetailsCategory).groups)
+    ? (category as ApiEventDetailsCategory).groups
+    : []) as NonNullable<ApiEventDetailsCategory["groups"]>;
+  return groups.map((group, idx) => ({
+    id: String(group.id ?? `group-${idx + 1}`),
+    name: String(group.name ?? `Group ${idx + 1}`),
+    participants: Array.from(
+      new Set(
+        (Array.isArray(group.teams) ? group.teams : [])
+          .map((team) => Number(team?.id))
+          .filter((teamId) => Number.isFinite(teamId) && teamId > 0)
+          .map((teamId) => String(teamId)),
+      ),
+    ),
+  }));
+}
+
+function mapEmbeddedTeams(category: ApiTournamentCategory): TeamDto[] {
+  const categoryId = Number(category.id);
+  const groups = (Array.isArray((category as ApiEventDetailsCategory).groups)
+    ? (category as ApiEventDetailsCategory).groups
+    : []) as NonNullable<ApiEventDetailsCategory["groups"]>;
+  const byId = new Map<number, TeamDto>();
+
+  groups.forEach((group) => {
+    (Array.isArray(group.teams) ? group.teams : []).forEach((team) => {
+      const teamId = Number(team?.id);
+      if (!Number.isFinite(teamId) || teamId <= 0 || byId.has(teamId)) return;
+      byId.set(teamId, {
+        id: teamId,
+        categoryId:
+          Number.isFinite(categoryId) && categoryId > 0 ? categoryId : 0,
+        name: String(team?.name ?? ""),
+        autoNameFromMembers: Boolean(team?.autoNameFromMembers),
+        members: Array.isArray(team?.members)
+          ? team.members.map((member) => ({
+              userId: Number(member.userId ?? 0),
+              userFullName: member.userFullName,
+              joinedAt: member.joinedAt,
+            }))
+          : [],
+      });
+    });
+  });
+
+  return Array.from(byId.values());
+}
+
+function createEmptyTeamEditorState(): TeamEditorState {
+  return {
+    name: "",
+    memberUserIds: [],
+    autoNameFromMembers: true,
+    editingTeamId: null,
+  };
+}
+
 export default function TournamentSetupPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -194,8 +255,6 @@ export default function TournamentSetupPage() {
   >({});
   const [serverGroupIdsByCategory, setServerGroupIdsByCategory] =
     React.useState<Record<string, number[]>>({});
-  const [scheduleCreatorOpenByCategory, setScheduleCreatorOpenByCategory] =
-    React.useState<Record<string, boolean>>({});
   const [scheduleDraftByCategory, setScheduleDraftByCategory] = React.useState<
     Record<string, ScheduleDraftInput>
   >({});
@@ -574,50 +633,6 @@ export default function TournamentSetupPage() {
         )
           ? selected.categories
           : [];
-        const structureByCategory: Record<
-          string,
-          ApiTournamentCategoryStructure | null
-        > = {};
-        const persistedStructureByCategory: Record<string, boolean> = {};
-        await Promise.all(
-          rawCategories.map(async (cat) => {
-            const categoryKey = String(cat.id);
-            const parsedCategoryId = Number(cat.id);
-            if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
-              structureByCategory[categoryKey] = null;
-              persistedStructureByCategory[categoryKey] = false;
-              return;
-            }
-            try {
-              const structureRes = await fetch(
-                `${API_URL}/tournament-category-structures/${encodeURIComponent(parsedCategoryId)}`,
-                {
-                  headers: { Authorization: `Bearer ${token}` },
-                },
-              );
-              if (structureRes.status === 404) {
-                structureByCategory[categoryKey] = null;
-                persistedStructureByCategory[categoryKey] = false;
-                return;
-              }
-              const structureBody = await structureRes.json().catch(() => null);
-              if (!structureRes.ok) {
-                throw new Error(
-                  structureBody?.message?.[0] ||
-                    structureBody?.error ||
-                    "Failed to load category structure.",
-                );
-              }
-              const parsed = parseStructureResponse(structureBody);
-              structureByCategory[categoryKey] = parsed;
-              persistedStructureByCategory[categoryKey] = Boolean(parsed);
-            } catch {
-              structureByCategory[categoryKey] = null;
-              persistedStructureByCategory[categoryKey] = false;
-            }
-          }),
-        );
-        setHasPersistedStructureByCategory(persistedStructureByCategory);
         const savedCategories = saved?.categories ?? [];
         const backendMappedCategories: TournamentCategory[] = rawCategories.map(
           (cat, idx) => {
@@ -634,10 +649,30 @@ export default function TournamentSetupPage() {
               name: categoryName,
               discipline:
                 persisted?.discipline ?? inferDisciplineFromCategory(cat),
-              groups: Math.max(1, Number(persisted?.groups ?? 2)),
+              groups: Math.max(
+                1,
+                Number(
+                  toSafeCount(
+                    (cat as ApiEventDetailsCategory).groupsCount,
+                  ) ?? persisted?.groups ?? 2,
+                ),
+              ),
             };
           },
         );
+        const structureByCategory = Object.fromEntries(
+          rawCategories.map((cat) => [
+            String(cat.id),
+            parseStructureResponse(cat.structure),
+          ]),
+        ) as Record<string, ApiTournamentCategoryStructure | null>;
+        const persistedStructureByCategory = Object.fromEntries(
+          Object.entries(structureByCategory).map(([key, value]) => [
+            key,
+            Boolean(value),
+          ]),
+        ) as Record<string, boolean>;
+        setHasPersistedStructureByCategory(persistedStructureByCategory);
 
         if (saved) {
           const savedConfigs = saved.categoryConfigs ?? {};
@@ -659,6 +694,7 @@ export default function TournamentSetupPage() {
                 ((current?.structureMode as StructureMode) ?? ""),
               groupCount:
                 toSafeCount(backendStructure?.numberOfGroups) ??
+                toSafeCount((rawCategories.find((item) => String(item.id) === String(cat.id)) as ApiEventDetailsCategory | undefined)?.groupsCount) ??
                 (typeof current?.groupCount === "number"
                   ? current.groupCount
                   : undefined),
@@ -754,7 +790,11 @@ export default function TournamentSetupPage() {
             computedConfigs[String(cat.id)] = {
               formats: [inferFormatFromCategoryName(cat.name)],
               structureMode: backendStructureMode,
-              groupCount: toSafeCount(backendStructure?.numberOfGroups),
+              groupCount:
+                toSafeCount(backendStructure?.numberOfGroups) ??
+                toSafeCount(
+                  (rawCategories.find((item) => String(item.id) === String(cat.id)) as ApiEventDetailsCategory | undefined)?.groupsCount,
+                ),
               teamsPerGroup: toSafeCount(backendStructure?.teamsPerGroup),
               qualifiedPerGroup: toSafeCount(
                 backendStructure?.qualifiedPerGroup,
@@ -764,67 +804,22 @@ export default function TournamentSetupPage() {
           });
           setCategoryConfigs(computedConfigs);
         }
-
-        const categoriesForGroups =
-          backendMappedCategories.length > 0
-            ? backendMappedCategories
-            : (saved?.categories ?? []);
-        const groupFetches = await Promise.all(
-          categoriesForGroups.map(async (cat) => {
-            const catId = Number(cat.id);
-            if (!Number.isFinite(catId) || catId <= 0) {
-              return {
-                categoryKey: String(cat.id),
-                groups: [] as ApiTournamentGroup[],
-              };
-            }
-            const res = await fetch(
-              `${API_URL}/tournament-groups?categoryId=${encodeURIComponent(catId)}`,
-              { headers: { Authorization: `Bearer ${token}` } },
-            );
-            if (!res.ok)
-              return {
-                categoryKey: String(cat.id),
-                groups: [] as ApiTournamentGroup[],
-              };
-            const body = await res.json().catch(() => null);
-            const list: ApiTournamentGroup[] = Array.isArray(body)
-              ? body
-              : (body?.data ?? []);
-            return { categoryKey: String(cat.id), groups: list };
-          }),
-        );
-
         const nextGroupsMap: Record<string, GroupBucket[]> = {};
         const nextServerIdsMap: Record<string, number[]> = {};
-        groupFetches.forEach(({ categoryKey, groups }) => {
-          const mappedGroups: GroupBucket[] = groups.map((g) => ({
-            id: String(g.id),
-            name: String(g.name ?? "Group"),
-            participants: Array.from(
-              new Set(
-                [
-                  ...(Array.isArray(g.teamIds) ? g.teamIds : []),
-                  ...((Array.isArray(g.teams) ? g.teams : [])
-                    .map((team) => team?.id)
-                    .filter((teamId) => teamId != null) as Array<
-                    number | string
-                  >),
-                ]
-                  .map((teamId) => Number(teamId))
-                  .filter((teamId) => Number.isFinite(teamId) && teamId > 0)
-                  .map((teamId) => String(teamId)),
-              ),
-            ),
-          }));
+        const nextTeamsMap: Record<string, TeamDto[]> = {};
+        rawCategories.forEach((cat) => {
+          const categoryKey = String(cat.id);
+          const mappedGroups = mapEmbeddedGroups(cat);
           nextGroupsMap[categoryKey] = mappedGroups;
-          nextServerIdsMap[categoryKey] = groups
-            .map((g) => Number(g.id))
-            .filter((v) => Number.isFinite(v) && v > 0);
+          nextServerIdsMap[categoryKey] = mappedGroups
+            .map((group) => Number(group.id))
+            .filter((value) => Number.isFinite(value) && value > 0);
+          nextTeamsMap[categoryKey] = mapEmbeddedTeams(cat);
           groupStructureSignatureRef.current[categoryKey] =
             groupStructureSignature(mappedGroups);
         });
         setServerGroupIdsByCategory(nextServerIdsMap);
+        setTeamsByCategory((prev) => ({ ...prev, ...nextTeamsMap }));
         setGroupsByCategory((prev) => {
           const merged = { ...prev, ...nextGroupsMap };
           if (id) saveTournamentGroups(id, merged);
@@ -848,7 +843,7 @@ export default function TournamentSetupPage() {
   }, [id]);
 
   React.useEffect(() => {
-    if (!id || (activeTab !== "teams" && activeTab !== "overview")) return;
+    if (!id || activeTab !== "teams") return;
     const token = getToken();
     if (!token) return;
 
@@ -931,20 +926,15 @@ export default function TournamentSetupPage() {
 
   const getCategoryTeamEditor = React.useCallback(
     (categoryId: string): TeamEditorState =>
-      teamEditorByCategory[categoryId] ?? {
-        name: "",
-        memberUserIds: [],
-        autoNameFromMembers: true,
-        editingTeamId: null,
-      },
+      teamEditorByCategory[categoryId] ?? createEmptyTeamEditorState(),
     [teamEditorByCategory],
   );
 
   const loadTeamsForCategory = React.useCallback(async (categoryId: string) => {
     const token = getToken();
-    if (!token) return;
+    if (!token) return [];
     const parsedCategoryId = Number(categoryId);
-    if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return;
+    if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) return [];
 
     setTeamsLoadingByCategory((prev) => ({ ...prev, [categoryId]: true }));
     try {
@@ -962,9 +952,11 @@ export default function TournamentSetupPage() {
       }
       const list = Array.isArray(data) ? data : (data?.data ?? []);
       setTeamsByCategory((prev) => ({ ...prev, [categoryId]: list }));
+      return list as TeamDto[];
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load teams.");
       setTeamsByCategory((prev) => ({ ...prev, [categoryId]: [] }));
+      return [];
     } finally {
       setTeamsLoadingByCategory((prev) => ({ ...prev, [categoryId]: false }));
     }
@@ -976,12 +968,8 @@ export default function TournamentSetupPage() {
       updater: (current: TeamEditorState) => TeamEditorState,
     ) => {
       setTeamEditorByCategory((prev) => {
-        const current: TeamEditorState = prev[categoryId] ?? {
-          name: "",
-          memberUserIds: [],
-          autoNameFromMembers: true,
-          editingTeamId: null,
-        };
+        const current: TeamEditorState =
+          prev[categoryId] ?? createEmptyTeamEditorState();
         return { ...prev, [categoryId]: updater(current) };
       });
     },
@@ -1049,12 +1037,7 @@ export default function TournamentSetupPage() {
         setStatusMessage(
           editor.editingTeamId == null ? "Team created." : "Team updated.",
         );
-        setCategoryTeamEditor(categoryId, () => ({
-          name: "",
-          memberUserIds: [],
-          autoNameFromMembers: true,
-          editingTeamId: null,
-        }));
+        setCategoryTeamEditor(categoryId, () => createEmptyTeamEditorState());
         await loadTeamsForCategory(categoryId);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save team.");
@@ -1100,9 +1083,7 @@ export default function TournamentSetupPage() {
         return next;
       });
 
-      const remainingTeams = (teamsByCategory[categoryId] ?? []).filter(
-        (team) => Number(team.id) !== teamId,
-      );
+      const remainingTeams = await loadTeamsForCategory(categoryId);
       void syncTournamentGroupsForCategory(
         categoryId,
         cleanedGroups,
@@ -1110,15 +1091,9 @@ export default function TournamentSetupPage() {
       );
 
       setStatusMessage("Team deleted.");
-      await loadTeamsForCategory(categoryId);
       setCategoryTeamEditor(categoryId, (current) =>
         current.editingTeamId === teamId
-          ? {
-              name: "",
-              memberUserIds: [],
-              autoNameFromMembers: true,
-              editingTeamId: null,
-            }
+          ? createEmptyTeamEditorState()
           : current,
       );
     } catch (err) {
@@ -1130,14 +1105,12 @@ export default function TournamentSetupPage() {
     loadTeamsForCategory,
     setCategoryTeamEditor,
     syncTournamentGroupsForCategory,
-    teamsByCategory,
   ]);
 
   React.useEffect(() => {
     if (
       (activeTab !== "teams" &&
         activeTab !== "groups" &&
-        activeTab !== "overview" &&
         activeTab !== "schedule") ||
       !selectedCategoryId
     ) {
@@ -2586,6 +2559,174 @@ export default function TournamentSetupPage() {
         ) : event ? (
           <Stack spacing={2}>
             {activeTab === "overview" ? (
+              true ? (
+                <Card>
+                  <CardContent sx={{ p: 3 }}>
+                    <Stack spacing={2.5}>
+                      <Box
+                        sx={{
+                          p: 2,
+                          borderRadius: "14px",
+                          bgcolor: "#F9FAFB",
+                          border: "1px solid #E5E7EB",
+                        }}
+                      >
+                        <Typography
+                          sx={{
+                            fontWeight: 700,
+                            mb: 0.75,
+                            color: "#101828",
+                            fontSize: "1.05rem",
+                          }}
+                        >
+                          Tournament overview
+                        </Typography>
+                        <Stack spacing={0.5}>
+                          <Typography
+                            sx={{ color: "#4A5565", fontSize: "0.92rem" }}
+                          >
+                            1. Open a category to start managing it.
+                          </Typography>
+                          <Typography
+                            sx={{ color: "#4A5565", fontSize: "0.92rem" }}
+                          >
+                            2. Start in Teams, then move through the other tabs as needed.
+                          </Typography>
+                          <Typography
+                            sx={{ color: "#4A5565", fontSize: "0.92rem" }}
+                          >
+                            3. Structure, groups, and schedule load as you work through that category.
+                          </Typography>
+                        </Stack>
+                      </Box>
+
+                      <Stack spacing={2}>
+                        {groupedCategoriesOverview.map((section) => (
+                          <Box key={`level-${section.level}`}>
+                            <Typography
+                              sx={{
+                                fontWeight: 700,
+                                fontSize: "0.95rem",
+                                color: "#6A7282",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.03em",
+                                mb: 1,
+                              }}
+                            >
+                              {section.level}
+                            </Typography>
+                            <Box
+                              sx={{
+                                display: "grid",
+                                gridTemplateColumns: "1fr",
+                                gap: 1.25,
+                              }}
+                            >
+                              {section.items.map((item) => {
+                                return (
+                                  <Box
+                                    key={item.id}
+                                    onClick={() =>
+                                      openCategorySetup(item.id, "teams")
+                                    }
+                                    sx={{
+                                      p: 2,
+                                      borderRadius: "14px",
+                                      border: "1px solid #E5E7EB",
+                                      bgcolor: "white",
+                                      display: "flex",
+                                      flexDirection: { xs: "column", md: "row" },
+                                      alignItems: { xs: "flex-start", md: "center" },
+                                      gap: 2,
+                                      cursor: "pointer",
+                                      transition: "all 120ms ease",
+                                      "&:hover": {
+                                        borderColor: "#8B5CF6",
+                                        boxShadow:
+                                          "0 2px 8px rgba(139,92,246,0.10)",
+                                      },
+                                    }}
+                                  >
+                                    <Stack
+                                      direction={{ xs: "column", md: "row" }}
+                                      alignItems={{ xs: "flex-start", md: "center" }}
+                                      justifyContent="space-between"
+                                      spacing={1.5}
+                                      sx={{ width: "100%" }}
+                                    >
+                                      <Stack
+                                        direction="row"
+                                        spacing={2}
+                                        alignItems="center"
+                                        sx={{ minWidth: 0 }}
+                                      >
+                                        <Box
+                                          sx={{
+                                            width: 40,
+                                            height: 40,
+                                            borderRadius: "10px",
+                                            bgcolor: "#FFEDD4",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            flexShrink: 0,
+                                          }}
+                                        >
+                                          <EmojiEventsRoundedIcon
+                                            sx={{ fontSize: 20, color: "#F54900" }}
+                                          />
+                                        </Box>
+                                        <Box sx={{ minWidth: 0 }}>
+                                          <Typography
+                                            sx={{
+                                              fontWeight: 700,
+                                              fontSize: "1.125rem",
+                                              color: "#101828",
+                                            }}
+                                          >
+                                            {stripLevelPrefixFromCategoryName(
+                                              item.name,
+                                              section.level,
+                                            )}
+                                          </Typography>
+                                          <Typography
+                                            sx={{
+                                              color: "#6A7282",
+                                              fontSize: "0.9rem",
+                                            }}
+                                          >
+                                            {item.format} format
+                                          </Typography>
+                                        </Box>
+                                      </Stack>
+
+                                      <Button
+                                        variant="contained"
+                                        endIcon={<NavigateNextRoundedIcon />}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          openCategorySetup(item.id, "teams");
+                                        }}
+                                        sx={{
+                                          borderRadius: "10px",
+                                          minWidth: 170,
+                                          flexShrink: 0,
+                                        }}
+                                      >
+                                        Open Teams
+                                      </Button>
+                                    </Stack>
+                                  </Box>
+                                );
+                              })}
+                            </Box>
+                          </Box>
+                        ))}
+                      </Stack>
+                    </Stack>
+                  </CardContent>
+                </Card>
+              ) : (
                 <Card>
                 <CardContent sx={{ p: 3 }}>
                   <Box
@@ -4163,1586 +4304,332 @@ export default function TournamentSetupPage() {
                   </Stack>
                 </CardContent>
               </Card>
+              )
             ) : null}
 
             {activeTab === "teams" ? (
-              <Card>
-                <CardContent sx={{ p: 3 }}>
-                  {(() => {
-                    const selectedCategoryTeams = selectedCategory
-                      ? (teamsByCategory[selectedCategory.id] ?? [])
-                      : [];
-                    const selectedCategoryId = selectedCategory?.id ?? "";
-                    const teamEditor = getCategoryTeamEditor(selectedCategoryId);
-                    const relevantPlayers = selectedCategory
-                      ? registeredPlayers.filter((player) =>
-                          player.categoryIds.includes(selectedCategory.id),
-                        )
-                      : [];
+              selectedCategory ? (
+                <TeamsTab
+                  selectedCategoryId={selectedCategory.id}
+                  selectedCategoryLevel={selectedCategoryLevel}
+                  selectedCategoryDisplayName={selectedCategoryDisplayName}
+                  selectedCategoryTeams={teamsByCategory[selectedCategory.id] ?? []}
+                  teamEditor={getCategoryTeamEditor(selectedCategory.id)}
+                  relevantPlayers={registeredPlayers.filter((player) =>
+                    player.categoryIds.includes(selectedCategory.id),
+                  )}
+                  selectablePlayers={(() => {
+                    const teamEditor = getCategoryTeamEditor(selectedCategory.id);
+                    const selectedCategoryTeams = teamsByCategory[selectedCategory.id] ?? [];
+                    const relevantPlayers = registeredPlayers.filter((player) =>
+                      player.categoryIds.includes(selectedCategory.id),
+                    );
                     const assignedUserIds = new Set(
                       selectedCategoryTeams
                         .filter((team) => team.id !== teamEditor.editingTeamId)
                         .flatMap((team) =>
-                          (team.members ?? []).map((member) =>
-                            String(member.userId),
-                          ),
+                          (team.members ?? []).map((member) => String(member.userId)),
                         ),
                     );
-                    const selectablePlayers = relevantPlayers.filter(
+                    return relevantPlayers.filter(
                       (player) =>
                         !assignedUserIds.has(player.id) ||
                         teamEditor.memberUserIds.includes(player.id),
                     );
-                    const teamsTabSubmitting = Boolean(
-                      teamsSubmittingByCategory[selectedCategoryId],
-                    );
-                    return (
-                      <>
-                  {selectedCategory ? (
-                    <Box sx={{ mb: 2.5 }}>
-                      <Typography
-                        sx={{
-                          fontSize: "1.1rem",
-                          fontWeight: 700,
-                          color: "#6A7282",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                          mb: 1,
-                        }}
-                      >
-                        {selectedCategoryLevel}
-                      </Typography>
-                      <Box
-                        sx={{
-                          p: 1.5,
-                          borderRadius: "14px",
-                          border: "1.5px solid #8B5CF6",
-                          bgcolor: "#FFFFFF",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 1.5,
-                        }}
-                      >
-                        <Box
-                          sx={{
-                            width: 48,
-                            height: 48,
-                            borderRadius: "10px",
-                            bgcolor: "#FFEDD4",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            flexShrink: 0,
-                          }}
-                        >
-                          <EmojiEventsRoundedIcon
-                            sx={{ fontSize: 24, color: "#F54900" }}
-                          />
-                        </Box>
-                        <Typography
-                          sx={{
-                            fontSize: "1.6rem",
-                            fontWeight: 700,
-                            color: "#101828",
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          {selectedCategoryDisplayName}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  ) : (
-                    <Alert severity="warning" sx={{ mb: 2 }}>
-                      Select a category from Category List first.
-                    </Alert>
-                  )}
-
-                  <Box
-                    sx={{
-                      mb: 2,
-                      p: 1.5,
-                      borderRadius: "10px",
-                      bgcolor: "#F9FAFB",
-                      border: "1px solid #E5E7EB",
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        fontWeight: 700,
-                        color: "#101828",
-                        fontSize: "0.95rem",
-                        mb: 0.5,
-                      }}
-                    >
-                      Instructions
-                    </Typography>
-                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      1. Create teams from registered players for this category.
-                    </Typography>
-                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      2. Assigned players are removed from selection.
-                    </Typography>
-                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      3. Continue to Drawing after team setup.
-                    </Typography>
-                  </Box>
-                  {registeredPlayersError ? (
-                    <Alert severity="warning" sx={{ mb: 2 }}>
-                      {registeredPlayersError}
-                    </Alert>
-                  ) : null}
-
-                  {/* Two Column Layout */}
-                  <Stack direction={{ xs: "column", lg: "row" }} spacing={3}>
-                    {/* Left Column - Created Teams */}
-                    <Box sx={{ flex: 1 }}>
-                      <Stack
-                        direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        sx={{ mb: 2 }}
-                      >
-                        <Typography
-                          sx={{
-                            fontWeight: 700,
-                            fontSize: "1.125rem",
-                            color: "#101828",
-                          }}
-                        >
-                          Created Teams
-                        </Typography>
-                        <Typography
-                          sx={{
-                            fontWeight: 600,
-                            fontSize: "0.875rem",
-                            color: "#8B5CF6",
-                          }}
-                        >
-                          {selectedCategoryTeams.length} teams
-                        </Typography>
-                      </Stack>
-
-                      <Box
-                        sx={{
-                          p: 2,
-                          bgcolor: "white",
-                          border: "1px solid #E5E7EB",
-                          borderRadius: "10px",
-                        }}
-                      >
-                        {selectedCategoryTeams.length === 0 ? (
-                          <Typography
-                            sx={{ fontSize: "0.875rem", color: "#6A7282" }}
-                          >
-                            No teams created yet for this category.
-                          </Typography>
-                        ) : (
-                          <Stack spacing={1}>
-                            {selectedCategoryTeams.map((team) => (
-                              <Box
-                                key={`teams-tab-${team.id}`}
-                                sx={{
-                                  p: 1.25,
-                                  border: "1px solid #E5E7EB",
-                                  borderRadius: "10px",
-                                  bgcolor: "white",
-                                }}
-                              >
-                                <Stack
-                                  direction="row"
-                                  justifyContent="space-between"
-                                  alignItems="center"
-                                >
-                                  <Typography
-                                    sx={{
-                                      fontWeight: 700,
-                                      fontSize: "0.95rem",
-                                      color: "#101828",
-                                    }}
-                                  >
-                                    {team.name || `Team #${team.id}`}
-                                  </Typography>
-                                  <Stack direction="row" spacing={0.75}>
-                                    <Button
-                                      size="small"
-                                      variant="outlined"
-                                      onClick={() =>
-                                        setCategoryTeamEditor(
-                                          selectedCategoryId,
-                                          () => ({
-                                            name: team.name ?? "",
-                                            memberUserIds: (
-                                              team.members ?? []
-                                            ).map((m) => String(m.userId)),
-                                            autoNameFromMembers: Boolean(
-                                              team.autoNameFromMembers,
-                                            ),
-                                            editingTeamId: team.id,
-                                          }),
-                                        )
-                                      }
-                                    >
-                                      Edit
-                                    </Button>
-                                    <Button
-                                      size="small"
-                                      color="error"
-                                      variant="outlined"
-                                      onClick={() =>
-                                        void deleteCategoryTeam(
-                                          selectedCategoryId,
-                                          team.id,
-                                        )
-                                      }
-                                    >
-                                      Delete
-                                    </Button>
-                                  </Stack>
-                                </Stack>
-                                <Typography
-                                  sx={{ fontSize: "0.75rem", color: "#6A7282" }}
-                                >
-                                  Members: {team.members?.length ?? 0}
-                                </Typography>
-                              </Box>
-                            ))}
-                          </Stack>
-                        )}
-                      </Box>
-                    </Box>
-
-                    {/* Right Column - Available Players */}
-                    <Box sx={{ flex: 1 }}>
-                      <Stack
-                        direction="row"
-                        justifyContent="space-between"
-                        alignItems="center"
-                        sx={{ mb: 2 }}
-                      >
-                        <Typography
-                          sx={{
-                            fontWeight: 700,
-                            fontSize: "1.125rem",
-                            color: "#101828",
-                          }}
-                        >
-                          Available Players
-                        </Typography>
-                        <Button
-                          size="small"
-                          sx={{
-                            bgcolor: "#8B5CF6",
-                            color: "white",
-                            fontWeight: 600,
-                            fontSize: "0.875rem",
-                            textTransform: "none",
-                            height: 36,
-                            borderRadius: "10px",
-                            px: 2,
-                            "&:hover": {
-                              bgcolor: "#7C3AED",
-                            },
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </Stack>
-
-                      {/* New Team Form */}
-                      <Box
-                        sx={{
-                          p: 2.5,
-                          bgcolor: "white",
-                          border: "1px solid #E5E7EB",
-                          borderRadius: "10px",
-                          mb: 2,
-                        }}
-                      >
-                        <Typography
-                          sx={{
-                            fontWeight: 700,
-                            fontSize: "1rem",
-                            color: "#101828",
-                            mb: 2,
-                          }}
-                        >
-                          New Team
-                        </Typography>
-
-                        {/* Team Name Input */}
-                        <Box sx={{ mb: 2 }}>
-                          <Typography
-                            sx={{
-                              fontSize: "0.875rem",
-                              fontWeight: 500,
-                              color: "#364153",
-                              mb: 0.5,
-                            }}
-                          >
-                            Team Name
-                          </Typography>
-                          <TextField
-                            fullWidth
-                            placeholder="Enter team name..."
-                            size="small"
-                            value={teamEditor.name}
-                            onChange={(e) =>
-                              setCategoryTeamEditor(
-                                selectedCategoryId,
-                                (current) => ({
-                                  ...current,
-                                  name: e.target.value,
-                                }),
-                              )
-                            }
-                            sx={{
-                              "& .MuiOutlinedInput-root": {
-                                borderRadius: "10px",
-                                bgcolor: "white",
-                              },
-                            }}
-                          />
-                        </Box>
-
-                        {/* Select Players */}
-                        <Box sx={{ mb: 2 }}>
-                          <Typography
-                            sx={{
-                              fontSize: "0.875rem",
-                              fontWeight: 500,
-                              color: "#364153",
-                              mb: 1,
-                            }}
-                          >
-                            Select Players ({teamEditor.memberUserIds.length} selected)
-                          </Typography>
-                          <Stack
-                            spacing={1}
-                            sx={{ maxHeight: 180, overflowY: "auto" }}
-                          >
-                            {registeredPlayersLoading ? (
-                              <Typography
-                                sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
-                              >
-                                Loading players...
-                              </Typography>
-                            ) : selectablePlayers.length === 0 ? (
-                              <Typography
-                                sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
-                              >
-                                No available players for this category. Assigned
-                                players are in teams already.
-                              </Typography>
-                            ) : (
-                              selectablePlayers.map((player) => (
-                              <Box
-                                key={`picker-teams-${player.id}`}
-                                sx={{
-                                  p: 1,
-                                  borderRadius: "4px",
-                                  "&:hover": {
-                                    bgcolor: "#F9FAFB",
-                                  },
-                                  cursor: "pointer",
-                                }}
-                                onClick={() =>
-                                  setCategoryTeamEditor(
-                                    selectedCategoryId,
-                                    (current) => {
-                                      const exists =
-                                        current.memberUserIds.includes(player.id);
-                                      return {
-                                        ...current,
-                                        memberUserIds: exists
-                                          ? current.memberUserIds.filter(
-                                              (id) => id !== player.id,
-                                            )
-                                          : [...current.memberUserIds, player.id],
-                                      };
-                                    },
-                                  )
-                                }
-                              >
-                                <Stack
-                                  direction="row"
-                                  spacing={1}
-                                  alignItems="center"
-                                >
-                                  <Box
-                                    sx={{
-                                      width: 16,
-                                      height: 16,
-                                      border: "2px solid #D1D5DC",
-                                      borderRadius: "4px",
-                                      bgcolor: teamEditor.memberUserIds.includes(
-                                        player.id,
-                                      )
-                                        ? "#8B5CF6"
-                                        : "transparent",
-                                    }}
-                                  />
-                                  <Box sx={{ flex: 1 }}>
-                                    <Typography
-                                      sx={{
-                                        fontSize: "0.875rem",
-                                        fontWeight: 500,
-                                        color: "#101828",
-                                      }}
-                                    >
-                                      {player.name}
-                                    </Typography>
-                                    <Typography
-                                      sx={{
-                                        fontSize: "0.75rem",
-                                        fontWeight: 500,
-                                        color: "#6A7282",
-                                      }}
-                                    >
-                                      {player.email}
-                                    </Typography>
-                                  </Box>
-                                </Stack>
-                              </Box>
-                              ))
-                            )}
-                          </Stack>
-                        </Box>
-
-                        {/* Create Team Button */}
-                        <Button
-                          fullWidth
-                          disabled={
-                            teamsTabSubmitting ||
-                            teamEditor.memberUserIds.length === 0 ||
-                            !selectedCategoryId
-                          }
-                          onClick={() =>
-                            selectedCategoryId
-                              ? void saveCategoryTeam(selectedCategoryId)
-                              : undefined
-                          }
-                          sx={{
-                            bgcolor:
-                              teamsTabSubmitting ||
-                              teamEditor.memberUserIds.length === 0
-                                ? "#D1D5DC"
-                                : "#8B5CF6",
-                            color: "white",
-                            fontWeight: 600,
-                            fontSize: "1rem",
-                            textTransform: "none",
-                            height: 40,
-                            borderRadius: "10px",
-                            "&:hover": {
-                              bgcolor:
-                                teamsTabSubmitting ||
-                                teamEditor.memberUserIds.length === 0
-                                  ? "#D1D5DC"
-                                  : "#7C3AED",
-                            },
-                          }}
-                        >
-                          {teamsTabSubmitting
-                            ? "Saving..."
-                            : teamEditor.editingTeamId == null
-                              ? "Create Team"
-                              : "Save Team"}
-                        </Button>
-                      </Box>
-
-                      {/* Available Players List */}
-                      <Typography
-                        sx={{
-                          fontSize: "0.875rem",
-                          fontWeight: 600,
-                          color: "#364153",
-                          mb: 1.5,
-                        }}
-                      >
-                        All Players
-                      </Typography>
-                      <Typography
-                        sx={{
-                          fontSize: "0.75rem",
-                          color: "#6A7282",
-                          mb: 1.25,
-                        }}
-                      >
-                        Hint: `♥ Name` shows this player's desired partner for team
-                        creation.
-                      </Typography>
-                      <Stack
-                        spacing={1.5}
-                        sx={{ maxHeight: 280, overflowY: "auto", pr: 0.5 }}
-                      >
-                        {registeredPlayersLoading ? (
-                          <Typography
-                            sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
-                          >
-                            Loading players...
-                          </Typography>
-                        ) : registeredPlayers.length === 0 ? (
-                          <Typography
-                            sx={{ fontSize: "0.875rem", color: "#6A7282", p: 1 }}
-                          >
-                            No registered players available yet.
-                          </Typography>
-                        ) : (
-                          relevantPlayers.map((player) => (
-                          <Box
-                            key={`all-teams-${player.id}`}
-                            sx={{
-                              p: 1.5,
-                              bgcolor: assignedUserIds.has(player.id)
-                                ? "#ECFDF3"
-                                : "white",
-                              border: assignedUserIds.has(player.id)
-                                ? "1px solid #BBF7D0"
-                                : "1px solid #E5E7EB",
-                              borderRadius: "10px",
-                            }}
-                          >
-                            <Stack
-                              direction="row"
-                              justifyContent="space-between"
-                              alignItems="center"
-                            >
-                              <Box>
-                                <Typography
-                                  sx={{
-                                    fontSize: "0.875rem",
-                                    fontWeight: 600,
-                                    color: "#101828",
-                                  }}
-                                >
-                                  {player.name}
-                                </Typography>
-                                <Typography
-                                  sx={{ fontSize: "0.75rem", color: "#6A7282" }}
-                                >
-                                  {player.email}
-                                </Typography>
-                                {player.preferredPartner && (
-                                  <Typography
-                                    sx={{
-                                      fontSize: "0.75rem",
-                                      color: "#99A1AF",
-                                      fontStyle: "italic",
-                                      mt: 0.25,
-                                    }}
-                                  >
-                                    Wants to play with {player.preferredPartner}
-                                  </Typography>
-                                )}
-                              </Box>
-                              {player.preferredPartner && (
-                                <Chip
-                                  label={`♥ ${player.preferredPartner}`}
-                                  size="small"
-                                  sx={{
-                                    bgcolor: "#FCE7F3",
-                                    color: "#EC4899",
-                                    fontWeight: 600,
-                                    fontSize: "0.75rem",
-                                    height: 24,
-                                    border: "none",
-                                  }}
-                                />
-                              )}
-                            </Stack>
-                            {assignedUserIds.has(player.id) ? (
-                              <Typography
-                                sx={{
-                                  mt: 0.5,
-                                  fontSize: "0.75rem",
-                                  color: "#166534",
-                                  fontWeight: 600,
-                                }}
-                              >
-                                Assigned to a team
-                              </Typography>
-                            ) : null}
-                          </Box>
-                          ))
-                        )}
-                      </Stack>
-                    </Box>
-                  </Stack>
-                      </>
+                  })()}
+                  assignedUserIds={(() => {
+                    const teamEditor = getCategoryTeamEditor(selectedCategory.id);
+                    const selectedCategoryTeams = teamsByCategory[selectedCategory.id] ?? [];
+                    return new Set(
+                      selectedCategoryTeams
+                        .filter((team) => team.id !== teamEditor.editingTeamId)
+                        .flatMap((team) =>
+                          (team.members ?? []).map((member) => String(member.userId)),
+                        ),
                     );
                   })()}
-
-                  {/* Next Button */}
-                  <Box
-                    sx={{
-                      mt: 3,
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 1,
-                    }}
-                  >
-                    <Button
-                      variant="outlined"
-                      onClick={backToCategoryList}
-                      sx={{ borderRadius: "10px" }}
-                    >
-                      Back: Category List
-                    </Button>
-                    <Button
-                      variant="contained"
-                      onClick={() => {
-                        if (unassignedPlayersCountForTeamsTab > 0) {
-                          setPendingContinueWarningByCategory((prev) => ({
-                            ...prev,
-                            [selectedCategoryId]: true,
-                          }));
-                          return;
-                        }
-                        setPendingContinueWarningByCategory((prev) => ({
-                          ...prev,
-                          [selectedCategoryId]: false,
-                        }));
-                        setActiveTab("categories");
-                        if (selectedCategoryId) {
-                          updateSetupQuery(selectedCategoryId, "categories");
-                        }
-                      }}
-                      sx={{
-                        bgcolor: "#8B5CF6",
-                        color: "white",
-                        fontWeight: 700,
-                        fontSize: "1rem",
-                        height: 44,
-                        borderRadius: "10px",
-                        px: 3,
-                        textTransform: "none",
-                        boxShadow: "none",
-                        "&:hover": {
-                          bgcolor: "#7C3AED",
-                          boxShadow: "none",
-                        },
-                      }}
-                    >
-                      Next: Structure →
-                    </Button>
-                  </Box>
-                  {showTeamsTabContinueWarning ? (
-                    <Alert
-                      severity="warning"
-                      sx={{
-                        mt: 1.5,
-                        borderRadius: "10px",
-                        border: "1px solid #FDE68A",
-                        bgcolor: "#FFFBEB",
-                      }}
-                    >
-                      <Stack spacing={1}>
-                        <Typography
-                          sx={{
-                            fontSize: "0.875rem",
-                            color: "#78350F",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {unassignedPlayersCountForTeamsTab} player(s) are still without a
-                          team in this category.
-                        </Typography>
-                        <Stack
-                          direction="row"
-                          spacing={1}
-                          sx={{ justifyContent: "flex-end", flexWrap: "wrap" }}
-                        >
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            onClick={() =>
-                              setPendingContinueWarningByCategory((prev) => ({
-                                ...prev,
-                                [selectedCategoryId]: false,
-                              }))
-                            }
-                          >
-                            Review Players
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="warning"
-                            onClick={() => {
-                              setPendingContinueWarningByCategory((prev) => ({
-                                ...prev,
-                                [selectedCategoryId]: false,
-                              }));
-                              setStatusMessage(
-                                `Continued with ${unassignedPlayersCountForTeamsTab} unassigned player(s) in ${selectedCategoryDisplayName}.`,
-                              );
-                              setActiveTab("categories");
-                              if (selectedCategoryId) {
-                                updateSetupQuery(selectedCategoryId, "categories");
-                              }
-                            }}
-                          >
-                            Continue Anyway
-                          </Button>
-                        </Stack>
-                      </Stack>
+                  registeredPlayersLoading={registeredPlayersLoading}
+                  registeredPlayersError={registeredPlayersError}
+                  teamsTabSubmitting={Boolean(
+                    teamsSubmittingByCategory[selectedCategory.id],
+                  )}
+                  unassignedPlayersCount={unassignedPlayersCountForTeamsTab}
+                  showContinueWarning={showTeamsTabContinueWarning}
+                  onTeamEditorChange={(updater) =>
+                    setCategoryTeamEditor(selectedCategory.id, updater)
+                  }
+                  onEditTeam={(team) =>
+                    setCategoryTeamEditor(selectedCategory.id, () => ({
+                      name: team.name ?? "",
+                      memberUserIds: (team.members ?? []).map((m) => String(m.userId)),
+                      autoNameFromMembers: Boolean(team.autoNameFromMembers),
+                      editingTeamId: team.id,
+                    }))
+                  }
+                  onDeleteTeam={(teamId) =>
+                    void deleteCategoryTeam(selectedCategory.id, teamId)
+                  }
+                  onSaveTeam={() => void saveCategoryTeam(selectedCategory.id)}
+                  onBackToCategoryList={backToCategoryList}
+                  onNextToStructure={() => {
+                    if (unassignedPlayersCountForTeamsTab > 0) {
+                      setPendingContinueWarningByCategory((prev) => ({
+                        ...prev,
+                        [selectedCategory.id]: true,
+                      }));
+                      return;
+                    }
+                    setPendingContinueWarningByCategory((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: false,
+                    }));
+                    setActiveTab("categories");
+                    updateSetupQuery(selectedCategory.id, "categories");
+                  }}
+                  onDismissContinueWarning={() =>
+                    setPendingContinueWarningByCategory((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: false,
+                    }))
+                  }
+                  onContinueAnyway={() => {
+                    setPendingContinueWarningByCategory((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: false,
+                    }));
+                    setStatusMessage(
+                      `Continued with ${unassignedPlayersCountForTeamsTab} unassigned player(s) in ${selectedCategoryDisplayName}.`,
+                    );
+                    setActiveTab("categories");
+                    updateSetupQuery(selectedCategory.id, "categories");
+                  }}
+                />
+              ) : (
+                <Card>
+                  <CardContent sx={{ p: 3 }}>
+                    <Alert severity="warning">
+                      Select a category from Category List first.
                     </Alert>
-                  ) : null}
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              )
             ) : null}
 
             {activeTab === "categories" ? (
-              <Card>
-                <CardContent sx={{ p: 3 }}>
-                  {selectedCategory ? (
-                    <Box sx={{ mb: 2.5 }}>
-                      <Typography
-                        sx={{
-                          fontSize: "1.1rem",
-                          fontWeight: 700,
-                          color: "#6A7282",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                          mb: 1,
-                        }}
-                      >
-                        {selectedCategoryLevel}
-                      </Typography>
-                      <Box
-                        sx={{
-                          p: 1.5,
-                          borderRadius: "14px",
-                          border: "1.5px solid #8B5CF6",
-                          bgcolor: "#FFFFFF",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 1.5,
-                        }}
-                      >
-                        <Box
-                          sx={{
-                            width: 48,
-                            height: 48,
-                            borderRadius: "10px",
-                            bgcolor: "#FFEDD4",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            flexShrink: 0,
-                          }}
-                        >
-                          <EmojiEventsRoundedIcon
-                            sx={{ fontSize: 24, color: "#F54900" }}
-                          />
-                        </Box>
-                        <Typography
-                          sx={{
-                            fontSize: "1.6rem",
-                            fontWeight: 700,
-                            color: "#101828",
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          {selectedCategoryDisplayName}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  ) : (
-                    <Alert severity="warning" sx={{ mb: 2 }}>
+              selectedCategory ? (
+                <StructureTab
+                  selectedCategoryLevel={selectedCategoryLevel}
+                  selectedCategoryDisplayName={selectedCategoryDisplayName}
+                  selectedCategoryTeamsCount={selectedCategoryTeamsForTab.length}
+                  selectedTargetTeamsForStructure={selectedTargetTeamsForStructure}
+                  selectedConfig={selectedConfig}
+                  structureOptions={STRUCTURE_OPTIONS}
+                  hasGroupStructureConfig={hasGroupStructureConfig}
+                  canSaveSelectedCategorySetup={canSaveSelectedCategorySetup}
+                  onStructureModeChange={(mode) => {
+                    if (!selectedConfig) return;
+                    setCategoryConfigs((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: {
+                        ...selectedConfig,
+                        structureMode: mode,
+                      },
+                    }));
+                  }}
+                  onGroupCountChange={(value) => {
+                    if (!selectedConfig) return;
+                    setCategoryConfigs((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: {
+                        ...selectedConfig,
+                        groupCount: Math.max(1, value),
+                      },
+                    }));
+                  }}
+                  onTeamsPerGroupChange={(value) => {
+                    if (!selectedConfig) return;
+                    setCategoryConfigs((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: {
+                        ...selectedConfig,
+                        teamsPerGroup: Math.max(4, value),
+                      },
+                    }));
+                  }}
+                  onQualifiedPerGroupChange={(value) => {
+                    if (!selectedConfig) return;
+                    setCategoryConfigs((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: {
+                        ...selectedConfig,
+                        qualifiedPerGroup: Math.max(1, value),
+                      },
+                    }));
+                  }}
+                  onBackToTeams={() => {
+                    setActiveTab("teams");
+                    updateSetupQuery(selectedCategory.id, "teams");
+                  }}
+                  onNextToGroups={async () => {
+                    const saved = await saveSetup();
+                    if (!saved) return;
+                    if (
+                      selectedConfig?.structureMode === "groups_knockout" &&
+                      hasGroupStructureConfig
+                    ) {
+                      generateGroupsAndBracketForSelectedCategory();
+                    }
+                    setActiveTab("groups");
+                    updateSetupQuery(selectedCategory.id, "groups");
+                  }}
+                />
+              ) : (
+                <Card>
+                  <CardContent sx={{ p: 3 }}>
+                    <Alert severity="warning">
                       Select a category from Category List first.
                     </Alert>
-                  )}
-                  <Box
-                    sx={{
-                      mb: 2,
-                      p: 1.5,
-                      borderRadius: "10px",
-                      bgcolor: "#F9FAFB",
-                      border: "1px solid #E5E7EB",
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        fontWeight: 700,
-                        color: "#101828",
-                        fontSize: "0.95rem",
-                        mb: 0.5,
-                      }}
-                    >
-                      Instructions
-                    </Typography>
-                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      1. Confirm teams for this category.
-                    </Typography>
-                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      2. Pick the structure and set group inputs if needed.
-                    </Typography>
-                    <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                      3. Continue to Groups & Brackets.
-                    </Typography>
-                  </Box>
-                  <Box
-                    sx={{
-                      mb: 2,
-                      p: 1.5,
-                      borderRadius: "10px",
-                      bgcolor: "#F9FAFB",
-                      border: "1px solid #E5E7EB",
-                    }}
-                  >
-                    <Stack
-                      direction={{ xs: "column", sm: "row" }}
-                      spacing={1}
-                      justifyContent="space-between"
-                      alignItems={{ xs: "flex-start", sm: "center" }}
-                    >
-                      <Typography sx={{ fontWeight: 700, color: "#101828", fontSize: "0.9rem" }}>
-                        Teams available for this category
-                      </Typography>
-                      <Chip
-                        size="small"
-                        label={`${selectedCategoryTeamsForTab.length} team${selectedCategoryTeamsForTab.length === 1 ? "" : "s"}`}
-                        sx={{ fontWeight: 700 }}
-                      />
-                    </Stack>
-                    {selectedTargetTeamsForStructure > 0 ? (
-                      <Typography sx={{ color: "#4A5565", fontSize: "0.8125rem", mt: 0.75 }}>
-                        Current structure needs about {selectedTargetTeamsForStructure} teams
-                        ({selectedConfig?.groupCount ?? 0} groups x{" "}
-                        {selectedConfig?.teamsPerGroup ?? 0} teams/group).
-                      </Typography>
-                    ) : null}
-                  </Box>
-                  <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
-                    Structure
-                  </Typography>
-                  <Divider sx={{ mb: 2 }} />
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mb: 2 }}
-                  >
-                    Configure structure for the selected category.
-                  </Typography>
-
-                  <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
-                    Structure
-                  </Typography>
-                  <Stack
-                    direction={{ xs: "column", md: "row" }}
-                    spacing={1.25}
-                    useFlexGap
-                    flexWrap="wrap"
-                  >
-                    {STRUCTURE_OPTIONS.map((opt) => {
-                      const isSelected =
-                        selectedConfig?.structureMode === opt.id;
-                      return (
-                        <Card
-                          key={opt.id}
-                          onClick={() => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                structureMode: opt.id,
-                              },
-                            }));
-                          }}
-                          sx={{
-                            cursor: selectedCategory
-                              ? "pointer"
-                              : "not-allowed",
-                            width: { xs: "100%", md: "calc(50% - 5px)" },
-                            borderRadius: 2,
-                            border: "1px solid",
-                            borderColor: isSelected
-                              ? "rgba(139,92,246,0.45)"
-                              : "rgba(15,23,42,0.10)",
-                            bgcolor: isSelected
-                              ? "rgba(139,92,246,0.08)"
-                              : "background.paper",
-                            opacity: selectedCategory ? 1 : 0.6,
-                          }}
-                        >
-                          <CardContent sx={{ p: 1.5 }}>
-                            <Typography sx={{ fontWeight: 800 }}>
-                              {opt.title}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {opt.subtitle}
-                            </Typography>
-                          </CardContent>
-                        </Card>
-                      );
-                    })}
-                  </Stack>
-
-                  {selectedConfig?.structureMode === "groups_knockout" ? (
-                    <>
-                      <Divider sx={{ my: 2 }} />
-                      <Typography
-                        variant="body2"
-                        sx={{ fontWeight: 800, mb: 1 }}
-                      >
-                        Group Phase Inputs
-                      </Typography>
-                      <Stack
-                        direction={{ xs: "column", md: "row" }}
-                        spacing={1.25}
-                      >
-                        <TextField
-                          label="Number of groups"
-                          type="number"
-                          value={selectedConfig.groupCount ?? ""}
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                groupCount: Math.max(
-                                  1,
-                                  Number(e.target.value || 0),
-                                ),
-                              },
-                            }));
-                          }}
-                          fullWidth
-                        />
-                        <TextField
-                          label="Teams per group (min 4)"
-                          type="number"
-                          value={selectedConfig.teamsPerGroup ?? ""}
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                teamsPerGroup: Math.max(
-                                  4,
-                                  Number(e.target.value || 0),
-                                ),
-                              },
-                            }));
-                          }}
-                          fullWidth
-                        />
-                        <TextField
-                          label="Qualified per group"
-                          type="number"
-                          value={selectedConfig.qualifiedPerGroup ?? ""}
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                qualifiedPerGroup: Math.max(
-                                  1,
-                                  Number(e.target.value || 0),
-                                ),
-                              },
-                            }));
-                          }}
-                          fullWidth
-                        />
-                      </Stack>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ mt: 1, display: "block" }}
-                      >
-                        Groups and bracket will be auto-generated when you click
-                        Next: Groups & Brackets.
-                      </Typography>
-                    </>
-                  ) : null}
-
-                  <Stack
-                    direction={{ xs: "column", sm: "row" }}
-                    spacing={1.25}
-                    justifyContent="space-between"
-                    sx={{ mt: 2 }}
-                  >
-                    <Button
-                      variant="outlined"
-                      onClick={() => {
-                        setActiveTab("teams");
-                        if (selectedCategory?.id) {
-                          updateSetupQuery(selectedCategory.id, "teams");
-                        }
-                      }}
-                      sx={{ borderRadius: 999 }}
-                    >
-                      Back: Teams
-                    </Button>
-                    <Button
-                      variant="contained"
-                      onClick={async () => {
-                        const saved = await saveSetup();
-                        if (!saved) return;
-                        if (
-                          selectedConfig?.structureMode === "groups_knockout" &&
-                          hasGroupStructureConfig
-                        ) {
-                          generateGroupsAndBracketForSelectedCategory();
-                        }
-                        setActiveTab("groups");
-                        if (selectedCategory?.id) {
-                          updateSetupQuery(selectedCategory.id, "groups");
-                        }
-                      }}
-                      disabled={!canSaveSelectedCategorySetup}
-                      sx={{ borderRadius: 999 }}
-                    >
-                      Next: Groups & Brackets
-                    </Button>
-                  </Stack>
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              )
             ) : null}
 
             {activeTab === "groups" ? (
-              <Card>
-                <CardContent sx={{ p: 3 }}>
-                  {!selectedCategory ? (
+              selectedCategory ? (
+                <GroupsTab
+                  selectedCategoryLevel={selectedCategoryLevel}
+                  selectedCategoryDisplayName={selectedCategoryDisplayName}
+                  structureMode={selectedConfig?.structureMode ?? ""}
+                  groups={groupsByCategory[selectedCategory.id] ?? []}
+                  bracketMatches={selectedConfig?.bracketMatches ?? []}
+                  groupCount={
+                    selectedConfig?.groupCount ??
+                    Math.max(1, selectedCategory.groups || 2)
+                  }
+                  teamsPerGroup={selectedConfig?.teamsPerGroup ?? 4}
+                  qualifiersPerGroup={selectedConfig?.qualifiedPerGroup ?? 1}
+                  entryLabel={selectedEntryLabel}
+                  availableEntries={(teamsByCategory[selectedCategory.id] ?? []).map((team) => ({
+                    value: String(team.id),
+                    label: getTeamDisplayName(team),
+                  }))}
+                  resolveEntryLabel={(value) => {
+                    const team = (teamsByCategory[selectedCategory.id] ?? []).find(
+                      (candidate) => String(candidate.id) === String(value),
+                    );
+                    return team ? getTeamDisplayName(team) : String(value ?? "");
+                  }}
+                  onGroupsChange={(nextGroups) => {
+                    persistGroups({
+                      ...groupsByCategory,
+                      [selectedCategory.id]: nextGroups,
+                    });
+                    void syncTournamentGroupsForCategory(
+                      selectedCategory.id,
+                      nextGroups,
+                      teamsByCategory[selectedCategory.id] ?? [],
+                    );
+                  }}
+                  onGroupCountChange={(count) => {
+                    if (!selectedConfig) return;
+                    setCategoryConfigs((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: {
+                        ...selectedConfig,
+                        groupCount: count,
+                      },
+                    }));
+                  }}
+                  onBracketChange={(nextMatches) => {
+                    if (!selectedConfig) return;
+                    setCategoryConfigs((prev) => ({
+                      ...prev,
+                      [selectedCategory.id]: {
+                        ...selectedConfig,
+                        bracketMatches: nextMatches,
+                      },
+                    }));
+                  }}
+                  onBackToStructure={() => {
+                    setActiveTab("categories");
+                    updateSetupQuery(selectedCategory.id, "categories");
+                  }}
+                  onNextToSchedule={() => {
+                    setActiveTab("schedule");
+                    updateSetupQuery(selectedCategory.id, "schedule");
+                  }}
+                />
+              ) : (
+                <Card>
+                  <CardContent sx={{ p: 3 }}>
                     <Alert severity="info">
                       Select a category in the Teams tab first.
                     </Alert>
-                  ) : (
-                    <Stack spacing={1.25}>
-                      <Box
-                        sx={{
-                          mb: 2,
-                        }}
-                      >
-                        <Typography
-                          sx={{
-                            fontSize: "1.1rem",
-                            fontWeight: 700,
-                            color: "#6A7282",
-                            textTransform: "uppercase",
-                            letterSpacing: "0.04em",
-                            mb: 1,
-                          }}
-                        >
-                          {selectedCategoryLevel}
-                        </Typography>
-                        <Box
-                          sx={{
-                            p: 1.5,
-                            borderRadius: "14px",
-                            border: "1.5px solid #8B5CF6",
-                            bgcolor: "#FFFFFF",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 1.5,
-                          }}
-                        >
-                          <Box
-                            sx={{
-                              width: 48,
-                              height: 48,
-                              borderRadius: "10px",
-                              bgcolor: "#FFEDD4",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              flexShrink: 0,
-                            }}
-                          >
-                            <EmojiEventsRoundedIcon
-                              sx={{ fontSize: 24, color: "#F54900" }}
-                            />
-                          </Box>
-                          <Typography
-                            sx={{
-                              fontSize: "1.6rem",
-                              fontWeight: 700,
-                              color: "#101828",
-                              lineHeight: 1.2,
-                            }}
-                          >
-                            {selectedCategoryDisplayName}
-                          </Typography>
-                        </Box>
-                      </Box>
-                      <Box
-                        sx={{
-                          mb: 2,
-                          p: 1.5,
-                          borderRadius: "10px",
-                          bgcolor: "#F9FAFB",
-                          border: "1px solid #E5E7EB",
-                        }}
-                      >
-                        <Typography
-                          sx={{
-                            fontWeight: 700,
-                            color: "#101828",
-                            fontSize: "0.95rem",
-                            mb: 0.5,
-                          }}
-                        >
-                          Instructions
-                        </Typography>
-                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                          1. Assign teams to groups manually or use random draw.
-                        </Typography>
-                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                          2. Review group distribution and bracket pairings.
-                        </Typography>
-                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                          3. Save updates and go back to adjust earlier steps if needed.
-                        </Typography>
-                        <Typography sx={{ fontSize: "0.85rem", color: "#6B7280", mt: 0.75 }}>
-                          {selectedConfig?.structureMode
-                            ? `Structure: ${selectedConfig.structureMode}`
-                            : "Structure not selected yet"}
-                        </Typography>
-                      </Box>
-                      <TournamentPhaseBuilder
-                        groups={groupsByCategory[selectedCategory.id] ?? []}
-                        bracketMatches={selectedConfig?.bracketMatches ?? []}
-                        groupCount={
-                          selectedConfig?.groupCount ??
-                          Math.max(1, selectedCategory.groups || 2)
-                        }
-                        teamsPerGroup={selectedConfig?.teamsPerGroup ?? 4}
-                        qualifiersPerGroup={
-                          selectedConfig?.qualifiedPerGroup ?? 1
-                        }
-                        entryLabel={selectedEntryLabel}
-                        availableEntries={(
-                          teamsByCategory[selectedCategory.id] ?? []
-                        ).map((team) => ({
-                          value: String(team.id),
-                          label: getTeamDisplayName(team),
-                        }))}
-                        resolveEntryLabel={(value) => {
-                          const team = (
-                            teamsByCategory[selectedCategory.id] ?? []
-                          ).find(
-                            (candidate) =>
-                              String(candidate.id) === String(value),
-                          );
-                          return team
-                            ? getTeamDisplayName(team)
-                            : String(value ?? "");
-                        }}
-                        structureMode={selectedConfig?.structureMode ?? ""}
-                        onGroupsChange={(nextGroups) => {
-                          persistGroups({
-                            ...groupsByCategory,
-                            [selectedCategory.id]: nextGroups,
-                          });
-                          void syncTournamentGroupsForCategory(
-                            selectedCategory.id,
-                            nextGroups,
-                            teamsByCategory[selectedCategory.id] ?? [],
-                          );
-                        }}
-                        onGroupCountChange={(count) => {
-                          if (!selectedConfig) return;
-                          setCategoryConfigs((prev) => ({
-                            ...prev,
-                            [selectedCategory.id]: {
-                              ...selectedConfig,
-                              groupCount: count,
-                            },
-                          }));
-                        }}
-                        onBracketChange={(nextMatches) => {
-                          if (!selectedConfig) return;
-                          setCategoryConfigs((prev) => ({
-                            ...prev,
-                            [selectedCategory.id]: {
-                              ...selectedConfig,
-                              bracketMatches: nextMatches,
-                            },
-                          }));
-                        }}
-                      />
-                      <Box
-                        sx={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          pt: 1,
-                        }}
-                      >
-                        <Button
-                          variant="outlined"
-                          onClick={() => {
-                            setActiveTab("categories");
-                            if (selectedCategory?.id) {
-                              updateSetupQuery(selectedCategory.id, "categories");
-                            }
-                          }}
-                          sx={{ borderRadius: "10px" }}
-                        >
-                          Back: Structure
-                        </Button>
-                        <Button
-                          variant="contained"
-                          onClick={() => {
-                            setActiveTab("schedule");
-                            if (selectedCategory?.id) {
-                              updateSetupQuery(selectedCategory.id, "schedule");
-                            }
-                          }}
-                          sx={{ borderRadius: "10px" }}
-                        >
-                          Next: Schedule
-                        </Button>
-                      </Box>
-                    </Stack>
-                  )}
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              )
             ) : null}
 
             {activeTab === "schedule" ? (
-              <Card>
-                <CardContent sx={{ p: 3 }}>
-                  {!selectedCategory ? (
-                    <Alert severity="info">
-                      Select a category in the Teams tab first.
-                    </Alert>
-                  ) : (
-                    <Stack spacing={2}>
-                      <Box
-                        sx={{
-                          p: 1.5,
-                          borderRadius: "14px",
-                          border: "1.5px solid #8B5CF6",
-                          bgcolor: "#FFFFFF",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          gap: 1.5,
-                        }}
-                      >
-                        <Stack
-                          direction="row"
-                          spacing={1.5}
-                          alignItems="center"
-                          sx={{ minWidth: 0 }}
+              selectedCategory ? (
+                <ScheduleTab
+                  selectedCategoryLevel={selectedCategoryLevel}
+                  selectedCategoryDisplayName={selectedCategoryDisplayName}
+                  canFinalizeSelectedCategory={canFinalizeSelectedCategory}
+                  finalizeDisabledReason={finalizeDisabledReason}
+                  selectedCategoryIsFinalizing={selectedCategoryIsFinalizing}
+                  selectedCategoryIsFinalized={selectedCategoryIsFinalized}
+                  onFinalize={() => void finalizeCategorySetup(selectedCategory.id)}
+                  onGoToRunTournament={() => {
+                    if (!id) return;
+                    navigate(`/tournaments/${id}/run`);
+                  }}
+                  creatorContent={
+                    <Box
+                      sx={{
+                        p: 1.5,
+                        borderRadius: "10px",
+                        bgcolor: "#F9FAFB",
+                        border: "1px solid #E5E7EB",
+                      }}
+                    >
+                        <Box
+                          sx={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: { xs: "flex-start", md: "center" },
+                            gap: 1,
+                            mb: 1.25,
+                            flexDirection: { xs: "column", md: "row" },
+                          }}
                         >
-                          <Box
+                          <Typography
                             sx={{
-                              width: 48,
-                              height: 48,
-                              borderRadius: "10px",
-                              bgcolor: "#FFEDD4",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              flexShrink: 0,
+                              fontWeight: 700,
+                              color: "#101828",
+                              fontSize: "0.95rem",
                             }}
                           >
-                            <CalendarMonthOutlinedIcon
-                              sx={{ fontSize: 24, color: "#F54900" }}
-                            />
-                          </Box>
-                          <Box sx={{ minWidth: 0 }}>
-                            <Typography
-                              sx={{
-                                fontSize: "0.9rem",
-                                fontWeight: 700,
-                                color: "#6A7282",
-                                textTransform: "uppercase",
-                                letterSpacing: "0.04em",
-                              }}
-                            >
-                              {selectedCategoryLevel}
-                            </Typography>
-                            <Typography
-                              sx={{
-                                fontSize: "1.45rem",
-                                fontWeight: 700,
-                                color: "#101828",
-                                lineHeight: 1.2,
-                              }}
-                            >
-                              {selectedCategoryDisplayName}
-                            </Typography>
-                          </Box>
-                        </Stack>
-                        <Tooltip
-                          title={canFinalizeSelectedCategory ? "" : finalizeDisabledReason}
-                          arrow
-                          disableHoverListener={canFinalizeSelectedCategory}
-                        >
-                          <span>
-                            <Button
-                              variant="contained"
-                              onClick={() =>
-                                selectedCategory
-                                  ? void finalizeCategorySetup(selectedCategory.id)
-                                  : undefined
-                              }
-                              disabled={
-                                selectedCategoryIsFinalized ||
-                                selectedCategoryIsFinalizing ||
-                                !canFinalizeSelectedCategory
-                              }
-                              sx={{
-                                borderRadius: "10px",
-                                textTransform: "none",
-                                minWidth: 150,
-                              }}
-                            >
-                              {selectedCategoryIsFinalizing
-                                ? "Finalizing..."
-                                : selectedCategoryIsFinalized
-                                  ? "Setup Finalized"
-                                  : "Finalize Setup"}
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      </Box>
-
-                      {selectedCategoryIsFinalizing ? (
-                        <Box
-                          sx={{
-                            p: 3,
-                            borderRadius: "12px",
-                            border: "1px solid #E5E7EB",
-                            bgcolor: "#FFFFFF",
-                            textAlign: "center",
-                          }}
-                        >
-                          <CircularProgress size={28} sx={{ color: "#F54900", mb: 1 }} />
-                          <Typography sx={{ fontWeight: 700, color: "#101828", mb: 0.5 }}>
-                            Finalizing setup...
-                          </Typography>
-                          <Typography sx={{ color: "#4A5565", fontSize: "0.9rem" }}>
-                            We are locking this category schedule now.
-                          </Typography>
-                        </Box>
-                      ) : selectedCategoryIsFinalized ? (
-                        <Box
-                          sx={{
-                            p: 3,
-                            borderRadius: "12px",
-                            border: "1px solid #BBF7D0",
-                            bgcolor: "#F0FDF4",
-                            textAlign: "center",
-                          }}
-                        >
-                          <Typography sx={{ fontWeight: 800, color: "#166534", mb: 0.5 }}>
-                            You are all set
-                          </Typography>
-                          <Typography sx={{ color: "#166534", fontSize: "0.95rem", mb: 2 }}>
-                            Setup is finalized. You can now view and run matches from the Run
-                            Tournament page.
+                            Create Matches
                           </Typography>
                           <Button
-                            variant="contained"
+                            variant="outlined"
                             onClick={() => {
-                              if (!id) return;
-                              navigate(`/tournaments/${id}/run`);
+                              setActiveTab("groups");
+                              if (selectedCategory?.id) {
+                                updateSetupQuery(selectedCategory.id, "groups");
+                              }
                             }}
-                            sx={{
-                              borderRadius: "10px",
-                              textTransform: "none",
-                              fontWeight: 700,
-                            }}
+                            sx={{ borderRadius: "10px" }}
                           >
-                            Go to Run Tournament
+                            Back: Groups & Brackets
                           </Button>
                         </Box>
-                      ) : (
-                        <>
 
-                      <Box
-                        sx={{
-                          p: 1.5,
-                          borderRadius: "10px",
-                          bgcolor: "#F9FAFB",
-                          border: "1px solid #E5E7EB",
-                        }}
-                      >
-                        <Typography
-                          sx={{
-                            fontWeight: 700,
-                            color: "#101828",
-                            fontSize: "0.95rem",
-                            mb: 0.5,
-                          }}
-                        >
-                          Category Schedule
-                        </Typography>
-                        <Typography sx={{ color: "#4A5565", fontSize: "0.85rem" }}>
-                          Define when this category starts/ends, where it runs, and the
-                          match buffer.
-                        </Typography>
-                      </Box>
-
-                      <Stack
-                        direction={{ xs: "column", md: "row" }}
-                        spacing={1.25}
-                      >
-                        <TextField
-                          label="Match date"
-                          type="date"
-                          fullWidth
-                          value={
-                            selectedConfig?.scheduleDate ??
-                            (event?.startDate ? String(event.startDate).slice(0, 10) : "")
-                          }
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                scheduleDate: e.target.value,
-                              },
-                            }));
-                          }}
-                          InputLabelProps={{ shrink: true }}
-                        />
-                        <TextField
-                          label="Start time"
-                          type="time"
-                          fullWidth
-                          value={selectedConfig?.scheduleStartTime ?? ""}
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                scheduleStartTime: e.target.value,
-                              },
-                            }));
-                          }}
-                          InputLabelProps={{ shrink: true }}
-                        />
-                        <TextField
-                          label="End time"
-                          type="time"
-                          fullWidth
-                          value={selectedConfig?.scheduleEndTime ?? ""}
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                scheduleEndTime: e.target.value,
-                              },
-                            }));
-                          }}
-                          InputLabelProps={{ shrink: true }}
-                        />
-                      </Stack>
-                      <Stack
-                        direction={{ xs: "column", md: "row" }}
-                        spacing={1.25}
-                      >
-                        <TextField
-                          label="Court / Field"
-                          fullWidth
-                          value={selectedConfig?.scheduleVenue ?? ""}
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                scheduleVenue: e.target.value,
-                              },
-                            }));
-                          }}
-                        />
-                        <TextField
-                          label="Buffer (minutes)"
-                          type="number"
-                          fullWidth
-                          value={selectedConfig?.scheduleBufferMinutes ?? ""}
-                          onChange={(e) => {
-                            if (!selectedCategory || !selectedConfig) return;
-                            const raw = Number(e.target.value);
-                            setCategoryConfigs((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]: {
-                                ...selectedConfig,
-                                scheduleBufferMinutes:
-                                  Number.isFinite(raw) && raw >= 0 ? raw : 0,
-                              },
-                            }));
-                          }}
-                          inputProps={{ min: 0, step: 5 }}
-                        />
-                      </Stack>
-
-                      <Box
-                        sx={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          pt: 1,
-                        }}
-                      >
-                        <Button
-                          variant="outlined"
-                          onClick={() => {
-                            setActiveTab("groups");
-                            if (selectedCategory?.id) {
-                              updateSetupQuery(selectedCategory.id, "groups");
-                            }
-                          }}
-                          sx={{ borderRadius: "10px" }}
-                        >
-                          Back: Groups & Brackets
-                        </Button>
-                        <Button
-                          variant="contained"
-                          onClick={() => {
-                            if (!selectedCategory) return;
-                            setScheduleCreatorOpenByCategory((prev) => ({
-                              ...prev,
-                              [selectedCategory.id]:
-                                !Boolean(prev[selectedCategory.id]),
-                            }));
-                          }}
-                          sx={{ borderRadius: "10px" }}
-                        >
-                          Create Schedule
-                        </Button>
-                      </Box>
-
-                      {selectedCategory && selectedConfig && scheduleCreatorOpenByCategory[selectedCategory.id] ? (
-                        <Box
-                          sx={{
-                            mt: 1,
-                            p: 1.5,
-                            borderRadius: "10px",
-                            bgcolor: "#F9FAFB",
-                            border: "1px solid #E5E7EB",
-                          }}
-                        >
+                        {selectedCategory && selectedConfig ? (
                           <Stack
-                            direction={{ xs: "column", md: "row" }}
-                            spacing={1}
-                            justifyContent="space-between"
-                            alignItems={{ md: "center" }}
-                            sx={{ mb: 1.25 }}
+                            spacing={1.25}
                           >
-                            <Typography
-                              sx={{
-                                fontWeight: 700,
-                                color: "#101828",
-                                fontSize: "0.95rem",
-                              }}
-                            >
-                              Create Matches
-                            </Typography>
                             <Button
                               variant="outlined"
                               onClick={() =>
@@ -5756,250 +4643,252 @@ export default function TournamentSetupPage() {
                             >
                               Randomly Generate Matches
                             </Button>
+                            
+
+                            {(() => {
+                              const draft = getScheduleDraft(
+                                selectedCategory.id,
+                                selectedConfig,
+                              );
+                              const categoryGroups =
+                                groupsByCategory[selectedCategory.id] ?? [];
+                              const categoryTeams =
+                                teamsByCategory[selectedCategory.id] ?? [];
+                              const selectedGroup = categoryGroups.find(
+                                (group) => String(group.id) === String(draft.groupId),
+                              );
+                              const groupTeamIds = new Set(
+                                (selectedGroup?.participants ?? [])
+                                  .map((participant) => Number(String(participant).trim()))
+                                  .filter((teamId) => Number.isFinite(teamId) && teamId > 0),
+                              );
+                              const selectableTeams =
+                                selectedGroup != null
+                                  ? categoryTeams.filter((team) =>
+                                      groupTeamIds.has(Number(team.id)),
+                                    )
+                                  : categoryTeams;
+                              return (
+                                <Stack spacing={1}>
+                                  <Stack
+                                    direction={{ xs: "column", md: "row" }}
+                                    spacing={1}
+                                  >
+                                    <TextField
+                                      label="Group (optional)"
+                                      select
+                                      fullWidth
+                                      value={draft.groupId}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            groupId: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                    >
+                                      <MenuItem value="">No Group</MenuItem>
+                                      {categoryGroups.map((group) => (
+                                        <MenuItem key={group.id} value={String(group.id)}>
+                                          {group.name}
+                                        </MenuItem>
+                                      ))}
+                                    </TextField>
+                                    <TextField
+                                      label="Round"
+                                      select
+                                      fullWidth
+                                      value={draft.round}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            round: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                    >
+                                      <MenuItem value="GROUP">GROUP</MenuItem>
+                                      <MenuItem value="QUARTERFINAL">QUARTERFINAL</MenuItem>
+                                      <MenuItem value="SEMIFINAL">SEMIFINAL</MenuItem>
+                                      <MenuItem value="FINAL">FINAL</MenuItem>
+                                    </TextField>
+                                  </Stack>
+
+                                  <Stack
+                                    direction={{ xs: "column", md: "row" }}
+                                    spacing={1}
+                                  >
+                                    <TextField
+                                      label="Home Team"
+                                      select
+                                      fullWidth
+                                      value={draft.homeTeamId}
+                                      disabled={selectedGroup != null && selectableTeams.length === 0}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            homeTeamId: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                    >
+                                      <MenuItem value="">Select home team</MenuItem>
+                                      {selectableTeams.map((team) => (
+                                        <MenuItem key={`home-${team.id}`} value={String(team.id)}>
+                                          {getTeamDisplayName(team)}
+                                        </MenuItem>
+                                      ))}
+                                    </TextField>
+                                    <TextField
+                                      label="Away Team"
+                                      select
+                                      fullWidth
+                                      value={draft.awayTeamId}
+                                      disabled={selectedGroup != null && selectableTeams.length === 0}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            awayTeamId: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                    >
+                                      <MenuItem value="">Select away team</MenuItem>
+                                      {selectableTeams.map((team) => (
+                                        <MenuItem key={`away-${team.id}`} value={String(team.id)}>
+                                          {getTeamDisplayName(team)}
+                                        </MenuItem>
+                                      ))}
+                                    </TextField>
+                                  </Stack>
+
+                                  <Stack
+                                    direction={{ xs: "column", md: "row" }}
+                                    spacing={1}
+                                  >
+                                    <TextField
+                                      label="Match date"
+                                      type="date"
+                                      fullWidth
+                                      value={draft.matchDate}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            matchDate: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                      InputLabelProps={{ shrink: true }}
+                                    />
+                                    <TextField
+                                      label="Start time"
+                                      type="time"
+                                      fullWidth
+                                      value={draft.startTime}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            startTime: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                      InputLabelProps={{ shrink: true }}
+                                    />
+                                    <TextField
+                                      label="Court / Field"
+                                      fullWidth
+                                      value={draft.venue}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            venue: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                    />
+                                    <TextField
+                                      label="Status"
+                                      select
+                                      fullWidth
+                                      value={draft.status}
+                                      onChange={(e) =>
+                                        setScheduleDraft(
+                                          selectedCategory.id,
+                                          (current) => ({
+                                            ...current,
+                                            status: e.target.value,
+                                          }),
+                                          selectedConfig,
+                                        )
+                                      }
+                                    >
+                                      <MenuItem value="SCHEDULED">SCHEDULED</MenuItem>
+                                      <MenuItem value="IN_PROGRESS">IN_PROGRESS</MenuItem>
+                                      <MenuItem value="COMPLETED">COMPLETED</MenuItem>
+                                    </TextField>
+                                  </Stack>
+
+                                  <Box
+                                    sx={{
+                                      display: "flex",
+                                      justifyContent: "flex-end",
+                                    }}
+                                  >
+                                    <Button
+                                      variant="contained"
+                                      onClick={() =>
+                                        void createManualMatchForCategory(
+                                          selectedCategory.id,
+                                          selectedConfig,
+                                        )
+                                      }
+                                      disabled={Boolean(
+                                        matchesPostingByCategory[selectedCategory.id],
+                                      )}
+                                      sx={{ borderRadius: "10px" }}
+                                    >
+                                      Add Match
+                                    </Button>
+                                  </Box>
+                                </Stack>
+                              );
+                            })()}
                           </Stack>
-
-                          {(() => {
-                            const draft = getScheduleDraft(
-                              selectedCategory.id,
-                              selectedConfig,
-                            );
-                            const categoryGroups =
-                              groupsByCategory[selectedCategory.id] ?? [];
-                            const categoryTeams =
-                              teamsByCategory[selectedCategory.id] ?? [];
-                            const selectedGroup = categoryGroups.find(
-                              (group) => String(group.id) === String(draft.groupId),
-                            );
-                            const groupTeamIds = new Set(
-                              (selectedGroup?.participants ?? [])
-                                .map((participant) => Number(String(participant).trim()))
-                                .filter((teamId) => Number.isFinite(teamId) && teamId > 0),
-                            );
-                            const selectableTeams =
-                              selectedGroup != null
-                                ? categoryTeams.filter((team) =>
-                                    groupTeamIds.has(Number(team.id)),
-                                  )
-                                : categoryTeams;
-                            return (
-                              <Stack spacing={1}>
-                                <Stack
-                                  direction={{ xs: "column", md: "row" }}
-                                  spacing={1}
-                                >
-                                  <TextField
-                                    label="Group (optional)"
-                                    select
-                                    fullWidth
-                                    value={draft.groupId}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          groupId: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                  >
-                                    <MenuItem value="">No Group</MenuItem>
-                                    {categoryGroups.map((group) => (
-                                      <MenuItem key={group.id} value={String(group.id)}>
-                                        {group.name}
-                                      </MenuItem>
-                                    ))}
-                                  </TextField>
-                                  <TextField
-                                    label="Round"
-                                    select
-                                    fullWidth
-                                    value={draft.round}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          round: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                  >
-                                    <MenuItem value="GROUP">GROUP</MenuItem>
-                                    <MenuItem value="QUARTERFINAL">QUARTERFINAL</MenuItem>
-                                    <MenuItem value="SEMIFINAL">SEMIFINAL</MenuItem>
-                                    <MenuItem value="FINAL">FINAL</MenuItem>
-                                  </TextField>
-                                </Stack>
-
-                                <Stack
-                                  direction={{ xs: "column", md: "row" }}
-                                  spacing={1}
-                                >
-                                  <TextField
-                                    label="Home Team"
-                                    select
-                                    fullWidth
-                                    value={draft.homeTeamId}
-                                    disabled={selectedGroup != null && selectableTeams.length === 0}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          homeTeamId: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                  >
-                                    <MenuItem value="">Select home team</MenuItem>
-                                    {selectableTeams.map((team) => (
-                                      <MenuItem key={`home-${team.id}`} value={String(team.id)}>
-                                        {getTeamDisplayName(team)}
-                                      </MenuItem>
-                                    ))}
-                                  </TextField>
-                                  <TextField
-                                    label="Away Team"
-                                    select
-                                    fullWidth
-                                    value={draft.awayTeamId}
-                                    disabled={selectedGroup != null && selectableTeams.length === 0}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          awayTeamId: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                  >
-                                    <MenuItem value="">Select away team</MenuItem>
-                                    {selectableTeams.map((team) => (
-                                      <MenuItem key={`away-${team.id}`} value={String(team.id)}>
-                                        {getTeamDisplayName(team)}
-                                      </MenuItem>
-                                    ))}
-                                  </TextField>
-                                </Stack>
-
-                                <Stack
-                                  direction={{ xs: "column", md: "row" }}
-                                  spacing={1}
-                                >
-                                  <TextField
-                                    label="Match date"
-                                    type="date"
-                                    fullWidth
-                                    value={draft.matchDate}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          matchDate: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                    InputLabelProps={{ shrink: true }}
-                                  />
-                                  <TextField
-                                    label="Start time"
-                                    type="time"
-                                    fullWidth
-                                    value={draft.startTime}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          startTime: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                    InputLabelProps={{ shrink: true }}
-                                  />
-                                  <TextField
-                                    label="Court / Field"
-                                    fullWidth
-                                    value={draft.venue}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          venue: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                  />
-                                  <TextField
-                                    label="Status"
-                                    select
-                                    fullWidth
-                                    value={draft.status}
-                                    onChange={(e) =>
-                                      setScheduleDraft(
-                                        selectedCategory.id,
-                                        (current) => ({
-                                          ...current,
-                                          status: e.target.value,
-                                        }),
-                                        selectedConfig,
-                                      )
-                                    }
-                                  >
-                                    <MenuItem value="SCHEDULED">SCHEDULED</MenuItem>
-                                    <MenuItem value="IN_PROGRESS">IN_PROGRESS</MenuItem>
-                                    <MenuItem value="COMPLETED">COMPLETED</MenuItem>
-                                  </TextField>
-                                </Stack>
-
-                                <Box
-                                  sx={{
-                                    display: "flex",
-                                    justifyContent: "flex-end",
-                                  }}
-                                >
-                                  <Button
-                                    variant="contained"
-                                    onClick={() =>
-                                      void createManualMatchForCategory(
-                                        selectedCategory.id,
-                                        selectedConfig,
-                                      )
-                                    }
-                                    disabled={Boolean(
-                                      matchesPostingByCategory[selectedCategory.id],
-                                    )}
-                                    sx={{ borderRadius: "10px" }}
-                                  >
-                                    Add Match
-                                  </Button>
-                                </Box>
-                              </Stack>
-                            );
-                          })()}
-                        </Box>
-                      ) : null}
-
-                      {(selectedConfig?.scheduleItems?.length ?? 0) > 0 ? (
-                        <Box
-                          sx={{
-                            mt: 1,
-                            p: 1.5,
-                            borderRadius: "10px",
-                            bgcolor: "#F9FAFB",
-                            border: "1px solid #E5E7EB",
-                          }}
-                        >
+                        ) : null}
+                      </Box>
+                  }
+                  overviewContent={
+                    (selectedConfig?.scheduleItems?.length ?? 0) > 0 ? (
+                      <Box
+                        sx={{
+                          mt: 1,
+                          p: 1.5,
+                          borderRadius: "10px",
+                          bgcolor: "#F9FAFB",
+                          border: "1px solid #E5E7EB",
+                        }}
+                      >
                           <Typography
                             sx={{
                               fontWeight: 700,
@@ -6709,14 +5598,19 @@ export default function TournamentSetupPage() {
                               </Stack>
                             );
                           })()}
-                        </Box>
-                      ) : null}
-                        </>
-                      )}
-                    </Stack>
-                  )}
-                </CardContent>
-              </Card>
+                      </Box>
+                    ) : null
+                  }
+                />
+              ) : (
+                <Card>
+                  <CardContent sx={{ p: 3 }}>
+                    <Alert severity="info">
+                      Select a category in the Teams tab first.
+                    </Alert>
+                  </CardContent>
+                </Card>
+              )
             ) : null}
           </Stack>
         ) : null}

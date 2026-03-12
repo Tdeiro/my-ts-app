@@ -735,7 +735,11 @@ export default function Dashboard() {
   const firstRegisteredTournamentId = viewData.joinedTournaments[0]?.eventId;
   const handleOpenMyTournament = React.useCallback(() => {
     if (firstRegisteredTournamentId != null) {
-      navigate(`/tournaments/${encodeURIComponent(firstRegisteredTournamentId)}`);
+      navigate(
+        `/tournaments/invite?inviteTournamentId=${encodeURIComponent(
+          firstRegisteredTournamentId,
+        )}&mode=view`,
+      );
       return;
     }
     navigate("/tournaments");
@@ -1032,7 +1036,7 @@ export default function Dashboard() {
                           variant="outlined"
                           onClick={() =>
                             navigate(
-                              `/tournaments/${encodeURIComponent(item.id)}`,
+                              `/tournaments/invite?inviteTournamentId=${encodeURIComponent(item.id)}&mode=view`,
                             )
                           }
                           sx={{
@@ -1106,7 +1110,7 @@ export default function Dashboard() {
                           variant="outlined"
                           onClick={() =>
                             navigate(
-                              `/tournaments/${encodeURIComponent(item.eventId)}`,
+                              `/tournaments/invite?inviteTournamentId=${encodeURIComponent(item.eventId)}&mode=view`,
                             )
                           }
                           sx={{

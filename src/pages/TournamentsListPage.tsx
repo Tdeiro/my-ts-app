@@ -33,7 +33,6 @@ import {
   getLoggedInUserId,
   hasCreatorAccess,
   getToken,
-  isParticipantRole,
 } from "../auth/tokens";
 import { designTokens } from "../Theme/designTokens";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
@@ -41,8 +40,6 @@ const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
 
 type ApiEvent = {
   id: number;
-  userId?: number | string;
-  user_id?: number | string;
   createdBy?: number | string;
   name: string;
   eventType: string;
@@ -51,29 +48,19 @@ type ApiEvent = {
   level?: string;
   locationName?: string;
   startDate: string;
+  registrationDeadline?: string;
   capacity?: number | string;
   subscriptionsCount?: number | string;
   capacityLeft?: number | string;
   status?: string;
-  subscriptionStatus?: string;
   entryFee?: number | string;
   currency?: string;
   isPublic?: boolean;
-};
-
-type DashboardApiResp = {
-  events?:
-    | Array<
-        | ApiEvent
-        | {
-            event?: ApiEvent | null;
-          }
-      >
-    | null;
-};
-
-type EventDetailsResp = {
-  event?: ApiEvent | null;
+  tournamentStage?: string;
+  categoriesCount?: number | string;
+  groupsCount?: number | string;
+  teamsCount?: number | string;
+  membersCount?: number | string;
 };
 
 type Tournament = {
@@ -93,7 +80,8 @@ type Tournament = {
   status: "Open";
   isPublic: boolean;
   apiStatus?: string;
-  subscriptionStatus?: string;
+  registrationDeadline: string;
+  tournamentStage: string;
 };
 
 type TournamentDisplayMeta = {
@@ -115,7 +103,7 @@ function formatTournamentLevelLabel(level?: string): string {
 }
 
 function mapApiEvent(e: ApiEvent): Tournament {
-  const ownerRaw = e.createdBy ?? e.userId ?? e.user_id;
+  const ownerRaw = e.createdBy;
   const ownerId = ownerRaw == null ? null : Number(ownerRaw);
   const capacity = Number(e.capacity ?? 0);
   const subscriptionsCount = Number(e.subscriptionsCount ?? 0);
@@ -145,19 +133,9 @@ function mapApiEvent(e: ApiEvent): Tournament {
     status: "Open",
     isPublic: e.isPublic ?? true,
     apiStatus: String(e.status ?? "").toUpperCase(),
-    subscriptionStatus: String(e.subscriptionStatus ?? "").toUpperCase(),
+    registrationDeadline: e.registrationDeadline ?? e.startDate,
+    tournamentStage: String(e.tournamentStage ?? "REGISTRATION").toUpperCase(),
   };
-}
-
-function isSubscribedLikeStatus(value?: string): boolean {
-  const status = String(value ?? "").trim().toUpperCase();
-  return [
-    "REGISTERED",
-    "SUBSCRIBED",
-    "CONFIRMED",
-    "ACTIVE",
-    "APPROVED",
-  ].includes(status);
 }
 
 function formatDate(value: string): string {
@@ -192,7 +170,7 @@ function deriveDisplayMeta(item: Tournament): TournamentDisplayMeta {
     organizer: "-",
     totalSpots,
     spotsLeft,
-    registrationDeadline: formatDate(item.startDate),
+    registrationDeadline: formatDate(item.registrationDeadline),
   };
 }
 
@@ -211,29 +189,17 @@ function statusChipSx() {
 function readSubscribedEventIds(): Set<string> {
   try {
     const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
-    if (!raw) return new Set();
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return new Set();
     return new Set(
       parsed
-        .map((item) => String(item))
-        .map((item) => item.trim())
-        .filter(Boolean),
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item > 0)
+        .map((item) => String(item)),
     );
   } catch {
     return new Set();
   }
-}
-
-function extractDashboardEvents(events: DashboardApiResp["events"]): ApiEvent[] {
-  if (!Array.isArray(events)) return [];
-  return events
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      if ("event" in item) return item.event ?? null;
-      return item as ApiEvent;
-    })
-    .filter((event): event is ApiEvent => Boolean(event));
 }
 
 export default function TournamentsListPage() {
@@ -241,21 +207,13 @@ export default function TournamentsListPage() {
   const role = getLoggedInRole();
   const currentUserId = getLoggedInUserId();
   const canCreate = hasCreatorAccess(role);
-  const isParticipant = isParticipantRole(role);
 
   const [query, setQuery] = React.useState("");
   const [sportFilter, setSportFilter] = React.useState("All");
 
   const [items, setItems] = React.useState<Tournament[]>([]);
-  const [scopedItems, setScopedItems] = React.useState<Tournament[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-  const [withdrawingById, setWithdrawingById] = React.useState<
-    Record<string, boolean>
-  >({});
-  const [subscribedHintIds, setSubscribedHintIds] = React.useState<Set<string>>(
-    new Set(),
-  );
 
   const loadEvents = React.useCallback(async () => {
     setLoading(true);
@@ -274,96 +232,7 @@ export default function TournamentsListPage() {
     }
 
     try {
-      const enrichOwnedEventsWithDetails = async (
-        source: Tournament[],
-      ): Promise<Tournament[]> => {
-        const ownedIds = source
-          .filter((event) => event.ownerId != null && event.ownerId === Number(currentUserId))
-          .map((event) => Number(event.id))
-          .filter((id) => Number.isFinite(id) && id > 0);
-        if (ownedIds.length === 0) return source;
-
-        const detailed = await Promise.all(
-          ownedIds.map(async (eventId) => {
-            try {
-              const detailRes = await fetch(
-                `${API_URL}/events/${eventId}/details`,
-                {
-                  headers: { Authorization: `Bearer ${token}` },
-                },
-              );
-              const detailBody: EventDetailsResp | null = await detailRes
-                .json()
-                .catch(() => null);
-              if (!detailRes.ok || !detailBody?.event) return null;
-              return detailBody.event;
-            } catch {
-              return null;
-            }
-          }),
-        );
-
-        const byId = new Map(
-          detailed
-            .filter((event): event is ApiEvent => Boolean(event))
-            .map((event) => [String(event.id), event]),
-        );
-
-        return source.map((event) => {
-          const detail = byId.get(String(event.id));
-          if (!detail) return event;
-          const capacity = Number(detail.capacity ?? event.capacity);
-          const subscriptionsCount = Number(
-            detail.subscriptionsCount ?? event.subscriptionsCount,
-          );
-          const capacityLeftRaw = Number(detail.capacityLeft);
-          const safeCapacity = Number.isFinite(capacity)
-            ? Math.max(0, capacity)
-            : event.capacity;
-          const safeSubscriptionsCount = Number.isFinite(subscriptionsCount)
-            ? Math.max(0, subscriptionsCount)
-            : event.subscriptionsCount;
-          const safeCapacityLeft = Number.isFinite(capacityLeftRaw)
-            ? Math.max(0, capacityLeftRaw)
-            : Math.max(0, safeCapacity - safeSubscriptionsCount);
-          return {
-            ...event,
-            capacity: safeCapacity,
-            subscriptionsCount: safeSubscriptionsCount,
-            capacityLeft: safeCapacityLeft,
-          };
-        });
-      };
-
-      const dashboardRes = await fetch(`${API_URL}/dashboard`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const dashboardBody: DashboardApiResp | null = await dashboardRes
-        .json()
-        .catch(() => null);
-      if (dashboardRes.ok) {
-        const scopedRaw: ApiEvent[] = extractDashboardEvents(dashboardBody?.events);
-        const dashboardSubscribed = new Set(
-          scopedRaw
-            .filter((event) =>
-              isSubscribedLikeStatus(
-                String(event.subscriptionStatus ?? event.status ?? ""),
-              ),
-            )
-            .map((event) => String(event.id)),
-        );
-        const scopedMapped = scopedRaw
-          .filter((e) => e.eventType?.toUpperCase() === "TOURNAMENT")
-          .map(mapApiEvent)
-          .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
-        setScopedItems(await enrichOwnedEventsWithDetails(scopedMapped));
-        setSubscribedHintIds(dashboardSubscribed);
-      } else {
-        setScopedItems([]);
-        setSubscribedHintIds(new Set());
-      }
-
-      const res = await fetch("/events", {
+      const res = await fetch(`${API_URL}/events`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -380,32 +249,24 @@ export default function TournamentsListPage() {
       }
 
       const raw: ApiEvent[] = Array.isArray(data) ? data : (data?.data ?? []);
-      const apiSubscribedIds = new Set(
-        raw
-          .filter((event) =>
-            isSubscribedLikeStatus(
-              String(event.subscriptionStatus ?? event.status ?? ""),
-            ),
-          )
-          .map((event) => String(event.id)),
-      );
       const mapped = raw
         .filter((e) => e.eventType?.toUpperCase() === "TOURNAMENT")
-        .filter((e) => e.isPublic !== false)
         .filter((e) => {
           const status = String(e.status ?? "").toUpperCase();
-          return !status || ["OPEN", "ACTIVE", "ONGOING", "REGISTRATION"].includes(status);
+          const stage = String(e.tournamentStage ?? "").toUpperCase();
+          return (
+            !status ||
+            ["OPEN", "ACTIVE", "ONGOING", "REGISTRATION"].includes(status) ||
+            ["REGISTRATION", "ACTIVE", "ONGOING"].includes(stage)
+          );
         })
         .map(mapApiEvent)
         .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
 
-      setItems(await enrichOwnedEventsWithDetails(mapped));
-      setSubscribedHintIds((prev) => new Set([...prev, ...apiSubscribedIds]));
+      setItems(mapped);
     } catch {
       setError("Network error loading tournaments.");
       setItems([]);
-      setScopedItems([]);
-      setSubscribedHintIds(new Set());
     } finally {
       setLoading(false);
     }
@@ -435,85 +296,24 @@ export default function TournamentsListPage() {
     return ["All", ...Array.from(s)];
   }, [items]);
 
-  const mergedPersonalSource = React.useMemo(() => {
-    const byId = new Map<string, Tournament>();
-    [...items, ...scopedItems].forEach((item) => byId.set(String(item.id), item));
-    return Array.from(byId.values());
-  }, [items, scopedItems]);
   const ownedItems = React.useMemo(
     () =>
-      mergedPersonalSource.filter(
+      items.filter(
         (t) => t.ownerId != null && t.ownerId === Number(currentUserId),
       ),
-    [mergedPersonalSource, currentUserId],
+    [items, currentUserId],
   );
-  const subscribedEventIds = React.useMemo(() => {
-    const ids = new Set<string>();
-
-    readSubscribedEventIds().forEach((id) => ids.add(String(id)));
-    subscribedHintIds.forEach((id) => ids.add(String(id)));
-    scopedItems.forEach((item) => {
-      const itemId = String(item.id);
-      const isOwner = item.ownerId != null && item.ownerId === Number(currentUserId);
-      if (isOwner) return;
-      if (
-        isSubscribedLikeStatus(item.subscriptionStatus) ||
-        isSubscribedLikeStatus(item.apiStatus)
-      ) {
-        ids.add(itemId);
-      }
-    });
-
-    return ids;
-  }, [scopedItems, subscribedHintIds, currentUserId]);
-  const subscribedItems = React.useMemo(
-    () =>
-      mergedPersonalSource.filter(
-        (t) =>
-          subscribedEventIds.has(String(t.id)) &&
-          !(t.ownerId != null && t.ownerId === Number(currentUserId)),
-      ),
-    [mergedPersonalSource, subscribedEventIds, currentUserId],
-  );
-  const personalIds = React.useMemo(
-    () => new Set([...ownedItems, ...subscribedItems].map((item) => String(item.id))),
-    [ownedItems, subscribedItems],
-  );
+  const subscribedEventIds = React.useMemo(() => readSubscribedEventIds(), []);
   const discoverItems = React.useMemo(
-    () => filtered.filter((item) => !personalIds.has(String(item.id))),
-    [filtered, personalIds],
+    () =>
+      filtered.filter(
+        (item) =>
+          item.isPublic &&
+          !(item.ownerId != null && item.ownerId === Number(currentUserId)),
+      ),
+    [filtered, currentUserId],
   );
-  const ownedSectionTitle = canCreate && !isParticipant ? "My Tournaments" : "My Events";
-
-  const handleWithdraw = React.useCallback(
-    async (eventId: string) => {
-      const token = getToken();
-      if (!token) return;
-      setWithdrawingById((prev) => ({ ...prev, [eventId]: true }));
-      setError(null);
-      try {
-        const res = await fetch(
-          `${API_URL}/events/${encodeURIComponent(eventId)}/subscriptions/me/withdraw`,
-          {
-            method: "PATCH",
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(
-            body?.message?.[0] || body?.error || "Could not withdraw.",
-          );
-        }
-        await loadEvents();
-      } catch (e: any) {
-        setError(e?.message || "Could not withdraw from event.");
-      } finally {
-        setWithdrawingById((prev) => ({ ...prev, [eventId]: false }));
-      }
-    },
-    [loadEvents],
-  );
+  const ownedSectionTitle = "My Tournaments";
 
   return (
     <Box
@@ -690,95 +490,6 @@ export default function TournamentsListPage() {
           </Stack>
         ) : null}
 
-        {isParticipant && subscribedItems.length > 0 ? (
-          <Stack sx={{ mb: 3 }}>
-            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.25 }}>
-              <CalendarMonthRoundedIcon sx={{ color: "primary.main", fontSize: 30 }} />
-              <Box>
-                <Typography variant="h4" sx={{ fontWeight: 900, lineHeight: 1.1 }}>
-                  My Tournament Invites
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Tournaments you are invited to or already registered for.
-                </Typography>
-              </Box>
-            </Stack>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
-                gap: 1.5,
-              }}
-            >
-              {subscribedItems.map((t) => {
-                const status = statusChipSx();
-                const meta = deriveDisplayMeta(t);
-                const isSubscribed =
-                  isSubscribedLikeStatus(t.subscriptionStatus) ||
-                  isSubscribedLikeStatus(t.apiStatus) ||
-                  subscribedEventIds.has(String(t.id));
-                return (
-                  <Card key={`subscribed-${t.id}`} sx={{ borderRadius: 2.5, overflow: "hidden" }}>
-                    <CardContent sx={{ p: 2 }}>
-                      <Stack direction="row" spacing={1.5} alignItems="flex-start" sx={{ mb: 1.25 }}>
-                        <Box sx={{ width: 54, height: 54, borderRadius: 1.5, bgcolor: designTokens.purple[600], color: "#fff", display: "grid", placeItems: "center", flexShrink: 0 }}>
-                          <EmojiEventsRoundedIcon />
-                        </Box>
-                        <Box sx={{ minWidth: 0, flex: 1 }}>
-                          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
-                            <Typography sx={{ fontWeight: 900, fontSize: 18, lineHeight: 1.2 }}>{t.name}</Typography>
-                            <Chip size="small" label={status.label} variant={status.variant} sx={status.sx} />
-                          </Stack>
-                          <Stack spacing={0.5}>
-                            <MetaRow icon={<LocationOnRoundedIcon fontSize="small" />} text={t.locationName} color={designTokens.purple[600]} />
-                            <MetaRow icon={<CalendarMonthRoundedIcon fontSize="small" />} text={formatDate(t.startDate)} color={designTokens.purple[600]} />
-                            <MetaRow icon={<AccessTimeRoundedIcon fontSize="small" />} text={meta.timeLabel} color={designTokens.purple[600]} />
-                          </Stack>
-                        </Box>
-                      </Stack>
-                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1.25 }}>
-                        {[t.sport, t.format, t.level].map((tag) => (
-                          <Chip key={`subscribed-${t.id}-${tag}`} size="small" label={tag} sx={{ bgcolor: designTokens.purple[50], border: `1px solid ${designTokens.purple[200]}`, color: designTokens.purple[700] }} />
-                        ))}
-                      </Stack>
-                      <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                        <Button
-                          variant="contained"
-                          fullWidth
-                          onClick={() => navigate(`/tournaments/${t.id}`)}
-                          sx={{ borderRadius: 2 }}
-                        >
-                          View Tournament
-                        </Button>
-                        <Button
-                          variant={isSubscribed ? "outlined" : "contained"}
-                          color={isSubscribed ? "error" : "primary"}
-                          fullWidth
-                          disabled={isSubscribed ? Boolean(withdrawingById[t.id]) : false}
-                          onClick={() =>
-                            isSubscribed
-                              ? void handleWithdraw(t.id)
-                              : navigate(
-                                  `/tournaments/invite?inviteTournamentId=${encodeURIComponent(t.id)}`,
-                                )
-                          }
-                          sx={{ borderRadius: 2 }}
-                        >
-                          {isSubscribed
-                            ? withdrawingById[t.id]
-                              ? "Withdrawing..."
-                              : "Withdraw"
-                            : "Complete Registration"}
-                        </Button>
-                      </Stack>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </Box>
-          </Stack>
-        ) : null}
-
         <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
           <TrendingUpRoundedIcon sx={{ color: "success.main", fontSize: 34 }} />
           <Box>
@@ -815,10 +526,7 @@ export default function TournamentsListPage() {
           >
             {discoverItems.map((t) => {
               const isOwner = t.ownerId != null && t.ownerId === Number(currentUserId);
-              const isSubscribedTournament =
-                isSubscribedLikeStatus(t.subscriptionStatus) ||
-                isSubscribedLikeStatus(t.apiStatus) ||
-                subscribedEventIds.has(String(t.id));
+              const isRegistered = subscribedEventIds.has(String(t.id));
               const status = statusChipSx();
               const meta = deriveDisplayMeta(t);
               const spotPctUsed =
@@ -940,15 +648,21 @@ export default function TournamentsListPage() {
                             Manage Tournament
                           </Button>
                         </>
-                      ) : isParticipant && isSubscribedTournament ? (
+                      ) : isRegistered ? (
                         <Button
                           variant="outlined"
                           fullWidth
-                          onClick={() => navigate(`/tournaments/${t.id}`)}
+                          onClick={() =>
+                            navigate(
+                              `/tournaments/invite?inviteTournamentId=${encodeURIComponent(
+                                t.id,
+                              )}&mode=view`,
+                            )
+                          }
                           endIcon={<ChevronRightRoundedIcon />}
                           sx={{ borderRadius: 2 }}
                         >
-                          View Tournament
+                          View Registration
                         </Button>
                       ) : (
                         <Button

@@ -28,6 +28,7 @@ import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
+import { getLoggedInUserId } from "../auth/tokens";
 
 const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
 
@@ -43,7 +44,11 @@ type EventDetailsCategoryDto = {
 
 type EventDetailsDto = {
   id: number | string;
+  createdBy?: number | string;
   name?: string;
+  eventType?: string;
+  sport?: string;
+  level?: string;
   timezone?: string;
   locationName?: string;
   address?: string;
@@ -73,6 +78,11 @@ type DashboardApiResp = {
           }
       >
     | null;
+};
+
+type UserScopedEventDto = {
+  id?: number | string;
+  eventType?: string;
 };
 
 type SubscribeMePayload = {
@@ -142,19 +152,19 @@ function isSubscribedLikeStatus(value?: string): boolean {
   return ["REGISTERED", "SUBSCRIBED", "CONFIRMED", "ACTIVE", "APPROVED"].includes(status);
 }
 
-function readSubscribedEventIds(): Set<string> {
+function forgetSubscribedEvent(eventId: number) {
   try {
     const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(
-      parsed
-        .map((item) => Number(item))
-        .filter((item) => Number.isFinite(item) && item > 0)
-        .map((item) => String(item)),
+    const next = Array.isArray(parsed)
+      ? parsed.filter((item) => Number(item) !== Number(eventId))
+      : [];
+    window.localStorage.setItem(
+      UPCOMING_SUBSCRIBED_EVENTS_KEY,
+      JSON.stringify(next),
     );
   } catch {
-    return new Set();
+    // Ignore storage errors.
   }
 }
 
@@ -296,16 +306,24 @@ function TournamentInviteContent({
   tournament,
   categories,
   readOnly,
+  alreadyRegistered,
+  initialSelectedCategories,
   onBack,
   onConfirm,
+  onWithdraw,
   submitting,
+  withdrawing,
 }: {
   tournament: InviteUiModel;
   categories: Category[];
   readOnly: boolean;
+  alreadyRegistered: boolean;
+  initialSelectedCategories: SelectedCategory[];
   onBack: () => void;
   onConfirm: (selected: SelectedCategory[]) => void;
+  onWithdraw: () => void;
   submitting: boolean;
+  withdrawing: boolean;
 }) {
   const availableTabs = React.useMemo<string[]>(() => {
     const set = new Set(categories.map((c) => c.tabLabel));
@@ -316,7 +334,7 @@ function TournamentInviteContent({
     return ordered.length > 0 ? ordered : ["Open"];
   }, [categories]);
 
-  const [activeTab, setActiveTab] = React.useState<string>("");
+  const [activeTab, setActiveTab] = React.useState<string>(() => availableTabs[0] ?? "Open");
   const [selectedCategories, setSelectedCategories] = React.useState<SelectedCategory[]>([]);
   const [expandedCategoryId, setExpandedCategoryId] = React.useState<string | null>(null);
 
@@ -325,9 +343,17 @@ function TournamentInviteContent({
   }, [activeTab, availableTabs]);
 
   React.useEffect(() => {
-    setSelectedCategories([]);
+    setSelectedCategories(initialSelectedCategories);
     setExpandedCategoryId(null);
-  }, [tournament.eventId]);
+  }, [initialSelectedCategories, tournament.eventId]);
+
+  React.useEffect(() => {
+    if (!readOnly || initialSelectedCategories.length === 0) return;
+    const preferredTab = initialSelectedCategories[0]?.tabLabel;
+    if (preferredTab && preferredTab !== activeTab) {
+      setActiveTab(preferredTab);
+    }
+  }, [activeTab, initialSelectedCategories, readOnly]);
 
   const visibleCategories = categories.filter((c) => c.tabLabel === activeTab);
   const womenCategories = visibleCategories.filter((c) => c.gender === "Women" && c.format !== "Mixed");
@@ -364,7 +390,14 @@ function TournamentInviteContent({
     const selected = selectedCategories.some((c) => c.id === category.id);
 
     return (
-      <ButtonBase key={category.id} onClick={() => toggleCategory(category)} sx={{ borderRadius: 1.5, textAlign: "left" }}>
+      <ButtonBase
+        key={category.id}
+        onClick={() => {
+          if (readOnly) return;
+          toggleCategory(category);
+        }}
+        sx={{ borderRadius: 1.5, textAlign: "left" }}
+      >
         <Box
           sx={{
             position: "relative",
@@ -384,15 +417,28 @@ function TournamentInviteContent({
           ) : null}
           <Stack direction="row" justifyContent="space-between" sx={{ mb: 1.25 }}>
             <Typography sx={{ fontSize: 18, fontWeight: 800, color: selected ? "#FFFFFF" : "#111827" }}>{category.optionLabel}</Typography>
-            <Chip
-              size="small"
-              label={category.level}
-              sx={{
-                bgcolor: selected ? "rgba(255,255,255,0.2)" : "#F3E8FF",
-                color: selected ? "#FFF" : "#6D28D9",
-                fontWeight: 700,
-              }}
-            />
+            <Stack direction="row" spacing={0.75}>
+              {selected && readOnly ? (
+                <Chip
+                  size="small"
+                  label="Selected"
+                  sx={{
+                    bgcolor: selected ? "rgba(255,255,255,0.22)" : "#DCFCE7",
+                    color: selected ? "#FFF" : "#166534",
+                    fontWeight: 800,
+                  }}
+                />
+              ) : null}
+              <Chip
+                size="small"
+                label={category.level}
+                sx={{
+                  bgcolor: selected ? "rgba(255,255,255,0.2)" : "#F3E8FF",
+                  color: selected ? "#FFF" : "#6D28D9",
+                  fontWeight: 700,
+                }}
+              />
+            </Stack>
           </Stack>
           <Stack direction="row" justifyContent="space-between" alignItems="center">
             <Typography sx={{ fontSize: 13, color: selected ? "rgba(255,255,255,0.85)" : "#6B7280" }}>
@@ -448,7 +494,7 @@ function TournamentInviteContent({
                     {tournament.name}
                   </Typography>
                   <Typography sx={{ fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: 1 }}>
-                    You&apos;re Invited!
+                    {alreadyRegistered ? "Registration Confirmed" : "You&apos;re Invited!"}
                   </Typography>
                 </Box>
               </Stack>
@@ -482,164 +528,192 @@ function TournamentInviteContent({
               ))}
             </Box>
 
-            <Box sx={{ p: 1.75, borderRadius: 1.5, border: "1px solid #D8B4FE", bgcolor: "#F5F3FF" }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Box sx={{ width: 30, height: 30, borderRadius: "50%", bgcolor: "#9333EA", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <AccessTimeOutlinedIcon sx={{ fontSize: 16, color: "#FFF" }} />
-                  </Box>
-                  <Box>
-                    <Typography sx={{ fontWeight: 800, color: "#111827", fontSize: 22 }}>
-                      Registration Deadline
-                    </Typography>
-                    <Typography sx={{ fontSize: 13, color: "#6B7280" }}>
-                      {tournament.deadlineLabel} - Don&apos;t miss out!
-                    </Typography>
-                  </Box>
+            {!alreadyRegistered ? (
+              <Box sx={{ p: 1.75, borderRadius: 1.5, border: "1px solid #D8B4FE", bgcolor: "#F5F3FF" }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Box sx={{ width: 30, height: 30, borderRadius: "50%", bgcolor: "#9333EA", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <AccessTimeOutlinedIcon sx={{ fontSize: 16, color: "#FFF" }} />
+                    </Box>
+                    <Box>
+                      <Typography sx={{ fontWeight: 800, color: "#111827", fontSize: 22 }}>
+                        Registration Deadline
+                      </Typography>
+                      <Typography sx={{ fontSize: 13, color: "#6B7280" }}>
+                        {tournament.deadlineLabel} - Don&apos;t miss out!
+                      </Typography>
+                    </Box>
+                  </Stack>
+                  <Chip label={daysLeftLabel(tournament.deadlineLabel)} sx={{ bgcolor: "#9333EA", color: "#FFF", fontWeight: 800 }} />
                 </Stack>
-                <Chip label={daysLeftLabel(tournament.deadlineLabel)} sx={{ bgcolor: "#9333EA", color: "#FFF", fontWeight: 800 }} />
-              </Stack>
-            </Box>
+              </Box>
+            ) : null}
           </Box>
         </Card>
 
         <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB", mb: 2.5 }}>
           <Box sx={{ p: { xs: 2, md: 3 } }}>
-            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
-              <EmojiEventsOutlinedIcon sx={{ color: "#9333EA", fontSize: 30 }} />
-              <Box>
-                <Typography sx={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>Your Registered Categories</Typography>
-                <Typography sx={{ fontSize: 14, color: "#6B7280" }}>You are registered for the following categories</Typography>
-              </Box>
-            </Stack>
-
-            <Alert
-              icon={<CheckCircleRoundedIcon />}
-              severity="success"
-              sx={{ mb: 2.5, borderRadius: 1.5, bgcolor: "#ECFDF3", border: "1px solid #BBF7D0", color: "#166534" }}
-            >
-              You&apos;re all set! Your registration is confirmed for these categories.
-            </Alert>
-
-            <Stack spacing={2}>
-              <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value)}>
-                {availableTabs.map((tab) => (
-                  <Tab key={tab} value={tab} label={tab} sx={{ textTransform: "none", fontWeight: 700 }} />
-                ))}
-              </Tabs>
-
-              <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" }, gap: 2 }}>
-                <Stack spacing={1.5}>
-                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
-                    Women
-                  </Typography>
-                  {womenCategories.length > 0 ? (
-                    womenCategories.map(renderCategoryCard)
-                  ) : (
-                    <Box sx={{ p: 1.5, border: "1px dashed #D1D5DB", borderRadius: 1.25, bgcolor: "#F9FAFB" }}>
-                      <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Unavailable</Typography>
-                    </Box>
-                  )}
-                </Stack>
-                <Stack spacing={1.5}>
-                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
-                    Men
-                  </Typography>
-                  {menCategories.length > 0 ? (
-                    menCategories.map(renderCategoryCard)
-                  ) : (
-                    <Box sx={{ p: 1.5, border: "1px dashed #D1D5DB", borderRadius: 1.25, bgcolor: "#F9FAFB" }}>
-                      <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Unavailable</Typography>
-                    </Box>
-                  )}
-                </Stack>
-              </Box>
-              {mixedCategories.length > 0 ? (
-                <Stack spacing={1.5}>
-                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
-                    Mixed
-                  </Typography>
-                  <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" }, gap: 2 }}>
-                    {mixedCategories.map(renderCategoryCard)}
-                  </Box>
-                </Stack>
-              ) : null}
-            </Stack>
-          </Box>
-        </Card>
-
-        <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB", mb: 2.5 }}>
-          <Box sx={{ p: { xs: 2, md: 3 } }}>
-            <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
-              <PeopleAltOutlinedIcon sx={{ color: "#9333EA", fontSize: 30 }} />
-              <Box sx={{ flex: 1 }}>
-                <Typography sx={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>Your Selections</Typography>
-                <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Add partner details (optional)</Typography>
-              </Box>
-              <Chip label={`${selectedCategories.length} Category`} sx={{ bgcolor: "#9333EA", color: "#FFF", fontWeight: 800 }} />
-            </Stack>
-
-            <Alert icon={<AutoAwesomeOutlinedIcon />} severity="info" sx={{ borderRadius: 1.5, mb: 2 }}>
-              Partner information is optional. You can add it now or your coach can help you decide later.
-            </Alert>
-
-            {selectedCategories.length > 0 ? (
-              <Stack spacing={1.5}>
-                {selectedCategories.map((category) => {
-                  const expanded = expandedCategoryId === category.id;
-                  return (
-                    <Card key={category.id} sx={{ border: "1px solid #D1D5DB", borderRadius: 1.25 }}>
-                      <ButtonBase sx={{ width: "100%", textAlign: "left" }} onClick={() => setExpandedCategoryId(expanded ? null : category.id)}>
-                        <Box sx={{ width: "100%", p: 2, bgcolor: "#F9FAFB" }}>
-                          <Stack direction="row" justifyContent="space-between" alignItems="center">
-                            <Stack direction="row" spacing={1.25} alignItems="center">
-                              <Box sx={{ width: 36, height: 36, borderRadius: 1, bgcolor: "#9333EA", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                <EmojiEventsOutlinedIcon sx={{ color: "#FFF", fontSize: 18 }} />
-                              </Box>
-                              <Box>
-                                <Typography sx={{ fontWeight: 800 }}>{category.selectionLabel}</Typography>
-                                <Typography sx={{ fontSize: 12, color: "#6B7280" }}>Fee: ${category.fee} {tournament.currency}</Typography>
-                              </Box>
-                            </Stack>
-                            <Stack direction="row" spacing={1} alignItems="center">
-                              {category.partnerName ? <Chip label="Partner added" size="small" color="success" /> : null}
-                              {expanded ? <ExpandLessRoundedIcon /> : <ExpandMoreRoundedIcon />}
-                            </Stack>
-                          </Stack>
-                        </Box>
-                      </ButtonBase>
-
-                      <Collapse in={expanded && !readOnly} timeout="auto" unmountOnExit>
-                        <Box sx={{ p: 2, borderTop: "1px solid #E5E7EB" }}>
-                          <Stack spacing={1.5}>
-                            <TextField
-                              label="Partner Name (Optional)"
-                              value={category.partnerName}
-                              onChange={(e) => updatePartner(category.id, "partnerName", e.target.value)}
-                              fullWidth
-                            />
-                            <TextField
-                              label="Partner Note (Optional)"
-                              value={category.partnerNote}
-                              onChange={(e) => updatePartner(category.id, "partnerNote", e.target.value)}
-                              fullWidth
-                            />
-                          </Stack>
-                        </Box>
-                      </Collapse>
-                    </Card>
-                  );
-                })}
-              </Stack>
-            ) : (
-              <Box sx={{ p: 2, border: "1px dashed #D1D5DB", borderRadius: 1.25 }}>
-                <Typography sx={{ fontSize: 14, color: "#6B7280" }}>
-                  No category selected yet. Select one from &quot;Your Registered Categories&quot;.
+            {alreadyRegistered ? (
+              <Alert
+                icon={<CheckCircleRoundedIcon />}
+                severity="success"
+                sx={{ borderRadius: 1.5, bgcolor: "#ECFDF3", border: "1px solid #BBF7D0", color: "#166534" }}
+              >
+                <Typography sx={{ fontWeight: 800, mb: 0.25 }}>
+                  You are already registered for this tournament.
                 </Typography>
-              </Box>
+                <Typography sx={{ fontSize: 14 }}>
+                  Your registration has already been submitted.
+                </Typography>
+              </Alert>
+            ) : (
+              <>
+                <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
+                  <EmojiEventsOutlinedIcon sx={{ color: "#9333EA", fontSize: 30 }} />
+                  <Box>
+                    <Typography sx={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>
+                      Choose Your Categories
+                    </Typography>
+                    <Typography sx={{ fontSize: 14, color: "#6B7280" }}>
+                      Select the categories you want to join before confirming registration
+                    </Typography>
+                  </Box>
+                </Stack>
+
+                <Alert
+                  icon={<EmojiEventsOutlinedIcon />}
+                  severity="info"
+                  sx={{ mb: 2.5, borderRadius: 1.5 }}
+                >
+                  You are not registered yet. Choose one or more categories, optionally add a partner, then confirm on the payment page.
+                </Alert>
+
+                <Stack spacing={2}>
+                  <Tabs
+                    value={availableTabs.includes(activeTab) ? activeTab : availableTabs[0]}
+                    onChange={(_, value) => setActiveTab(value)}
+                  >
+                    {availableTabs.map((tab) => (
+                      <Tab key={tab} value={tab} label={tab} sx={{ textTransform: "none", fontWeight: 700 }} />
+                    ))}
+                  </Tabs>
+
+                  <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" }, gap: 2 }}>
+                    <Stack spacing={1.5}>
+                      <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
+                        Women
+                      </Typography>
+                      {womenCategories.length > 0 ? (
+                        womenCategories.map(renderCategoryCard)
+                      ) : (
+                        <Box sx={{ p: 1.5, border: "1px dashed #D1D5DB", borderRadius: 1.25, bgcolor: "#F9FAFB" }}>
+                          <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Unavailable</Typography>
+                        </Box>
+                      )}
+                    </Stack>
+                    <Stack spacing={1.5}>
+                      <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
+                        Men
+                      </Typography>
+                      {menCategories.length > 0 ? (
+                        menCategories.map(renderCategoryCard)
+                      ) : (
+                        <Box sx={{ p: 1.5, border: "1px dashed #D1D5DB", borderRadius: 1.25, bgcolor: "#F9FAFB" }}>
+                          <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Unavailable</Typography>
+                        </Box>
+                      )}
+                    </Stack>
+                  </Box>
+                  {mixedCategories.length > 0 ? (
+                    <Stack spacing={1.5}>
+                      <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#6B7280", textTransform: "uppercase" }}>
+                        Mixed
+                      </Typography>
+                      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" }, gap: 2 }}>
+                        {mixedCategories.map(renderCategoryCard)}
+                      </Box>
+                    </Stack>
+                  ) : null}
+                </Stack>
+              </>
             )}
           </Box>
         </Card>
+
+        {!alreadyRegistered ? (
+          <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB", mb: 2.5 }}>
+            <Box sx={{ p: { xs: 2, md: 3 } }}>
+              <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.75 }}>
+                <PeopleAltOutlinedIcon sx={{ color: "#9333EA", fontSize: 30 }} />
+                <Box sx={{ flex: 1 }}>
+                  <Typography sx={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>Your Selections</Typography>
+                  <Typography sx={{ fontSize: 13, color: "#6B7280" }}>Add partner details (optional)</Typography>
+                </Box>
+                <Chip label={`${selectedCategories.length} Category`} sx={{ bgcolor: "#9333EA", color: "#FFF", fontWeight: 800 }} />
+              </Stack>
+
+              <Alert icon={<AutoAwesomeOutlinedIcon />} severity="info" sx={{ borderRadius: 1.5, mb: 2 }}>
+                Partner information is optional. You can add it now or your coach can help you decide later.
+              </Alert>
+
+              {selectedCategories.length > 0 ? (
+                <Stack spacing={1.5}>
+                  {selectedCategories.map((category) => {
+                    const expanded = expandedCategoryId === category.id;
+                    return (
+                      <Card key={category.id} sx={{ border: "1px solid #D1D5DB", borderRadius: 1.25 }}>
+                        <ButtonBase sx={{ width: "100%", textAlign: "left" }} onClick={() => setExpandedCategoryId(expanded ? null : category.id)}>
+                          <Box sx={{ width: "100%", p: 2, bgcolor: "#F9FAFB" }}>
+                            <Stack direction="row" justifyContent="space-between" alignItems="center">
+                              <Stack direction="row" spacing={1.25} alignItems="center">
+                                <Box sx={{ width: 36, height: 36, borderRadius: 1, bgcolor: "#9333EA", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                  <EmojiEventsOutlinedIcon sx={{ color: "#FFF", fontSize: 18 }} />
+                                </Box>
+                                <Box>
+                                  <Typography sx={{ fontWeight: 800 }}>{category.selectionLabel}</Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#6B7280" }}>Fee: ${category.fee} {tournament.currency}</Typography>
+                                </Box>
+                              </Stack>
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                {category.partnerName ? <Chip label="Partner added" size="small" color="success" /> : null}
+                                {expanded ? <ExpandLessRoundedIcon /> : <ExpandMoreRoundedIcon />}
+                              </Stack>
+                            </Stack>
+                          </Box>
+                        </ButtonBase>
+
+                        <Collapse in={expanded && !readOnly} timeout="auto" unmountOnExit>
+                          <Box sx={{ p: 2, borderTop: "1px solid #E5E7EB" }}>
+                            <Stack spacing={1.5}>
+                              <TextField
+                                label="Partner Name (Optional)"
+                                value={category.partnerName}
+                                onChange={(e) => updatePartner(category.id, "partnerName", e.target.value)}
+                                fullWidth
+                              />
+                              <TextField
+                                label="Partner Note (Optional)"
+                                value={category.partnerNote}
+                                onChange={(e) => updatePartner(category.id, "partnerNote", e.target.value)}
+                                fullWidth
+                              />
+                            </Stack>
+                          </Box>
+                        </Collapse>
+                      </Card>
+                    );
+                  })}
+                </Stack>
+              ) : (
+                <Box sx={{ p: 2, border: "1px dashed #D1D5DB", borderRadius: 1.25 }}>
+                  <Typography sx={{ fontSize: 14, color: "#6B7280" }}>
+                    No category selected yet. Select one from the category list above.
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+          </Card>
+        ) : null}
 
         <Card sx={{ borderRadius: 1.5, borderColor: "#D1D5DB" }}>
           <Box sx={{ p: { xs: 2, md: 3 }, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -647,19 +721,34 @@ function TournamentInviteContent({
               <Typography sx={{ fontSize: 14, color: "#6B7280" }}>Total Amount Due</Typography>
               <Typography sx={{ fontSize: 42, fontWeight: 900, color: "#9333EA", lineHeight: 1.05 }}>${totalFee} {tournament.currency}</Typography>
               <Typography sx={{ fontSize: 13, color: "#6B7280" }}>
-                {selectedCategories.length > 0 ? "Confirm on payment page to complete registration" : "Select a category to continue"}
+                {alreadyRegistered
+                  ? "You are already registered for this tournament."
+                  : selectedCategories.length > 0
+                    ? "Confirm on the payment page to complete registration"
+                    : "Select a category to continue"}
               </Typography>
             </Box>
 
             <Stack direction="row" spacing={1.25}>
               <Button variant="outlined" onClick={onBack}>Cancel</Button>
-              <Button
-                variant="contained"
-                disabled={selectedCategories.length === 0 || readOnly || submitting}
-                onClick={() => onConfirm(selectedCategories)}
-              >
-                {submitting ? "Confirming..." : "Confirm Registration"}
-              </Button>
+              {alreadyRegistered ? (
+                <Button
+                  variant="contained"
+                  color="warning"
+                  onClick={onWithdraw}
+                  disabled={withdrawing}
+                >
+                  {withdrawing ? "Withdrawing..." : "Withdraw"}
+                </Button>
+              ) : (
+                <Button
+                  variant="contained"
+                  disabled={selectedCategories.length === 0 || readOnly || submitting}
+                  onClick={() => onConfirm(selectedCategories)}
+                >
+                  {submitting ? "Confirming..." : "Confirm Registration"}
+                </Button>
+              )}
             </Stack>
           </Box>
         </Card>
@@ -673,6 +762,7 @@ export default function PlayerTournamentInvitePage() {
   const [searchParams] = useSearchParams();
   const inviteTournamentId = parseInviteTournamentId(searchParams.get("inviteTournamentId"));
   const isReadOnlyView = searchParams.get("mode") === "view";
+  const currentUserId = getLoggedInUserId();
 
   const [loading, setLoading] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
@@ -680,6 +770,7 @@ export default function PlayerTournamentInvitePage() {
   const [success, setSuccess] = React.useState<string | null>(null);
   const [event, setEvent] = React.useState<EventDetailsDto | null>(null);
   const [alreadyRegistered, setAlreadyRegistered] = React.useState(false);
+  const [withdrawing, setWithdrawing] = React.useState(false);
 
   React.useEffect(() => {
     if (!inviteTournamentId) return;
@@ -689,16 +780,23 @@ export default function PlayerTournamentInvitePage() {
       setLoading(true);
       setError(null);
       try {
-        const [eventRes, dashboardRes] = await Promise.all([
+        const [eventRes, dashboardRes, eventsRes] = await Promise.all([
           api.get<EventDetailsDto>(`/events/${inviteTournamentId}`),
           api.get<DashboardApiResp>("/dashboard").catch(() => null),
+          api
+            .get<UserScopedEventDto[] | { data?: UserScopedEventDto[] }>("/events")
+            .catch(() => null),
         ]);
         if (cancelled) return;
 
         setEvent(eventRes.data);
 
         const dashboardEvents = extractDashboardEvents(dashboardRes?.data?.events);
-        const fromStorage = readSubscribedEventIds().has(String(inviteTournamentId));
+        const userScopedEvents = Array.isArray(eventsRes?.data)
+          ? eventsRes.data
+          : Array.isArray(eventsRes?.data?.data)
+            ? eventsRes.data.data
+            : [];
         const fromDashboard = dashboardEvents.some((item) => {
           const matchesId = String(item?.id ?? "") === String(inviteTournamentId);
           const isTournament = String(item?.eventType ?? "").toUpperCase() === "TOURNAMENT";
@@ -708,11 +806,19 @@ export default function PlayerTournamentInvitePage() {
             isSubscribedLikeStatus(item?.status)
           );
         });
+        const fromUserScopedEvents = userScopedEvents.some((item) => {
+          const matchesId = String(item?.id ?? "") === String(inviteTournamentId);
+          const isTournament = String(item?.eventType ?? "").toUpperCase() === "TOURNAMENT";
+          return matchesId && isTournament;
+        });
 
-        const registered = fromDashboard || fromStorage;
+        const optimisticRegistered = fromDashboard || fromUserScopedEvents;
+        const registered = optimisticRegistered;
         setAlreadyRegistered(registered);
         if (registered) {
           setSuccess("You are already registered for this tournament.");
+        } else {
+          setSuccess(null);
         }
       } catch (err: unknown) {
         if (!cancelled) setError(getErrorMessage(err, "Could not load tournament details."));
@@ -725,12 +831,16 @@ export default function PlayerTournamentInvitePage() {
     return () => {
       cancelled = true;
     };
-  }, [inviteTournamentId]);
+  }, [currentUserId, inviteTournamentId, isReadOnlyView]);
 
   const handleConfirm = async (selected: SelectedCategory[]) => {
     if (!inviteTournamentId) return;
     if (alreadyRegistered) {
-      navigate(`/tournaments/${inviteTournamentId}`);
+      navigate(
+        `/tournaments/invite?inviteTournamentId=${encodeURIComponent(
+          String(inviteTournamentId),
+        )}&mode=view`,
+      );
       return;
     }
 
@@ -765,6 +875,29 @@ export default function PlayerTournamentInvitePage() {
     }
   };
 
+  const handleWithdraw = async () => {
+    if (!inviteTournamentId) return;
+    setWithdrawing(true);
+    setError(null);
+    try {
+      await api.patch(`/events/${inviteTournamentId}/subscriptions/me/withdraw`);
+      forgetSubscribedEvent(inviteTournamentId);
+      setAlreadyRegistered(false);
+      setSuccess("You have withdrawn from this tournament.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Could not withdraw from this tournament."));
+    } finally {
+      setWithdrawing(false);
+    }
+  };
+
+  const inviteUi = event ? mapEventToUi(event) : null;
+  const categories = event ? mapEventCategories(event) : [];
+  const initialSelectedCategories: SelectedCategory[] = React.useMemo(() => {
+    if (!alreadyRegistered) return [];
+    return [];
+  }, [alreadyRegistered]);
+
   if (!inviteTournamentId) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
@@ -794,9 +927,6 @@ export default function PlayerTournamentInvitePage() {
     );
   }
 
-  const inviteUi = mapEventToUi(event);
-  const categories = mapEventCategories(event);
-
   return (
     <>
       {error ? (
@@ -809,23 +939,17 @@ export default function PlayerTournamentInvitePage() {
           <Alert severity="success">{success}</Alert>
         </Container>
       ) : null}
-      {alreadyRegistered ? (
-        <Container maxWidth="md" sx={{ py: 1 }}>
-          <Button
-            variant="outlined"
-            onClick={() => navigate(`/tournaments/${inviteTournamentId}`)}
-          >
-            View Tournament
-          </Button>
-        </Container>
-      ) : null}
       <TournamentInviteContent
-        tournament={inviteUi}
+        tournament={inviteUi!}
         categories={categories}
         readOnly={isReadOnlyView || alreadyRegistered}
+        alreadyRegistered={alreadyRegistered}
+        initialSelectedCategories={initialSelectedCategories}
         onBack={() => navigate("/dashboard")}
         onConfirm={handleConfirm}
+        onWithdraw={handleWithdraw}
         submitting={submitting}
+        withdrawing={withdrawing}
       />
     </>
   );

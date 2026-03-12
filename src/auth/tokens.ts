@@ -47,6 +47,22 @@ export function getLoggedInUserId(): number | null {
   return Number.isFinite(id) ? id : null;
 }
 
+export function getLoggedInUserEmail(): string | null {
+  const token = getToken();
+  if (!token) return null;
+
+  const payload = parseJwtPayload(token);
+  if (!payload) return null;
+
+  return normalizeText(
+    payload.email ??
+      payload.userEmail ??
+      payload.username ??
+      payload.preferred_username ??
+      null,
+  );
+}
+
 export function getLoggedInRole(): string | null {
   const token = getToken();
   if (!token) return null;

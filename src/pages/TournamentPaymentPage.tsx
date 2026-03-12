@@ -59,17 +59,6 @@ function rememberSubscribedEvent(eventId: number) {
   }
 }
 
-function hasSubscribedEvent(eventId: number): boolean {
-  try {
-    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return false;
-    return parsed.some((item) => Number(item) === Number(eventId));
-  } catch {
-    return false;
-  }
-}
-
 function getErrorMessage(err: unknown, fallback: string): string {
   return (
     (err as { response?: { data?: { message?: string[]; error?: string } } })
@@ -98,20 +87,6 @@ export default function TournamentPaymentPage() {
       setError("Registration details not found. Please go back and select categories again.");
       return;
     }
-    if (hasSubscribedEvent(state.eventId)) {
-      navigate("/tournaments/payment/confirmed", {
-        replace: true,
-        state: {
-          eventId: state.eventId,
-          tournamentName: state.tournamentName || "Tournament",
-          currency: (state.currency || "AUD").toUpperCase(),
-          totalAmount: state.totalAmount,
-          selectedCategoryNames: state.selectedCategoryNames || [],
-          alreadyRegistered: true,
-        },
-      });
-      return;
-    }
 
     setSubmitting(true);
     setError(null);
@@ -133,6 +108,22 @@ export default function TournamentPaymentPage() {
         },
       });
     } catch (err: unknown) {
+      const duplicateMessage =
+        (err as { response?: { data?: { message?: string[] } } })?.response?.data?.message?.[0];
+      if (duplicateMessage === "User is already subscribed to this event") {
+        navigate("/tournaments/payment/confirmed", {
+          replace: true,
+          state: {
+            eventId: state.eventId,
+            tournamentName: state.tournamentName || "Tournament",
+            currency: (state.currency || "AUD").toUpperCase(),
+            totalAmount: state.totalAmount,
+            selectedCategoryNames: state.selectedCategoryNames || [],
+            alreadyRegistered: true,
+          },
+        });
+        return;
+      }
       setError(getErrorMessage(err, "Could not confirm registration."));
     } finally {
       setSubmitting(false);
