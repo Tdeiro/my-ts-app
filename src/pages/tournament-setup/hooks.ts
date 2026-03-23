@@ -10,7 +10,6 @@ type UseTournamentSetupNavigationArgs = {
   ) => void;
   setError: (value: string | null) => void;
   setSelectedCategoryId: (value: string) => void;
-  setExpandedOverviewCategoryId: (value: string | null) => void;
   setActiveTab: (value: SetupTab) => void;
 };
 
@@ -30,7 +29,6 @@ export function useTournamentSetupNavigation({
   setSearchParams,
   setError,
   setSelectedCategoryId,
-  setExpandedOverviewCategoryId,
   setActiveTab,
 }: UseTournamentSetupNavigationArgs) {
   const selectedCategoryIdFromQuery = React.useMemo(
@@ -64,19 +62,17 @@ export function useTournamentSetupNavigation({
       const nextTab: SetupTab = tab === "overview" ? "teams" : tab;
       setError(null);
       setSelectedCategoryId(categoryId);
-      setExpandedOverviewCategoryId(null);
       setActiveTab(nextTab);
       updateSetupQuery(categoryId, nextTab);
     },
-    [setError, setSelectedCategoryId, setExpandedOverviewCategoryId, setActiveTab, updateSetupQuery],
+    [setError, setSelectedCategoryId, setActiveTab, updateSetupQuery],
   );
 
   const backToCategoryList = React.useCallback(() => {
     setSelectedCategoryId("");
-    setExpandedOverviewCategoryId(null);
     setActiveTab("overview");
     updateSetupQuery(null);
-  }, [setSelectedCategoryId, setExpandedOverviewCategoryId, setActiveTab, updateSetupQuery]);
+  }, [setSelectedCategoryId, setActiveTab, updateSetupQuery]);
 
   React.useEffect(() => {
     if (isSetupTab(tabFromQuery)) {
@@ -98,10 +94,9 @@ export function useTournamentSetupNavigation({
   React.useEffect(() => {
     if (!selectedCategoryIdFromQuery) {
       setSelectedCategoryId("");
-      setExpandedOverviewCategoryId(null);
       setActiveTab("overview");
     }
-  }, [selectedCategoryIdFromQuery, setSelectedCategoryId, setExpandedOverviewCategoryId, setActiveTab]);
+  }, [selectedCategoryIdFromQuery, setSelectedCategoryId, setActiveTab]);
 
   return {
     selectedCategoryIdFromQuery,

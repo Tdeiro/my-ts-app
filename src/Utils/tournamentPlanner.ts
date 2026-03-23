@@ -45,7 +45,9 @@ export type TournamentSetupDraft = {
       }>;
       bracketMatches?: Array<{
         id: string;
+        name: string;
         round: string;
+        roundIndex: number;
         home: string;
         away: string;
       }>;

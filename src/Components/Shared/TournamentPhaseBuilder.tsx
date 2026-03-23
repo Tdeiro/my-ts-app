@@ -71,7 +71,7 @@ export function generateGroupsSkeleton(
   existingTeams: string[] = [],
 ): GroupBucket[] {
   const safeGroupCount = Math.max(1, groupCount);
-  const safeTeamsPerGroup = Math.max(4, teamsPerGroup);
+  const safeTeamsPerGroup = Math.max(2, teamsPerGroup);
   const slots = safeGroupCount * safeTeamsPerGroup;
   const source = existingTeams.slice(0, slots);
   const groups: GroupBucket[] = Array.from({ length: safeGroupCount }, (_, idx) => ({
@@ -300,7 +300,7 @@ export default function TournamentPhaseBuilder({
       {
         id: `g_${Date.now()}`,
         name: `Group ${groupLetter(groups.length)}`,
-        participants: Array.from({ length: Math.max(4, teamsPerGroup) }, () => ""),
+        participants: Array.from({ length: Math.max(2, teamsPerGroup) }, () => ""),
       },
     ];
     onGroupsChange(next);
@@ -329,7 +329,7 @@ export default function TournamentPhaseBuilder({
         const participants = [...g.participants];
         while (participants.length <= slotIndex) participants.push("");
         const value = participants[slotIndex] ?? "";
-        const minimumSlots = Math.max(4, teamsPerGroup);
+        const minimumSlots = Math.max(2, teamsPerGroup);
         if (!value.trim() && participants.length > minimumSlots) {
           participants.splice(slotIndex, 1);
         } else {
@@ -399,7 +399,7 @@ export default function TournamentPhaseBuilder({
             ) : null}
             <Stack spacing={1.25}>
               {groups.map((group) => {
-                const slots = Math.max(Math.max(4, teamsPerGroup), group.participants.length);
+                const slots = Math.max(Math.max(2, teamsPerGroup), group.participants.length);
                 return (
                   <Card key={group.id} sx={{ borderRadius: 1.5, border: "1px solid rgba(15,23,42,0.10)", boxShadow: "none" }}>
                     <Box

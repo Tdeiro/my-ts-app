@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   Alert,
   Box,
@@ -10,61 +11,347 @@ import {
   Typography,
 } from "@mui/material";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
+import { getToken } from "../../auth/tokens";
 import type {
+  ApiEventSubscription,
   RegisteredPlayer,
   TeamDto,
   TeamEditorState,
 } from "./types";
 
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+
+function createEmptyTeamEditorState(): TeamEditorState {
+  return {
+    name: "",
+    memberUserIds: [],
+    autoNameFromMembers: true,
+    editingTeamId: null,
+  };
+}
+
 type TeamsTabProps = {
+  eventId: string;
   selectedCategoryId: string;
   selectedCategoryLevel: string;
   selectedCategoryDisplayName: string;
-  selectedCategoryTeams: TeamDto[];
-  teamEditor: TeamEditorState;
-  relevantPlayers: RegisteredPlayer[];
-  selectablePlayers: RegisteredPlayer[];
-  assignedUserIds: Set<string>;
-  registeredPlayersLoading: boolean;
-  registeredPlayersError: string | null;
-  teamsTabSubmitting: boolean;
-  unassignedPlayersCount: number;
-  showContinueWarning: boolean;
-  onTeamEditorChange: (
-    updater: (current: TeamEditorState) => TeamEditorState,
-  ) => void;
-  onEditTeam: (team: TeamDto) => void;
-  onDeleteTeam: (teamId: number) => void;
-  onSaveTeam: () => void;
+  initialTeams: TeamDto[];
+  onTeamsChange: (teams: TeamDto[]) => void;
   onBackToCategoryList: () => void;
   onNextToStructure: () => void;
-  onDismissContinueWarning: () => void;
-  onContinueAnyway: () => void;
 };
 
 export function TeamsTab({
+  eventId,
   selectedCategoryId,
   selectedCategoryLevel,
   selectedCategoryDisplayName,
-  selectedCategoryTeams,
-  teamEditor,
-  relevantPlayers,
-  selectablePlayers,
-  assignedUserIds,
-  registeredPlayersLoading,
-  registeredPlayersError,
-  teamsTabSubmitting,
-  unassignedPlayersCount,
-  showContinueWarning,
-  onTeamEditorChange,
-  onEditTeam,
-  onDeleteTeam,
-  onSaveTeam,
+  initialTeams,
+  onTeamsChange,
   onBackToCategoryList,
   onNextToStructure,
-  onDismissContinueWarning,
-  onContinueAnyway,
 }: TeamsTabProps) {
+  const [teams, setTeams] = React.useState<TeamDto[]>(initialTeams);
+  const [teamEditor, setTeamEditor] = React.useState<TeamEditorState>(
+    createEmptyTeamEditorState(),
+  );
+  const [registeredPlayers, setRegisteredPlayers] = React.useState<
+    RegisteredPlayer[]
+  >([]);
+  const [registeredPlayersLoading, setRegisteredPlayersLoading] =
+    React.useState(false);
+  const [registeredPlayersError, setRegisteredPlayersError] = React.useState<
+    string | null
+  >(null);
+  const [teamsLoading, setTeamsLoading] = React.useState(false);
+  const [teamsSubmitting, setTeamsSubmitting] = React.useState(false);
+  const [showContinueWarning, setShowContinueWarning] = React.useState(false);
+  const [teamError, setTeamError] = React.useState<string | null>(null);
+  const onTeamsChangeRef = React.useRef(onTeamsChange);
+
+  React.useEffect(() => {
+    onTeamsChangeRef.current = onTeamsChange;
+  }, [onTeamsChange]);
+
+  const loadTeams = React.useCallback(async () => {
+    const token = getToken();
+    const parsedCategoryId = Number(selectedCategoryId);
+    if (!token || !Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
+      setTeams([]);
+      onTeamsChangeRef.current([]);
+      return [];
+    }
+
+    setTeamsLoading(true);
+    try {
+      const res = await fetch(
+        `${API_URL}/teams?categoryId=${encodeURIComponent(parsedCategoryId)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          data?.message?.[0] ||
+            data?.error ||
+            `Failed to load teams (${res.status})`,
+        );
+      }
+      const nextTeams = (Array.isArray(data) ? data : (data?.data ?? [])) as TeamDto[];
+      setTeams(nextTeams);
+      onTeamsChangeRef.current(nextTeams);
+      return nextTeams;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load teams.";
+      setTeamError(message);
+      setTeams([]);
+      onTeamsChangeRef.current([]);
+      return [];
+    } finally {
+      setTeamsLoading(false);
+    }
+  }, [selectedCategoryId]);
+
+  React.useEffect(() => {
+    setTeams(initialTeams);
+  }, [initialTeams]);
+
+  React.useEffect(() => {
+    setTeamEditor(createEmptyTeamEditorState());
+    setShowContinueWarning(false);
+    setTeamError(null);
+  }, [selectedCategoryId]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const token = getToken();
+      if (!token || !eventId) {
+        if (!cancelled) {
+          setRegisteredPlayers([]);
+          setRegisteredPlayersError("Could not load registered players.");
+        }
+        return;
+      }
+
+      setRegisteredPlayersLoading(true);
+      setRegisteredPlayersError(null);
+      try {
+        const res = await fetch(`${API_URL}/events/${eventId}/subscriptions`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const body: ApiEventSubscription[] | null = await res
+          .json()
+          .catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            (body as any)?.message?.[0] ||
+              (body as any)?.error ||
+              "Could not load registered players.",
+          );
+        }
+
+        const players: RegisteredPlayer[] = (Array.isArray(body) ? body : [])
+          .filter(
+            (item) => String(item.status ?? "").toUpperCase() === "REGISTERED",
+          )
+          .map((item) => ({
+            id: String(item.userId ?? ""),
+            name: String(item.userFullName ?? "Unnamed player"),
+            email: String(item.userEmail ?? ""),
+            preferredPartner:
+              item.categories?.find((category) => category?.suggestedPlayer)
+                ?.suggestedPlayer ?? null,
+            categoryIds: Array.isArray(item.categories)
+              ? item.categories
+                  .map((category) => String(category?.id ?? ""))
+                  .filter(Boolean)
+              : [],
+          }))
+          .filter((item) => item.id);
+
+        if (!cancelled) {
+          setRegisteredPlayers(players);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setRegisteredPlayersError(
+            err instanceof Error
+              ? err.message
+              : "Could not load registered players.",
+          );
+          setRegisteredPlayers([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setRegisteredPlayersLoading(false);
+        }
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId]);
+
+  React.useEffect(() => {
+    void loadTeams();
+  }, [loadTeams]);
+
+  const relevantPlayers = React.useMemo(
+    () =>
+      registeredPlayers.filter((player) =>
+        player.categoryIds.includes(selectedCategoryId),
+      ),
+    [registeredPlayers, selectedCategoryId],
+  );
+
+  const assignedUserIds = React.useMemo(
+    () =>
+      new Set(
+        teams
+          .filter((team) => team.id !== teamEditor.editingTeamId)
+          .flatMap((team) =>
+            (team.members ?? []).map((member) => String(member.userId)),
+          ),
+      ),
+    [teamEditor.editingTeamId, teams],
+  );
+
+  const selectablePlayers = React.useMemo(
+    () =>
+      relevantPlayers.filter(
+        (player) =>
+          !assignedUserIds.has(player.id) ||
+          teamEditor.memberUserIds.includes(player.id),
+      ),
+    [assignedUserIds, relevantPlayers, teamEditor.memberUserIds],
+  );
+
+  const unassignedPlayersCount = React.useMemo(() => {
+    const assignedInTeams = new Set(
+      teams.flatMap((team) =>
+        (team.members ?? []).map((member) => String(member.userId)),
+      ),
+    );
+    return relevantPlayers.filter((player) => !assignedInTeams.has(player.id))
+      .length;
+  }, [relevantPlayers, teams]);
+
+  const updateTeamEditor = React.useCallback(
+    (updater: (current: TeamEditorState) => TeamEditorState) => {
+      setTeamEditor((current) => updater(current));
+    },
+    [],
+  );
+
+  const handleEditTeam = React.useCallback((team: TeamDto) => {
+    setTeamEditor({
+      name: team.name ?? "",
+      memberUserIds: (team.members ?? []).map((member) => String(member.userId)),
+      autoNameFromMembers: Boolean(team.autoNameFromMembers),
+      editingTeamId: team.id,
+    });
+  }, []);
+
+  const handleSaveTeam = React.useCallback(async () => {
+    const token = getToken();
+    const parsedCategoryId = Number(selectedCategoryId);
+    if (!token) {
+      setTeamError("You are not logged in.");
+      return;
+    }
+    if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
+      setTeamError("Invalid category id for team.");
+      return;
+    }
+
+    const members = teamEditor.memberUserIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => ({ userId: value, role: "Player" }));
+
+    if (members.length === 0) {
+      setTeamError("Select at least one player to create a team.");
+      return;
+    }
+
+    setTeamsSubmitting(true);
+    setTeamError(null);
+    try {
+      const payload = {
+        categoryId: parsedCategoryId,
+        categoryIds: [parsedCategoryId],
+        name: teamEditor.name.trim() || undefined,
+        autoNameFromMembers: teamEditor.autoNameFromMembers,
+        members,
+      };
+      const endpoint =
+        teamEditor.editingTeamId == null
+          ? `${API_URL}/teams`
+          : `${API_URL}/teams/${teamEditor.editingTeamId}`;
+      const method = teamEditor.editingTeamId == null ? "POST" : "PUT";
+      const res = await fetch(endpoint, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          body?.message?.[0] ||
+            body?.error ||
+            (teamEditor.editingTeamId == null
+              ? "Failed to create team."
+              : "Failed to update team."),
+        );
+      }
+      setTeamEditor(createEmptyTeamEditorState());
+      setShowContinueWarning(false);
+      await loadTeams();
+    } catch (err) {
+      setTeamError(err instanceof Error ? err.message : "Failed to save team.");
+    } finally {
+      setTeamsSubmitting(false);
+    }
+  }, [loadTeams, selectedCategoryId, teamEditor]);
+
+  const handleDeleteTeam = React.useCallback(
+    async (teamId: number) => {
+      const token = getToken();
+      if (!token) {
+        setTeamError("You are not logged in.");
+        return;
+      }
+      setTeamError(null);
+      try {
+        const res = await fetch(`${API_URL}/teams/${teamId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(
+            body?.message?.[0] || body?.error || "Failed to delete team.",
+          );
+        }
+        if (teamEditor.editingTeamId === teamId) {
+          setTeamEditor(createEmptyTeamEditorState());
+        }
+        await loadTeams();
+      } catch (err) {
+        setTeamError(
+          err instanceof Error ? err.message : "Failed to delete team.",
+        );
+      }
+    },
+    [loadTeams, teamEditor.editingTeamId],
+  );
+
   return (
     <Card>
       <CardContent sx={{ p: 3 }}>
@@ -149,6 +436,12 @@ export function TeamsTab({
           </Typography>
         </Box>
 
+        {teamError ? (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {teamError}
+          </Alert>
+        ) : null}
+
         {registeredPlayersError ? (
           <Alert severity="warning" sx={{ mb: 2 }}>
             {registeredPlayersError}
@@ -179,7 +472,7 @@ export function TeamsTab({
                   color: "#8B5CF6",
                 }}
               >
-                {selectedCategoryTeams.length} teams
+                {teams.length} teams
               </Typography>
             </Stack>
 
@@ -191,13 +484,17 @@ export function TeamsTab({
                 borderRadius: "10px",
               }}
             >
-              {selectedCategoryTeams.length === 0 ? (
+              {teamsLoading ? (
+                <Typography sx={{ fontSize: "0.875rem", color: "#6A7282" }}>
+                  Loading teams...
+                </Typography>
+              ) : teams.length === 0 ? (
                 <Typography sx={{ fontSize: "0.875rem", color: "#6A7282" }}>
                   No teams created yet for this category.
                 </Typography>
               ) : (
                 <Stack spacing={1}>
-                  {selectedCategoryTeams.map((team) => (
+                  {teams.map((team) => (
                     <Box
                       key={`teams-tab-${team.id}`}
                       sx={{
@@ -225,7 +522,7 @@ export function TeamsTab({
                           <Button
                             size="small"
                             variant="outlined"
-                            onClick={() => onEditTeam(team)}
+                            onClick={() => handleEditTeam(team)}
                           >
                             Edit
                           </Button>
@@ -233,7 +530,7 @@ export function TeamsTab({
                             size="small"
                             color="error"
                             variant="outlined"
-                            onClick={() => onDeleteTeam(team.id)}
+                            onClick={() => void handleDeleteTeam(team.id)}
                           >
                             Delete
                           </Button>
@@ -280,12 +577,7 @@ export function TeamsTab({
                     bgcolor: "#7C3AED",
                   },
                 }}
-                onClick={() => onTeamEditorChange(() => ({
-                  name: "",
-                  memberUserIds: [],
-                  autoNameFromMembers: true,
-                  editingTeamId: null,
-                }))}
+                onClick={() => setTeamEditor(createEmptyTeamEditorState())}
               >
                 Cancel
               </Button>
@@ -328,7 +620,7 @@ export function TeamsTab({
                   size="small"
                   value={teamEditor.name}
                   onChange={(e) =>
-                    onTeamEditorChange((current) => ({
+                    updateTeamEditor((current) => ({
                       ...current,
                       name: e.target.value,
                     }))
@@ -373,7 +665,7 @@ export function TeamsTab({
                           cursor: "pointer",
                         }}
                         onClick={() =>
-                          onTeamEditorChange((current) => {
+                          updateTeamEditor((current) => {
                             const exists = current.memberUserIds.includes(player.id);
                             return {
                               ...current,
@@ -426,14 +718,14 @@ export function TeamsTab({
               <Button
                 fullWidth
                 disabled={
-                  teamsTabSubmitting ||
+                  teamsSubmitting ||
                   teamEditor.memberUserIds.length === 0 ||
                   !selectedCategoryId
                 }
-                onClick={onSaveTeam}
+                onClick={() => void handleSaveTeam()}
                 sx={{
                   bgcolor:
-                    teamsTabSubmitting || teamEditor.memberUserIds.length === 0
+                    teamsSubmitting || teamEditor.memberUserIds.length === 0
                       ? "#D1D5DC"
                       : "#8B5CF6",
                   color: "white",
@@ -444,13 +736,13 @@ export function TeamsTab({
                   borderRadius: "10px",
                   "&:hover": {
                     bgcolor:
-                      teamsTabSubmitting || teamEditor.memberUserIds.length === 0
+                      teamsSubmitting || teamEditor.memberUserIds.length === 0
                         ? "#D1D5DC"
                         : "#7C3AED",
                   },
                 }}
               >
-                {teamsTabSubmitting
+                {teamsSubmitting
                   ? "Saving..."
                   : teamEditor.editingTeamId == null
                     ? "Create Team"
@@ -581,7 +873,14 @@ export function TeamsTab({
           </Button>
           <Button
             variant="contained"
-            onClick={onNextToStructure}
+            onClick={() => {
+              if (unassignedPlayersCount > 0) {
+                setShowContinueWarning(true);
+                return;
+              }
+              setShowContinueWarning(false);
+              onNextToStructure();
+            }}
             sx={{
               bgcolor: "#8B5CF6",
               color: "white",
@@ -626,10 +925,22 @@ export function TeamsTab({
                 spacing={1}
                 sx={{ justifyContent: "flex-end", flexWrap: "wrap" }}
               >
-                <Button size="small" variant="outlined" onClick={onDismissContinueWarning}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => setShowContinueWarning(false)}
+                >
                   Review Players
                 </Button>
-                <Button size="small" variant="contained" color="warning" onClick={onContinueAnyway}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="warning"
+                  onClick={() => {
+                    setShowContinueWarning(false);
+                    onNextToStructure();
+                  }}
+                >
                   Continue Anyway
                 </Button>
               </Stack>

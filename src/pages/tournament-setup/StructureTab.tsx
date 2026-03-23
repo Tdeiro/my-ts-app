@@ -1,4 +1,6 @@
+import * as React from "react";
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -10,7 +12,23 @@ import {
   Typography,
 } from "@mui/material";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
+import { getToken } from "../../auth/tokens";
 import type { CategorySetupConfig, StructureMode } from "./types";
+
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+
+type ApiStructureType =
+  | "GROUP_PHASE_KO"
+  | "KNOCKOUT_ONLY"
+  | "GROUP_PHASE_ONLY"
+  | "SWISS";
+
+function toApiStructureType(mode: StructureMode): ApiStructureType {
+  if (mode === "groups_knockout") return "GROUP_PHASE_KO";
+  if (mode === "knockout_only") return "KNOCKOUT_ONLY";
+  if (mode === "group_phase_only") return "GROUP_PHASE_ONLY";
+  return "SWISS";
+}
 
 type StructureOption = {
   id: StructureMode | "";
@@ -19,38 +37,173 @@ type StructureOption = {
 };
 
 type StructureTabProps = {
+  selectedCategoryId: string;
   selectedCategoryLevel: string;
   selectedCategoryDisplayName: string;
   selectedCategoryTeamsCount: number;
-  selectedTargetTeamsForStructure: number;
-  selectedConfig?: CategorySetupConfig;
+  initialConfig?: CategorySetupConfig;
+  initialHasPersistedStructure: boolean;
   structureOptions: StructureOption[];
-  hasGroupStructureConfig: boolean;
-  canSaveSelectedCategorySetup: boolean;
-  onStructureModeChange: (mode: StructureMode | "") => void;
-  onGroupCountChange: (value: number) => void;
-  onTeamsPerGroupChange: (value: number) => void;
-  onQualifiedPerGroupChange: (value: number) => void;
+  onStructureSaved: (config: CategorySetupConfig) => void;
+  onPersistedChange: (value: boolean) => void;
   onBackToTeams: () => void;
   onNextToGroups: () => void;
 };
 
 export function StructureTab({
+  selectedCategoryId,
   selectedCategoryLevel,
   selectedCategoryDisplayName,
   selectedCategoryTeamsCount,
-  selectedTargetTeamsForStructure,
-  selectedConfig,
+  initialConfig,
+  initialHasPersistedStructure,
   structureOptions,
-  hasGroupStructureConfig,
-  canSaveSelectedCategorySetup,
-  onStructureModeChange,
-  onGroupCountChange,
-  onTeamsPerGroupChange,
-  onQualifiedPerGroupChange,
+  onStructureSaved,
+  onPersistedChange,
   onBackToTeams,
   onNextToGroups,
 }: StructureTabProps) {
+  const [config, setConfig] = React.useState<CategorySetupConfig>(
+    initialConfig ?? {
+      formats: [],
+      structureMode: "",
+      bracketMatches: [],
+    },
+  );
+  const [hasPersistedStructure, setHasPersistedStructure] = React.useState(
+    initialHasPersistedStructure,
+  );
+  const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setConfig(
+      initialConfig ?? {
+        formats: [],
+        structureMode: "",
+        bracketMatches: [],
+      },
+    );
+    setHasPersistedStructure(initialHasPersistedStructure);
+    setError(null);
+  }, [initialConfig, initialHasPersistedStructure, selectedCategoryId]);
+
+  const hasGroupStructureConfig = React.useMemo(() => {
+    if (config.structureMode !== "groups_knockout") return false;
+    const groupCount = Number(config.groupCount ?? 0);
+    const teamsPerGroup = Number(config.teamsPerGroup ?? 0);
+    const qualifiedPerGroup = Number(config.qualifiedPerGroup ?? 0);
+    return (
+      groupCount > 0 &&
+      teamsPerGroup >= 2 &&
+      qualifiedPerGroup > 0 &&
+      qualifiedPerGroup <= teamsPerGroup
+    );
+  }, [config]);
+
+  const canSaveSelectedCategorySetup = React.useMemo(() => {
+    if (!config.structureMode) return false;
+    if (config.structureMode !== "groups_knockout") return true;
+    return hasGroupStructureConfig;
+  }, [config.structureMode, hasGroupStructureConfig]);
+
+  const selectedTargetTeamsForStructure =
+    config.structureMode === "groups_knockout"
+      ? Math.max(
+          0,
+          Number(config.groupCount ?? 0) * Number(config.teamsPerGroup ?? 0),
+        )
+      : 0;
+
+  const persistStructure = React.useCallback(async (): Promise<boolean> => {
+    const token = getToken();
+    const parsedCategoryId = Number(selectedCategoryId);
+    if (!token) {
+      setError("You are not logged in.");
+      return false;
+    }
+    if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
+      setError("Invalid category id for structure.");
+      return false;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (!config.structureMode) {
+        if (!hasPersistedStructure) {
+          onStructureSaved(config);
+          return true;
+        }
+        const deleteRes = await fetch(
+          `${API_URL}/tournament-category-structures/${encodeURIComponent(parsedCategoryId)}`,
+          {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+        const deleteBody = await deleteRes.json().catch(() => null);
+        if (!deleteRes.ok) {
+          throw new Error(
+            deleteBody?.message?.[0] ||
+              deleteBody?.error ||
+              "Failed to delete structure.",
+          );
+        }
+        setHasPersistedStructure(false);
+        onPersistedChange(false);
+        onStructureSaved(config);
+        return true;
+      }
+
+      const payload = {
+        categoryId: parsedCategoryId,
+        structureType: toApiStructureType(config.structureMode),
+        numberOfGroups: Math.max(0, Number(config.groupCount ?? 0)),
+        teamsPerGroup: Math.max(0, Number(config.teamsPerGroup ?? 0)),
+        qualifiedPerGroup: Math.max(0, Number(config.qualifiedPerGroup ?? 0)),
+      };
+
+      const endpoint = hasPersistedStructure
+        ? `${API_URL}/tournament-category-structures/${encodeURIComponent(parsedCategoryId)}`
+        : `${API_URL}/tournament-category-structures`;
+      const method = hasPersistedStructure ? "PUT" : "POST";
+      const res = await fetch(endpoint, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          body?.message?.[0] ||
+            body?.error ||
+            "Failed to save structure.",
+        );
+      }
+      setHasPersistedStructure(true);
+      onPersistedChange(true);
+      onStructureSaved(config);
+      return true;
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to save structure.",
+      );
+      return false;
+    } finally {
+      setSubmitting(false);
+    }
+  }, [
+    config,
+    hasPersistedStructure,
+    onPersistedChange,
+    onStructureSaved,
+    selectedCategoryId,
+  ]);
+
   return (
     <Card>
       <CardContent sx={{ p: 3 }}>
@@ -150,9 +303,9 @@ export function StructureTab({
             justifyContent="space-between"
             alignItems={{ xs: "flex-start", sm: "center" }}
           >
-            <Typography sx={{ fontWeight: 700, color: "#101828", fontSize: "0.9rem" }}>
-              Teams available for this category
-            </Typography>
+          <Typography sx={{ fontWeight: 700, color: "#101828", fontSize: "0.9rem" }}>
+            Teams available for this category
+          </Typography>
             <Chip
               size="small"
               label={`${selectedCategoryTeamsCount} team${selectedCategoryTeamsCount === 1 ? "" : "s"}`}
@@ -162,10 +315,16 @@ export function StructureTab({
           {selectedTargetTeamsForStructure > 0 ? (
             <Typography sx={{ color: "#4A5565", fontSize: "0.8125rem", mt: 0.75 }}>
               Current structure needs about {selectedTargetTeamsForStructure} teams
-              ({selectedConfig?.groupCount ?? 0} groups x {selectedConfig?.teamsPerGroup ?? 0} teams/group).
+              ({config.groupCount ?? 0} groups x {config.teamsPerGroup ?? 0} teams/group).
             </Typography>
           ) : null}
         </Box>
+
+        {error ? (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        ) : null}
 
         <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
           Structure
@@ -185,11 +344,16 @@ export function StructureTab({
           flexWrap="wrap"
         >
           {structureOptions.map((opt) => {
-            const isSelected = selectedConfig?.structureMode === opt.id;
+            const isSelected = config.structureMode === opt.id;
             return (
               <Card
                 key={opt.id}
-                onClick={() => onStructureModeChange(opt.id)}
+                onClick={() =>
+                  setConfig((current) => ({
+                    ...current,
+                    structureMode: opt.id,
+                  }))
+                }
                 sx={{
                   cursor: "pointer",
                   width: { xs: "100%", md: "calc(50% - 5px)" },
@@ -214,7 +378,7 @@ export function StructureTab({
           })}
         </Stack>
 
-        {selectedConfig?.structureMode === "groups_knockout" ? (
+        {config.structureMode === "groups_knockout" ? (
           <>
             <Divider sx={{ my: 2 }} />
             <Typography variant="body2" sx={{ fontWeight: 800, mb: 1 }}>
@@ -224,27 +388,42 @@ export function StructureTab({
               <TextField
                 label="Number of groups"
                 type="number"
-                value={selectedConfig.groupCount ?? ""}
-                onChange={(e) => onGroupCountChange(Number(e.target.value || 0))}
+                value={config.groupCount ?? ""}
+                onChange={(e) =>
+                  setConfig((current) => ({
+                    ...current,
+                    groupCount: Math.max(1, Number(e.target.value || 0)),
+                  }))
+                }
                 fullWidth
               />
               <TextField
-                label="Teams per group (min 4)"
+                label="Teams per group (min 2)"
                 type="number"
-                value={selectedConfig.teamsPerGroup ?? ""}
-                onChange={(e) => onTeamsPerGroupChange(Number(e.target.value || 0))}
+                value={config.teamsPerGroup ?? ""}
+                onChange={(e) =>
+                  setConfig((current) => ({
+                    ...current,
+                    teamsPerGroup: Math.max(2, Number(e.target.value || 0)),
+                  }))
+                }
                 fullWidth
               />
               <TextField
                 label="Qualified per group"
                 type="number"
-                value={selectedConfig.qualifiedPerGroup ?? ""}
-                onChange={(e) => onQualifiedPerGroupChange(Number(e.target.value || 0))}
+                value={config.qualifiedPerGroup ?? ""}
+                onChange={(e) =>
+                  setConfig((current) => ({
+                    ...current,
+                    qualifiedPerGroup: Math.max(1, Number(e.target.value || 0)),
+                  }))
+                }
                 fullWidth
               />
             </Stack>
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-              Groups and bracket will be auto-generated when you click Next: Groups & Brackets.
+              Groups and bracket will be prepared in the Groups & Brackets tab.
             </Typography>
           </>
         ) : null}
@@ -260,11 +439,20 @@ export function StructureTab({
           </Button>
           <Button
             variant="contained"
-            onClick={onNextToGroups}
-            disabled={!canSaveSelectedCategorySetup || (selectedConfig?.structureMode === "groups_knockout" && !hasGroupStructureConfig)}
+            onClick={async () => {
+              const saved = await persistStructure();
+              if (!saved) return;
+              onNextToGroups();
+            }}
+            disabled={
+              submitting ||
+              !canSaveSelectedCategorySetup ||
+              (config.structureMode === "groups_knockout" &&
+                !hasGroupStructureConfig)
+            }
             sx={{ borderRadius: 999 }}
           >
-            Next: Groups & Brackets
+            {submitting ? "Saving..." : "Next: Groups & Brackets"}
           </Button>
         </Stack>
       </CardContent>
