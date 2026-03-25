@@ -21,6 +21,8 @@ import type { FormErrors, SignupForm } from "../Utils/FormTypes";
 import { validateInput } from "../Utils/FormValidationUtil";
 import Logo from "../assets/onora.png";
 
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+
 export default function SignupPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -78,8 +80,8 @@ export default function SignupPage() {
       };
 
       const signupUrl = inviteTournamentId
-        ? `/login/signup?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
-        : "/login/signup";
+        ? `${API_URL}/login/signup?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+        : `${API_URL}/login/signup`;
 
       const res = await fetch(signupUrl, {
         method: "POST",

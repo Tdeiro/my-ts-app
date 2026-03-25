@@ -14,6 +14,8 @@ import {
 import Logo from "../assets/onora.png";
 import { setToken } from "../auth/tokens";
 
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -36,8 +38,8 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const signinUrl = inviteTournamentId
-        ? `/login/signin?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
-        : "/login/signin";
+        ? `${API_URL}/login/signin?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+        : `${API_URL}/login/signin`;
 
       const res = await fetch(signinUrl, {
         method: "POST",

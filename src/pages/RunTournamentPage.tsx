@@ -107,15 +107,60 @@ type ApiMatchDto = {
     awayScore?: number | string;
     winnerTeamId?: number | string;
     completedAt?: string;
+    phases?: Array<{
+      phaseId?: number | string;
+      phaseType?: string;
+      phaseNumber?: number | string;
+      scores?: Array<{
+        phaseId?: number | string;
+        teamId?: number | string;
+        score?: number | string;
+      }>;
+    }>;
+    tiebreakRequired?: boolean;
+    tiebreak?: {
+      scores?: Array<{
+        matchId?: number | string;
+        teamId?: number | string;
+        points?: number | string;
+      }>;
+    };
   };
 };
 
-type ApiMatchResultDto = {
+type ApiMatchPhaseDto = {
+  id?: number | string;
   matchId?: number | string;
-  homeScore?: number | string;
-  awayScore?: number | string;
-  winnerTeamId?: number | string;
-  completedAt?: string;
+  phaseType?: string;
+  phaseNumber?: number | string;
+};
+
+type ApiMatchPhaseScoreDto = {
+  phaseId?: number | string;
+  teamId?: number | string;
+  score?: number | string;
+};
+
+type ApiMatchTiebreakDto = {
+  matchId?: number | string;
+  teamId?: number | string;
+  points?: number | string;
+};
+
+type ApiGroupStandingDto = {
+  groupId?: number | string;
+  teamId?: number | string;
+  played?: number | string;
+  wins?: number | string;
+  draws?: number | string;
+  losses?: number | string;
+  goalsFor?: number | string;
+  goalsAgainst?: number | string;
+  setsWon?: number | string;
+  setsLost?: number | string;
+  gamesWon?: number | string;
+  gamesLost?: number | string;
+  points?: number | string;
 };
 
 type GroupDto = {
@@ -141,7 +186,21 @@ type RunMatch = {
   status: string;
   homeScore?: number;
   awayScore?: number;
+  winnerTeamId?: number;
+  completedAt?: string;
   resultExists?: boolean;
+  phases: Array<{
+    phaseId?: number;
+    phaseType: string;
+    phaseNumber: number;
+    homeScore?: number;
+    awayScore?: number;
+  }>;
+  tiebreakRequired: boolean;
+  tiebreakScore?: {
+    home?: number;
+    away?: number;
+  };
 };
 
 type StandingsRow = {
@@ -151,10 +210,24 @@ type StandingsRow = {
   wins: number;
   draws: number;
   losses: number;
-  gf: number;
-  ga: number;
-  gd: number;
+  setsWon: number;
+  setsLost: number;
+  gamesWon: number;
+  gamesLost: number;
   points: number;
+};
+
+type MatchPhaseDraft = {
+  phaseId?: number;
+  phaseType: string;
+  phaseNumber: number;
+  home: string;
+  away: string;
+};
+
+type MatchTiebreakDraft = {
+  home: string;
+  away: string;
 };
 
 type OperationsTab = "matches" | "standings" | "knockout";
@@ -244,34 +317,68 @@ function getTeamDisplayName(team?: TeamDto): string {
   return `Team #${team.id}`;
 }
 
+function resolveTeamNameFromList(teams: TeamDto[], teamId: number): string {
+  const team = teams.find((entry) => Number(entry.id) === Number(teamId));
+  return getTeamDisplayName(team) || `Team #${teamId}`;
+}
+
 function normalizeRound(raw?: string): string {
   return String(raw ?? "GROUP").trim().toUpperCase() || "GROUP";
 }
 
-function makeResultKey(eventId: string, categoryId: string): string {
-  return `run_tournament_results_${eventId}_${categoryId}`;
+function createEmptyPhaseDraft(phaseNumber: number): MatchPhaseDraft {
+  return {
+    phaseType: "SET",
+    phaseNumber,
+    home: "",
+    away: "",
+  };
 }
 
-function loadLocalResults(eventId: string, categoryId: string): Record<string, { home: number; away: number }> {
-  try {
-    const raw = localStorage.getItem(makeResultKey(eventId, categoryId));
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
+function buildPhaseDraftsFromMatch(match: RunMatch): MatchPhaseDraft[] {
+  if (match.phases.length === 0) {
+    return [createEmptyPhaseDraft(1)];
   }
+
+  return match.phases
+    .slice()
+    .sort((a, b) => a.phaseNumber - b.phaseNumber)
+    .map((phase) => ({
+      phaseId: phase.phaseId,
+      phaseType: phase.phaseType,
+      phaseNumber: phase.phaseNumber,
+      home:
+        Number.isFinite(phase.homeScore) && typeof phase.homeScore === "number"
+          ? String(phase.homeScore)
+          : "",
+      away:
+        Number.isFinite(phase.awayScore) && typeof phase.awayScore === "number"
+          ? String(phase.awayScore)
+          : "",
+    }));
 }
 
-function saveLocalResult(
-  eventId: string,
-  categoryId: string,
-  backendMatchId: number,
-  score: { home: number; away: number },
-) {
-  const current = loadLocalResults(eventId, categoryId);
-  current[String(backendMatchId)] = score;
-  localStorage.setItem(makeResultKey(eventId, categoryId), JSON.stringify(current));
+function buildTiebreakDraftFromMatch(match: RunMatch): MatchTiebreakDraft {
+  return {
+    home:
+      Number.isFinite(match.tiebreakScore?.home) && typeof match.tiebreakScore?.home === "number"
+        ? String(match.tiebreakScore.home)
+        : "",
+    away:
+      Number.isFinite(match.tiebreakScore?.away) && typeof match.tiebreakScore?.away === "number"
+        ? String(match.tiebreakScore.away)
+        : "",
+  };
+}
+
+function getPhaseScoreValue(
+  phase: RunMatch["phases"][number] | MatchPhaseDraft,
+  side: "home" | "away",
+): string | number {
+  if ("home" in phase && "away" in phase) {
+    return side === "home" ? phase.home || "-" : phase.away || "-";
+  }
+  return side === "home" ? phase.homeScore ?? "-" : phase.awayScore ?? "-";
 }
 
 export default function RunTournamentPage() {
@@ -288,6 +395,9 @@ export default function RunTournamentPage() {
   const [teamsByCategory, setTeamsByCategory] = React.useState<Record<string, TeamDto[]>>({});
   const [groupsByCategory, setGroupsByCategory] = React.useState<Record<string, GroupDto[]>>({});
   const [matchesByCategory, setMatchesByCategory] = React.useState<Record<string, RunMatch[]>>({});
+  const [standingsByCategory, setStandingsByCategory] = React.useState<
+    Record<string, Array<{ groupId: string; groupName: string; rows: StandingsRow[] }>>
+  >({});
   const [qualifiersPerGroupByCategory, setQualifiersPerGroupByCategory] =
     React.useState<Record<string, number>>({});
   const [qualifiedByCategory, setQualifiedByCategory] = React.useState<Record<string, number[]>>({});
@@ -295,12 +405,14 @@ export default function RunTournamentPage() {
 
   const [loadingCategoryOpsById, setLoadingCategoryOpsById] = React.useState<Record<string, boolean>>({});
   const [savingMatchById, setSavingMatchById] = React.useState<Record<string, boolean>>({});
+  const [savingScoreByMatchId, setSavingScoreByMatchId] = React.useState<Record<string, boolean>>({});
   const [finalizingByCategory, setFinalizingByCategory] = React.useState<Record<string, boolean>>({});
-  const [matchDraftScores, setMatchDraftScores] = React.useState<
-    Record<string, { home: string; away: string }>
+  const [expandedMatchById, setExpandedMatchById] = React.useState<Record<string, boolean>>({});
+  const [phaseDraftsByMatchId, setPhaseDraftsByMatchId] = React.useState<
+    Record<string, MatchPhaseDraft[]>
   >({});
-  const [editingCompletedByMatch, setEditingCompletedByMatch] = React.useState<
-    Record<string, boolean>
+  const [tiebreakDraftsByMatchId, setTiebreakDraftsByMatchId] = React.useState<
+    Record<string, MatchTiebreakDraft>
   >({});
 
   const groupedCategories = React.useMemo(() => {
@@ -375,7 +487,7 @@ export default function RunTournamentPage() {
         return sum + (n * (n - 1)) / 2;
       }, 0);
       const completed = catMatches.filter((match) => {
-        const isGroup = normalizeRound(match.round) === "GROUP";
+        const isGroup = normalizeRound(match.round) === "GROUP_STAGE";
         const hasResult = Number.isFinite(match.homeScore) && Number.isFinite(match.awayScore);
         return isGroup && (normalizeRound(match.status) === "COMPLETED" || hasResult);
       }).length;
@@ -392,80 +504,9 @@ export default function RunTournamentPage() {
     ? groupProgressByCategory[selectedCategory.id] ?? { done: 0, total: 0, complete: false }
     : { done: 0, total: 0, complete: false };
 
-  const standingsByGroup = React.useMemo(() => {
-    if (!selectedCategory) return [] as Array<{ groupId: string; groupName: string; rows: StandingsRow[] }>;
-
-    return selectedGroups.map((group) => {
-      const teamIds = (group.participants ?? [])
-        .map((entry) => Number(entry))
-        .filter((entry) => Number.isFinite(entry) && entry > 0);
-      const rowsMap = new Map<number, StandingsRow>();
-
-      teamIds.forEach((teamId) => {
-        rowsMap.set(teamId, {
-          teamId,
-          teamName: resolveTeamName(teamId),
-          played: 0,
-          wins: 0,
-          draws: 0,
-          losses: 0,
-          gf: 0,
-          ga: 0,
-          gd: 0,
-          points: 0,
-        });
-      });
-
-      const groupMatches = selectedMatches.filter(
-        (match) => String(match.groupId ?? "") === String(group.id) && normalizeRound(match.round) === "GROUP",
-      );
-
-      groupMatches.forEach((match) => {
-        if (!Number.isFinite(match.homeScore) || !Number.isFinite(match.awayScore)) return;
-        const home = rowsMap.get(Number(match.homeTeamId));
-        const away = rowsMap.get(Number(match.awayTeamId));
-        if (!home || !away) return;
-
-        home.played += 1;
-        away.played += 1;
-        home.gf += Number(match.homeScore);
-        home.ga += Number(match.awayScore);
-        away.gf += Number(match.awayScore);
-        away.ga += Number(match.homeScore);
-
-        if (Number(match.homeScore) > Number(match.awayScore)) {
-          home.wins += 1;
-          home.points += 3;
-          away.losses += 1;
-        } else if (Number(match.homeScore) < Number(match.awayScore)) {
-          away.wins += 1;
-          away.points += 3;
-          home.losses += 1;
-        } else {
-          home.draws += 1;
-          away.draws += 1;
-          home.points += 1;
-          away.points += 1;
-        }
-
-        home.gd = home.gf - home.ga;
-        away.gd = away.gf - away.ga;
-      });
-
-      const rows = Array.from(rowsMap.values()).sort((a, b) => {
-        if (b.points !== a.points) return b.points - a.points;
-        if (b.gd !== a.gd) return b.gd - a.gd;
-        if (b.gf !== a.gf) return b.gf - a.gf;
-        return a.teamName.localeCompare(b.teamName);
-      });
-
-      return {
-        groupId: String(group.id),
-        groupName: group.name,
-        rows,
-      };
-    });
-  }, [selectedCategory, selectedGroups, selectedMatches, resolveTeamName]);
+  const standingsByGroup = selectedCategory
+    ? standingsByCategory[selectedCategory.id] ?? []
+    : [];
 
   const currentQualifiedIds =
     selectedCategory != null ? qualifiedByCategory[selectedCategory.id] ?? [] : [];
@@ -546,7 +587,6 @@ export default function RunTournamentPage() {
         const groupsRaw = parseApiList<ApiTournamentGroup>(groupsBody);
         const teamsRaw = parseApiList<TeamDto>(teamsBody);
         const matchesRaw = parseApiList<ApiMatchDto>(matchesBody);
-        const localResults = loadLocalResults(String(id), categoryId);
 
         const normalizedGroups: GroupDto[] = groupsRaw.map((group, idx) => {
           const participantIds = Array.from(
@@ -570,118 +610,178 @@ export default function RunTournamentPage() {
         });
 
         const normalizedMatches = matchesRaw.reduce<RunMatch[]>((acc, item, idx) => {
-            const backendMatchId = Number(item.id ?? item.matchId);
-            const homeTeamId = Number(
-              item.homeTeamId ?? item.home_team_id ?? item.homeTeam?.id,
-            );
-            const awayTeamId = Number(
-              item.awayTeamId ?? item.away_team_id ?? item.awayTeam?.id,
-            );
-            if (
-              !Number.isFinite(homeTeamId) ||
-              homeTeamId <= 0 ||
-              !Number.isFinite(awayTeamId) ||
-              awayTeamId <= 0
-            ) {
-              return acc;
-            }
-
-            const groupId = Number(item.groupId ?? item.group_id ?? item.group?.id);
-            const resultHome = Number(item.result?.homeScore);
-            const resultAway = Number(item.result?.awayScore);
-            const localScore = Number.isFinite(backendMatchId) && backendMatchId > 0
-              ? localResults[String(backendMatchId)]
-              : undefined;
-
-            acc.push({
-              id: `m_${categoryId}_${Number.isFinite(backendMatchId) ? backendMatchId : idx + 1}`,
-              backendMatchId: Number.isFinite(backendMatchId) && backendMatchId > 0 ? backendMatchId : undefined,
-              categoryId,
-              groupId: Number.isFinite(groupId) && groupId > 0 ? groupId : undefined,
-              groupName: String(item.group?.name ?? "").trim() || undefined,
-              round: normalizeRound(item.round ?? item.stage ?? "GROUP"),
-              homeTeamId,
-              homeTeamName: String(item.homeTeam?.name ?? "").trim() || undefined,
-              awayTeamId,
-              awayTeamName: String(item.awayTeam?.name ?? "").trim() || undefined,
-              matchDate: String(item.matchDate ?? item.match_date ?? ""),
-              startTime: toHmTime(item.startTime ?? item.start_time),
-              venue: String(item.venue ?? item.court ?? item.field ?? "").trim(),
-              status: normalizeRound(item.status ?? item.matchStatus ?? "SCHEDULED"),
-              homeScore:
-                Number.isFinite(resultHome)
-                  ? resultHome
-                  : localScore?.home,
-              awayScore:
-                Number.isFinite(resultAway)
-                  ? resultAway
-                  : localScore?.away,
-              resultExists:
-                (Number.isFinite(resultHome) && Number.isFinite(resultAway)) ||
-                Boolean(item.result),
-            });
+          const backendMatchId = Number(item.id ?? item.matchId);
+          const homeTeamId = Number(item.homeTeamId ?? item.home_team_id ?? item.homeTeam?.id);
+          const awayTeamId = Number(item.awayTeamId ?? item.away_team_id ?? item.awayTeam?.id);
+          if (
+            !Number.isFinite(homeTeamId) ||
+            homeTeamId <= 0 ||
+            !Number.isFinite(awayTeamId) ||
+            awayTeamId <= 0
+          ) {
             return acc;
-          }, []);
+          }
 
-        let resolvedMatches = normalizedMatches;
-        const pendingResultMatches = normalizedMatches.filter(
-          (match) =>
-            Number.isFinite(Number(match.backendMatchId)) &&
-            Number(match.backendMatchId) > 0 &&
-            !match.resultExists,
-        );
-        if (pendingResultMatches.length > 0) {
-          const resultRows = await Promise.all(
-            pendingResultMatches.map(async (match) => {
-              const matchId = Number(match.backendMatchId);
-              const res = await fetch(`${API_URL}/match-results/${matchId}`, {
+          const groupId = Number(item.groupId ?? item.group_id ?? item.group?.id);
+          const resultHome = Number(item.result?.homeScore);
+          const resultAway = Number(item.result?.awayScore);
+          const winnerTeamId = Number(item.result?.winnerTeamId);
+          const phaseSummaries = Array.isArray(item.result?.phases)
+            ? item.result.phases
+                .map((phase) => {
+                  const phaseId = Number(phase.phaseId);
+                  const phaseNumber = Number(phase.phaseNumber);
+                  const scores = Array.isArray(phase.scores) ? phase.scores : [];
+                  const homePhaseScore = Number(
+                    scores.find((score) => Number(score.teamId) === homeTeamId)?.score,
+                  );
+                  const awayPhaseScore = Number(
+                    scores.find((score) => Number(score.teamId) === awayTeamId)?.score,
+                  );
+                  return {
+                    phaseId: Number.isFinite(phaseId) && phaseId > 0 ? phaseId : undefined,
+                    phaseType: String(phase.phaseType ?? "SET").trim() || "SET",
+                    phaseNumber:
+                      Number.isFinite(phaseNumber) && phaseNumber > 0
+                        ? phaseNumber
+                        : 1,
+                    homeScore:
+                      Number.isFinite(homePhaseScore) ? homePhaseScore : undefined,
+                    awayScore:
+                      Number.isFinite(awayPhaseScore) ? awayPhaseScore : undefined,
+                  };
+                })
+                .sort((a, b) => a.phaseNumber - b.phaseNumber)
+            : [];
+          const tiebreakScores = Array.isArray(item.result?.tiebreak?.scores)
+            ? item.result.tiebreak.scores
+            : [];
+          const homeTiebreakScore = Number(
+            tiebreakScores.find((score) => Number(score.teamId) === homeTeamId)?.points,
+          );
+          const awayTiebreakScore = Number(
+            tiebreakScores.find((score) => Number(score.teamId) === awayTeamId)?.points,
+          );
+
+          acc.push({
+            id: `m_${categoryId}_${Number.isFinite(backendMatchId) ? backendMatchId : idx + 1}`,
+            backendMatchId: Number.isFinite(backendMatchId) && backendMatchId > 0 ? backendMatchId : undefined,
+            categoryId,
+            groupId: Number.isFinite(groupId) && groupId > 0 ? groupId : undefined,
+            groupName: String(item.group?.name ?? "").trim() || undefined,
+            round: normalizeRound(item.round ?? item.stage ?? "GROUP_STAGE"),
+            homeTeamId,
+            homeTeamName: String(item.homeTeam?.name ?? "").trim() || undefined,
+            awayTeamId,
+            awayTeamName: String(item.awayTeam?.name ?? "").trim() || undefined,
+            matchDate: String(item.matchDate ?? item.match_date ?? ""),
+            startTime: toHmTime(item.startTime ?? item.start_time),
+            venue: String(item.venue ?? item.court ?? item.field ?? "").trim(),
+            status: normalizeRound(item.status ?? item.matchStatus ?? "SCHEDULED"),
+            homeScore: Number.isFinite(resultHome) ? resultHome : undefined,
+            awayScore: Number.isFinite(resultAway) ? resultAway : undefined,
+            winnerTeamId:
+              Number.isFinite(winnerTeamId) && winnerTeamId > 0 ? winnerTeamId : undefined,
+            completedAt: String(item.result?.completedAt ?? ""),
+            resultExists:
+              (Number.isFinite(resultHome) && Number.isFinite(resultAway)) ||
+              Boolean(item.result),
+            phases: phaseSummaries,
+            tiebreakRequired: Boolean(item.result?.tiebreakRequired),
+            tiebreakScore:
+              Number.isFinite(homeTiebreakScore) || Number.isFinite(awayTiebreakScore)
+                ? {
+                    home: Number.isFinite(homeTiebreakScore) ? homeTiebreakScore : undefined,
+                    away: Number.isFinite(awayTiebreakScore) ? awayTiebreakScore : undefined,
+                  }
+                : undefined,
+          });
+          return acc;
+        }, []);
+
+        const standingsForGroups = await Promise.all(
+          normalizedGroups.map(async (group) => {
+            const groupId = Number(group.id);
+            const rowsMap = new Map<number, StandingsRow>();
+            group.participants.forEach((entry) => {
+              const teamId = Number(entry);
+              if (!Number.isFinite(teamId) || teamId <= 0) return;
+              rowsMap.set(teamId, {
+                teamId,
+                teamName: resolveTeamNameFromList(teamsRaw, teamId),
+                played: 0,
+                wins: 0,
+                draws: 0,
+                losses: 0,
+                setsWon: 0,
+                setsLost: 0,
+                gamesWon: 0,
+                gamesLost: 0,
+                points: 0,
+              });
+            });
+
+            if (Number.isFinite(groupId) && groupId > 0) {
+              const standingsRes = await fetch(`${API_URL}/groups/${groupId}/tennis/standings`, {
                 headers: { Authorization: `Bearer ${token}` },
               });
-              if (!res.ok) return null;
-              const body = await res.json().catch(() => null);
-              const payload: ApiMatchResultDto | null = body?.data ?? body;
-              if (!payload) return null;
-              const homeScore = Number(payload.homeScore);
-              const awayScore = Number(payload.awayScore);
-              if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
-              return { matchId, homeScore, awayScore };
-            }),
-          );
-          const resultByMatchId = new Map(
-            resultRows
-              .filter((row): row is { matchId: number; homeScore: number; awayScore: number } => Boolean(row))
-              .map((row) => [row.matchId, row] as const),
-          );
-          resolvedMatches = normalizedMatches.map((match) => {
-            const key = Number(match.backendMatchId);
-            const hit = resultByMatchId.get(key);
-            if (!hit) return match;
+              const standingsBody = await standingsRes.json().catch(() => null);
+              if (standingsRes.ok) {
+                const standingsRaw = parseApiList<ApiGroupStandingDto>(standingsBody);
+                standingsRaw.forEach((row) => {
+                  const teamId = Number(row.teamId);
+                  if (!Number.isFinite(teamId) || teamId <= 0) return;
+                  rowsMap.set(teamId, {
+                    teamId,
+                    teamName: resolveTeamNameFromList(teamsRaw, teamId),
+                    played: Number(row.played) || 0,
+                    wins: Number(row.wins) || 0,
+                    draws: Number(row.draws) || 0,
+                    losses: Number(row.losses) || 0,
+                    setsWon: Number(row.setsWon) || 0,
+                    setsLost: Number(row.setsLost) || 0,
+                    gamesWon: Number(row.gamesWon) || 0,
+                    gamesLost: Number(row.gamesLost) || 0,
+                    points: Number(row.points) || 0,
+                  });
+                });
+              }
+            }
+
+            const rows = Array.from(rowsMap.values()).sort((a, b) => {
+              if (b.points !== a.points) return b.points - a.points;
+              const setDiffA = a.setsWon - a.setsLost;
+              const setDiffB = b.setsWon - b.setsLost;
+              if (setDiffB !== setDiffA) return setDiffB - setDiffA;
+              const gameDiffA = a.gamesWon - a.gamesLost;
+              const gameDiffB = b.gamesWon - b.gamesLost;
+              if (gameDiffB !== gameDiffA) return gameDiffB - gameDiffA;
+              return a.teamName.localeCompare(b.teamName);
+            });
+
             return {
-              ...match,
-              homeScore: hit.homeScore,
-              awayScore: hit.awayScore,
-              resultExists: true,
+              groupId: String(group.id),
+              groupName: group.name,
+              rows,
             };
-          });
-        }
+          }),
+        );
 
         setGroupsByCategory((prev) => ({ ...prev, [categoryId]: normalizedGroups }));
         setTeamsByCategory((prev) => ({ ...prev, [categoryId]: teamsRaw }));
-        setMatchesByCategory((prev) => ({ ...prev, [categoryId]: resolvedMatches }));
-
-        setMatchDraftScores((prev) => {
+        setMatchesByCategory((prev) => ({ ...prev, [categoryId]: normalizedMatches }));
+        setStandingsByCategory((prev) => ({ ...prev, [categoryId]: standingsForGroups }));
+        setPhaseDraftsByMatchId((prev) => {
           const next = { ...prev };
-          resolvedMatches.forEach((match) => {
-            next[match.id] = {
-              home:
-                Number.isFinite(match.homeScore) && typeof match.homeScore === "number"
-                  ? String(match.homeScore)
-                  : "",
-              away:
-                Number.isFinite(match.awayScore) && typeof match.awayScore === "number"
-                  ? String(match.awayScore)
-                  : "",
-            };
+          normalizedMatches.forEach((match) => {
+            next[match.id] = buildPhaseDraftsFromMatch(match);
+          });
+          return next;
+        });
+        setTiebreakDraftsByMatchId((prev) => {
+          const next = { ...prev };
+          normalizedMatches.forEach((match) => {
+            next[match.id] = buildTiebreakDraftFromMatch(match);
           });
           return next;
         });
@@ -792,117 +892,114 @@ export default function RunTournamentPage() {
     void loadCategoryOperations(selectedCategoryId);
   }, [selectedCategoryId, loadCategoryOperations]);
 
-  const upsertMatchResultViaApi = React.useCallback(
-    async (
-      token: string,
-      match: RunMatch,
-      homeScore: number,
-      awayScore: number,
-    ) => {
+  const loadMatchScoring = React.useCallback(
+    async (match: RunMatch) => {
       const matchId = Number(match.backendMatchId);
-      if (!Number.isFinite(matchId) || matchId <= 0) return false;
+      if (!Number.isFinite(matchId) || matchId <= 0) return;
 
-      const winnerTeamId =
-        homeScore === awayScore
-          ? undefined
-          : homeScore > awayScore
-            ? Number(match.homeTeamId)
-            : Number(match.awayTeamId);
-      const payload = {
-        homeScore,
-        awayScore,
-        ...(Number.isFinite(Number(winnerTeamId)) && Number(winnerTeamId) > 0
-          ? { winnerTeamId: Number(winnerTeamId) }
-          : {}),
-        completedAt: new Date().toISOString(),
-      };
-
-      const preferredMethod = match.resultExists ? "PUT" : "POST";
-      const tryRequest = async (method: "POST" | "PUT") => {
-        const url =
-          method === "POST"
-            ? `${API_URL}/match-results`
-            : `${API_URL}/match-results/${matchId}`;
-        const bodyPayload =
-          method === "POST" ? { matchId, ...payload } : payload;
-        const res = await fetch(url, {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(bodyPayload),
-        });
-        const body = await res.json().catch(() => null);
-        return { ok: res.ok, body };
-      };
-
-      const first = await tryRequest(preferredMethod);
-      if (first.ok) return true;
-
-      const fallbackMethod = preferredMethod === "POST" ? "PUT" : "POST";
-      const second = await tryRequest(fallbackMethod);
-      if (second.ok) return true;
-
-      throw new Error(
-        second.body?.message?.[0] ||
-          second.body?.error ||
-          first.body?.message?.[0] ||
-          first.body?.error ||
-          "Failed to save match result.",
-      );
-    },
-    [],
-  );
-
-  const upsertMatch = React.useCallback(
-    async (match: RunMatch, nextStatus?: string) => {
-      if (!id || !selectedCategory) return;
       const token = getToken();
       if (!token) {
         setError("Invalid session. Please sign in again.");
         return;
       }
 
-      const draft = matchDraftScores[match.id] ?? { home: "", away: "" };
-      const homeScoreRaw = draft.home.trim();
-      const awayScoreRaw = draft.away.trim();
-      const homeScore = homeScoreRaw === "" ? undefined : Number(homeScoreRaw);
-      const awayScore = awayScoreRaw === "" ? undefined : Number(awayScoreRaw);
+      try {
+        const phasesRes = await fetch(`${API_URL}/matches/${matchId}/phases`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const phasesBody = await phasesRes.json().catch(() => null);
+        if (!phasesRes.ok) {
+          throw new Error(phasesBody?.message?.[0] || phasesBody?.error || "Failed to load match phases.");
+        }
 
-      if (
-        homeScoreRaw !== "" && (!Number.isFinite(homeScore) || Number(homeScore) < 0)
-      ) {
-        setError("Home score must be a non-negative number.");
-        return;
+        const phasesRaw = parseApiList<ApiMatchPhaseDto>(phasesBody)
+          .map((phase) => ({
+            phaseId: Number(phase.id),
+            phaseType: String(phase.phaseType ?? "SET").trim() || "SET",
+            phaseNumber: Number(phase.phaseNumber) || 1,
+          }))
+          .filter((phase) => Number.isFinite(phase.phaseId) && Number.isFinite(phase.phaseId) && phase.phaseNumber > 0)
+          .sort((a, b) => a.phaseNumber - b.phaseNumber);
+
+        const phaseDrafts = await Promise.all(
+          phasesRaw.map(async (phase) => {
+            const scoresRes = await fetch(`${API_URL}/match-phases/${phase.phaseId}/scores`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const scoresBody = await scoresRes.json().catch(() => null);
+            if (!scoresRes.ok) {
+              throw new Error(scoresBody?.message?.[0] || scoresBody?.error || "Failed to load phase scores.");
+            }
+            const scoresRaw = parseApiList<ApiMatchPhaseScoreDto>(scoresBody);
+            const homeScore = Number(
+              scoresRaw.find((entry) => Number(entry.teamId) === Number(match.homeTeamId))?.score,
+            );
+            const awayScore = Number(
+              scoresRaw.find((entry) => Number(entry.teamId) === Number(match.awayTeamId))?.score,
+            );
+            return {
+              phaseId: Number(phase.phaseId),
+              phaseType: phase.phaseType,
+              phaseNumber: phase.phaseNumber,
+              home: Number.isFinite(homeScore) ? String(homeScore) : "",
+              away: Number.isFinite(awayScore) ? String(awayScore) : "",
+            };
+          }),
+        );
+
+        const tiebreakRes = await fetch(`${API_URL}/matches/${matchId}/tiebreak`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        let tiebreakDraft: MatchTiebreakDraft = { home: "", away: "" };
+        if (tiebreakRes.ok) {
+          const tiebreakBody = await tiebreakRes.json().catch(() => null);
+          const tiebreakRaw = parseApiList<ApiMatchTiebreakDto>(tiebreakBody);
+          const homePoints = Number(
+            tiebreakRaw.find((entry) => Number(entry.teamId) === Number(match.homeTeamId))?.points,
+          );
+          const awayPoints = Number(
+            tiebreakRaw.find((entry) => Number(entry.teamId) === Number(match.awayTeamId))?.points,
+          );
+          tiebreakDraft = {
+            home: Number.isFinite(homePoints) ? String(homePoints) : "",
+            away: Number.isFinite(awayPoints) ? String(awayPoints) : "",
+          };
+        }
+
+        setPhaseDraftsByMatchId((prev) => ({
+          ...prev,
+          [match.id]: phaseDrafts.length > 0 ? phaseDrafts : [createEmptyPhaseDraft(1)],
+        }));
+        setTiebreakDraftsByMatchId((prev) => ({ ...prev, [match.id]: tiebreakDraft }));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load match scoring.");
       }
-      if (
-        awayScoreRaw !== "" && (!Number.isFinite(awayScore) || Number(awayScore) < 0)
-      ) {
-        setError("Away score must be a non-negative number.");
-        return;
+    },
+    [],
+  );
+
+  const toggleMatchScoring = React.useCallback(
+    async (match: RunMatch) => {
+      const nextExpanded = !expandedMatchById[match.id];
+      setExpandedMatchById((prev) => ({ ...prev, [match.id]: nextExpanded }));
+      if (nextExpanded) {
+        await loadMatchScoring(match);
       }
-      if (
-        (homeScoreRaw === "" && awayScoreRaw !== "") ||
-        (homeScoreRaw !== "" && awayScoreRaw === "")
-      ) {
-        setError("Enter both Home and Away scores.");
-        return;
-      }
-      if (nextStatus === "COMPLETED" && (homeScore == null || awayScore == null)) {
-        setError("Enter both scores before completing the match.");
+    },
+    [expandedMatchById, loadMatchScoring],
+  );
+
+  const upsertMatch = React.useCallback(
+    async (match: RunMatch, nextStatus?: string) => {
+      if (!selectedCategory) return;
+      const token = getToken();
+      if (!token) {
+        setError("Invalid session. Please sign in again.");
         return;
       }
 
       setSavingMatchById((prev) => ({ ...prev, [match.id]: true }));
       setError(null);
-
-      const updated: RunMatch = {
-        ...match,
-        status: normalizeRound(nextStatus ?? match.status),
-        homeScore,
-        awayScore,
-      };
 
       try {
         if (Number.isFinite(Number(match.backendMatchId)) && Number(match.backendMatchId) > 0) {
@@ -933,39 +1030,10 @@ export default function RunTournamentPage() {
           }
         }
 
-        if (homeScore != null && awayScore != null) {
-          await upsertMatchResultViaApi(token, match, Number(homeScore), Number(awayScore));
-        }
-
-        if (
-          Number.isFinite(Number(updated.backendMatchId)) &&
-          Number(updated.backendMatchId) > 0 &&
-          homeScore != null &&
-          awayScore != null
-        ) {
-          saveLocalResult(String(id), selectedCategoryId, Number(updated.backendMatchId), {
-            home: Number(homeScore),
-            away: Number(awayScore),
-          });
-        }
-
-        setMatchesByCategory((prev) => ({
-          ...prev,
-          [selectedCategoryId]: (prev[selectedCategoryId] ?? []).map((item) =>
-            item.id === match.id
-              ? {
-                  ...updated,
-                  resultExists:
-                    item.resultExists ||
-                    (homeScore != null && awayScore != null),
-                }
-              : item,
-          ),
-        }));
-
+        await loadCategoryOperations(selectedCategoryId);
         setStatusMessage(
-          normalizeRound(nextStatus ?? match.status) === "COMPLETED"
-            ? "Match completed and standings updated."
+          normalizeRound(nextStatus ?? match.status) === "IN_PROGRESS"
+            ? "Match started."
             : "Match updated.",
         );
       } catch (err) {
@@ -974,7 +1042,145 @@ export default function RunTournamentPage() {
         setSavingMatchById((prev) => ({ ...prev, [match.id]: false }));
       }
     },
-    [id, matchDraftScores, selectedCategory, selectedCategoryId, upsertMatchResultViaApi],
+    [loadCategoryOperations, selectedCategory, selectedCategoryId],
+  );
+
+  const saveMatchScoring = React.useCallback(
+    async (match: RunMatch) => {
+      const token = getToken();
+      const matchId = Number(match.backendMatchId);
+      if (!token || !Number.isFinite(matchId) || matchId <= 0) {
+        setError("Invalid session or match.");
+        return;
+      }
+
+      const phaseDrafts = phaseDraftsByMatchId[match.id] ?? [createEmptyPhaseDraft(1)];
+      const tiebreakDraft = tiebreakDraftsByMatchId[match.id] ?? { home: "", away: "" };
+
+      if (phaseDrafts.length === 0) {
+        setError("Add at least one set before saving scores.");
+        return;
+      }
+
+      for (const phase of phaseDrafts) {
+        const homeRaw = phase.home.trim();
+        const awayRaw = phase.away.trim();
+        if (!homeRaw || !awayRaw) {
+          setError(`Enter both scores for Set ${phase.phaseNumber}.`);
+          return;
+        }
+        const homeScore = Number(homeRaw);
+        const awayScore = Number(awayRaw);
+        if (!Number.isFinite(homeScore) || homeScore < 0 || !Number.isFinite(awayScore) || awayScore < 0) {
+          setError(`Set ${phase.phaseNumber} scores must be non-negative numbers.`);
+          return;
+        }
+      }
+
+      if ((tiebreakDraft.home.trim() && !tiebreakDraft.away.trim()) || (!tiebreakDraft.home.trim() && tiebreakDraft.away.trim())) {
+        setError("Enter both tie-break scores or leave both blank.");
+        return;
+      }
+
+      setSavingScoreByMatchId((prev) => ({ ...prev, [match.id]: true }));
+      setError(null);
+
+      try {
+        const persistedPhases: MatchPhaseDraft[] = [];
+        for (const phase of phaseDrafts.slice().sort((a, b) => a.phaseNumber - b.phaseNumber)) {
+          let phaseId = Number(phase.phaseId);
+          if (!Number.isFinite(phaseId) || phaseId <= 0) {
+            const createRes = await fetch(`${API_URL}/matches/${matchId}/phases`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                phaseType: phase.phaseType,
+                phaseNumber: phase.phaseNumber,
+              }),
+            });
+            const createBody = await createRes.json().catch(() => null);
+            if (!createRes.ok) {
+              throw new Error(createBody?.message?.[0] || createBody?.error || "Failed to create match phase.");
+            }
+            phaseId = Number(createBody?.id ?? createBody?.data?.id);
+          }
+
+          const scoresRes = await fetch(`${API_URL}/match-phases/${phaseId}/scores`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              scores: [
+                { teamId: Number(match.homeTeamId), score: Number(phase.home) },
+                { teamId: Number(match.awayTeamId), score: Number(phase.away) },
+              ],
+            }),
+          });
+          const scoresBody = await scoresRes.json().catch(() => null);
+          if (!scoresRes.ok) {
+            throw new Error(scoresBody?.message?.[0] || scoresBody?.error || "Failed to save set scores.");
+          }
+
+          persistedPhases.push({ ...phase, phaseId });
+        }
+
+        if (tiebreakDraft.home.trim() && tiebreakDraft.away.trim()) {
+          const tiebreakRes = await fetch(`${API_URL}/matches/${matchId}/tiebreak`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              scores: [
+                { teamId: Number(match.homeTeamId), points: Number(tiebreakDraft.home) },
+                { teamId: Number(match.awayTeamId), points: Number(tiebreakDraft.away) },
+              ],
+            }),
+          });
+          const tiebreakBody = await tiebreakRes.json().catch(() => null);
+          if (!tiebreakRes.ok) {
+            throw new Error(tiebreakBody?.message?.[0] || tiebreakBody?.error || "Failed to save tie-break.");
+          }
+        } else if (match.tiebreakScore?.home != null || match.tiebreakScore?.away != null) {
+          await fetch(`${API_URL}/matches/${matchId}/tiebreak`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        }
+
+        const recalcRes = await fetch(`${API_URL}/matches/${matchId}/tennis/result/recalculate`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const recalcBody = await recalcRes.json().catch(() => null);
+        if (!recalcRes.ok) {
+          throw new Error(recalcBody?.message?.[0] || recalcBody?.error || "Failed to recalculate match result.");
+        }
+
+        setPhaseDraftsByMatchId((prev) => ({ ...prev, [match.id]: persistedPhases }));
+
+        if (Number.isFinite(Number(match.groupId)) && Number(match.groupId) > 0) {
+          await fetch(`${API_URL}/groups/${Number(match.groupId)}/tennis/standings/recalculate`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        }
+
+        await loadCategoryOperations(selectedCategoryId);
+        setStatusMessage("Set scores saved and match result recalculated.");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save match scoring.");
+      } finally {
+        setSavingScoreByMatchId((prev) => ({ ...prev, [match.id]: false }));
+      }
+    },
+    [loadCategoryOperations, phaseDraftsByMatchId, selectedCategoryId, tiebreakDraftsByMatchId],
   );
 
   const finalizeGroupPhase = React.useCallback(async () => {
@@ -987,23 +1193,77 @@ export default function RunTournamentPage() {
     setError(null);
     setFinalizingByCategory((prev) => ({ ...prev, [selectedCategory.id]: true }));
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const token = getToken();
+      if (!token) {
+        throw new Error("Invalid session. Please sign in again.");
+      }
+
+      const recalculatedStandings: Array<{ groupId: string; groupName: string; rows: StandingsRow[] }> = [];
+      for (const group of selectedGroups) {
+        const groupId = Number(group.id);
+        if (!Number.isFinite(groupId) || groupId <= 0) continue;
+        const standingsRes = await fetch(`${API_URL}/groups/${groupId}/tennis/standings/recalculate`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const standingsBody = await standingsRes.json().catch(() => null);
+        if (!standingsRes.ok) {
+          throw new Error(
+            standingsBody?.message?.[0] || standingsBody?.error || "Failed to recalculate standings.",
+          );
+        }
+        const rows = parseApiList<ApiGroupStandingDto>(standingsBody)
+          .map((row) => {
+            const teamId = Number(row.teamId);
+            return {
+              teamId,
+              teamName: resolveTeamNameFromList(selectedTeams, teamId),
+              played: Number(row.played) || 0,
+              wins: Number(row.wins) || 0,
+              draws: Number(row.draws) || 0,
+              losses: Number(row.losses) || 0,
+              setsWon: Number(row.setsWon) || 0,
+              setsLost: Number(row.setsLost) || 0,
+              gamesWon: Number(row.gamesWon) || 0,
+              gamesLost: Number(row.gamesLost) || 0,
+              points: Number(row.points) || 0,
+            };
+          })
+          .filter((row) => Number.isFinite(row.teamId) && row.teamId > 0);
+        recalculatedStandings.push({
+          groupId: String(group.id),
+          groupName: group.name,
+          rows,
+        });
+      }
+
+      await loadCategoryOperations(String(selectedCategory.id));
 
       const qualified: number[] = [];
-      standingsByGroup.forEach((group) => {
+      recalculatedStandings.forEach((group) => {
         group.rows.slice(0, currentQualifiersPerGroup).forEach((row) => {
           qualified.push(row.teamId);
         });
       });
 
+      setStandingsByCategory((prev) => ({ ...prev, [String(selectedCategory.id)]: recalculatedStandings }));
       setQualifiedByCategory((prev) => ({ ...prev, [selectedCategory.id]: qualified }));
       setFinalizedByCategory((prev) => ({ ...prev, [selectedCategory.id]: true }));
       setOperationsTab("knockout");
       setStatusMessage("Group phase finalized. Qualified teams are ready for knockout.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to finalize group phase.");
     } finally {
       setFinalizingByCategory((prev) => ({ ...prev, [selectedCategory.id]: false }));
     }
-  }, [currentQualifiersPerGroup, selectedCategory, selectedGroupProgress.complete, standingsByGroup]);
+  }, [
+    currentQualifiersPerGroup,
+    loadCategoryOperations,
+    selectedCategory,
+    selectedGroupProgress.complete,
+    selectedGroups,
+    selectedTeams,
+  ]);
 
   const selectedCategoryLoading = Boolean(loadingCategoryOpsById[selectedCategoryId]);
   const selectedCategoryFinalized = Boolean(
@@ -1308,56 +1568,45 @@ export default function RunTournamentPage() {
                             No matches found for this category. Go back to Setup and create schedule.
                           </Alert>
                         ) : (
-                          <Box
-                            sx={{
-                              maxHeight: { xs: 520, md: 620 },
-                              overflowY: "auto",
-                              pr: 0.5,
-                            }}
-                          >
-                            <Stack spacing={1.25}>
-                            {selectedMatches.map((match) => {
-                              const draft = matchDraftScores[match.id] ?? {
-                                home:
-                                  Number.isFinite(match.homeScore) && typeof match.homeScore === "number"
-                                    ? String(match.homeScore)
-                                    : "",
-                                away:
-                                  Number.isFinite(match.awayScore) && typeof match.awayScore === "number"
-                                    ? String(match.awayScore)
-                                    : "",
-                              };
+                          <Stack spacing={1.25}>
+                            <Alert severity="info">
+                              Record tennis results by set. Save set scores to recalculate the match result and refresh standings.
+                            </Alert>
+                            <Box
+                              sx={{
+                                maxHeight: { xs: 520, md: 620 },
+                                overflowY: "auto",
+                                pr: 0.5,
+                              }}
+                            >
+                              <Stack spacing={1.25}>
+                              {selectedMatches.map((match) => {
+                              const phaseDrafts = phaseDraftsByMatchId[match.id] ?? buildPhaseDraftsFromMatch(match);
+                              const tiebreakDraft = tiebreakDraftsByMatchId[match.id] ?? buildTiebreakDraftFromMatch(match);
                               const saving = Boolean(savingMatchById[match.id]);
+                              const savingScores = Boolean(savingScoreByMatchId[match.id]);
+                              const expanded = Boolean(expandedMatchById[match.id]);
                               const isCompleted = normalizeRound(match.status) === "COMPLETED";
-                              const showEditor = !isCompleted || Boolean(editingCompletedByMatch[match.id]);
-                              const homeScoreValue =
-                                draft.home.trim() !== "" ? Number(draft.home) : match.homeScore;
-                              const awayScoreValue =
-                                draft.away.trim() !== "" ? Number(draft.away) : match.awayScore;
                               const hasScore =
-                                Number.isFinite(Number(homeScoreValue)) &&
-                                Number.isFinite(Number(awayScoreValue));
-                              const winnerLabel = hasScore
-                                ? Number(homeScoreValue) === Number(awayScoreValue)
-                                  ? "Draw"
-                                  : Number(homeScoreValue) > Number(awayScoreValue)
-                                    ? resolveTeamName(match.homeTeamId, match.homeTeamName)
-                                    : resolveTeamName(match.awayTeamId, match.awayTeamName)
+                                Number.isFinite(Number(match.homeScore)) &&
+                                Number.isFinite(Number(match.awayScore));
+                              const winnerLabel = Number.isFinite(Number(match.winnerTeamId))
+                                ? resolveTeamName(match.winnerTeamId)
                                 : null;
                               return (
                                 <Box
                                   key={match.id}
                                   sx={{
-                                    p: 1.5,
-                                    borderRadius: "12px",
+                                    p: { xs: 1.25, md: 1.5 },
+                                    borderRadius: "16px",
                                     border: isCompleted
                                       ? "1px solid #BBF7D0"
                                       : "1px solid #E5E7EB",
                                     bgcolor: isCompleted ? "#F0FDF4" : "#FFFFFF",
+                                    boxShadow: "0 1px 2px rgba(16, 24, 40, 0.04)",
                                   }}
                                 >
-                                  <Stack spacing={1.25}
-                                  >
+                                  <Stack spacing={1.25}>
                                     <Stack
                                       direction={{ xs: "column", md: "row" }}
                                       spacing={0.8}
@@ -1466,94 +1715,76 @@ export default function RunTournamentPage() {
                                       </Box>
                                     </Box>
 
-                                    {isCompleted && !showEditor ? (
+                                    <Box
+                                      sx={{
+                                        display: "grid",
+                                        gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) auto" },
+                                        gap: 1.25,
+                                        alignItems: "start",
+                                      }}
+                                    >
                                       <Stack
-                                        direction={{ xs: "column", md: "row" }}
                                         spacing={1}
-                                        alignItems={{ md: "center" }}
-                                        justifyContent="space-between"
                                         sx={{
-                                          p: 1,
-                                          borderRadius: "10px",
-                                          bgcolor: "#ECFDF3",
-                                          border: "1px solid #A6F4C5",
+                                          p: 1.1,
+                                          borderRadius: "12px",
+                                          bgcolor: isCompleted ? "#ECFDF3" : "#F8FAFC",
+                                          border: isCompleted ? "1px solid #A6F4C5" : "1px solid #E5E7EB",
                                         }}
                                       >
-                                        <Box>
-                                          <Typography
-                                            sx={{ fontWeight: 800, color: "#027A48", fontSize: "1rem" }}
-                                          >
-                                            {hasScore ? `${homeScoreValue} - ${awayScoreValue}` : "Score Pending"}
-                                          </Typography>
-                                          <Typography sx={{ color: "#067647", fontSize: "0.84rem" }}>
-                                            {winnerLabel ? `Winner: ${winnerLabel}` : "No winner yet"}
-                                          </Typography>
-                                        </Box>
-                                        <Button
-                                          variant="outlined"
-                                          size="small"
-                                          onClick={() =>
-                                            setEditingCompletedByMatch((prev) => ({
-                                              ...prev,
-                                              [match.id]: true,
-                                            }))
-                                          }
-                                          sx={{ borderRadius: "8px", textTransform: "none" }}
-                                        >
-                                          Edit Result
-                                        </Button>
-                                      </Stack>
-                                    ) : (
-                                      <Stack
-                                        direction={{ xs: "column", lg: "row" }}
-                                        spacing={1}
-                                        alignItems={{ lg: "center" }}
-                                        justifyContent="space-between"
-                                      >
-                                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                                          <TextField
+                                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                          <Chip
                                             size="small"
-                                            label="Home"
-                                            type="number"
-                                            value={draft.home}
-                                            onChange={(e) =>
-                                              setMatchDraftScores((prev) => ({
-                                                ...prev,
-                                                [match.id]: { ...draft, home: e.target.value },
-                                              }))
-                                            }
-                                            sx={{ width: 102 }}
-                                            inputProps={{ min: 0 }}
+                                            color={isCompleted ? "success" : normalizeRound(match.status) === "IN_PROGRESS" ? "warning" : "default"}
+                                            label={normalizeRound(match.status).replaceAll("_", " ")}
                                           />
-                                          <TextField
-                                            size="small"
-                                            label="Away"
-                                            type="number"
-                                            value={draft.away}
-                                            onChange={(e) =>
-                                              setMatchDraftScores((prev) => ({
-                                                ...prev,
-                                                [match.id]: { ...draft, away: e.target.value },
-                                              }))
-                                            }
-                                            sx={{ width: 102 }}
-                                            inputProps={{ min: 0 }}
-                                          />
+                                          {(match.phases.length > 0 ? match.phases : phaseDrafts)
+                                            .slice()
+                                            .sort((a, b) => a.phaseNumber - b.phaseNumber)
+                                            .map((phase) => (
+                                              <Chip
+                                                key={`${match.id}-set-${phase.phaseId ?? phase.phaseNumber}`}
+                                                size="small"
+                                                variant="outlined"
+                                                label={`Set ${phase.phaseNumber}: ${getPhaseScoreValue(phase, "home")}-${getPhaseScoreValue(phase, "away")}`}
+                                              />
+                                            ))}
+                                          {match.tiebreakRequired || tiebreakDraft.home || tiebreakDraft.away ? (
+                                            <Chip
+                                              size="small"
+                                              variant="outlined"
+                                              label={`Tie-break: ${tiebreakDraft.home || match.tiebreakScore?.home || "-"}-${tiebreakDraft.away || match.tiebreakScore?.away || "-"}`}
+                                            />
+                                          ) : null}
                                         </Stack>
+                                        <Typography sx={{ color: "#667085", fontSize: "0.84rem" }}>
+                                          {hasScore
+                                            ? winnerLabel
+                                              ? `Result: ${match.homeScore} - ${match.awayScore}. Winner: ${winnerLabel}.`
+                                              : `Result: ${match.homeScore} - ${match.awayScore}.`
+                                            : "No result recorded yet."}
+                                        </Typography>
+                                        <Typography sx={{ color: "#667085", fontSize: "0.8rem" }}>
+                                          {expanded
+                                            ? "Enter one row per set, then save scores to recalculate the tennis result."
+                                            : "Open scoring to enter set results and complete the match through backend tennis scoring."}
+                                        </Typography>
+                                      </Stack>
 
-                                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                                          <Button
-                                            variant="outlined"
-                                            size="small"
-                                            startIcon={<SaveRoundedIcon />}
-                                            disabled={saving}
-                                            onClick={() => {
-                                              void upsertMatch(match);
-                                            }}
-                                            sx={{ borderRadius: "8px", textTransform: "none" }}
-                                          >
-                                            Save
-                                          </Button>
+                                      <Stack spacing={1} sx={{ minWidth: { lg: 220 } }}>
+                                        <Button
+                                          variant={expanded ? "contained" : "outlined"}
+                                          size="small"
+                                          startIcon={<SaveRoundedIcon />}
+                                          disabled={savingScores}
+                                          onClick={() => {
+                                            void toggleMatchScoring(match);
+                                          }}
+                                          sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
+                                        >
+                                          {expanded ? "Hide Scoring" : "Open Scoring"}
+                                        </Button>
+                                        {!isCompleted ? (
                                           <Button
                                             variant="outlined"
                                             size="small"
@@ -1561,49 +1792,181 @@ export default function RunTournamentPage() {
                                             onClick={() => {
                                               void upsertMatch(match, "IN_PROGRESS");
                                             }}
-                                            sx={{ borderRadius: "8px", textTransform: "none" }}
+                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
                                           >
-                                            Start
+                                            {normalizeRound(match.status) === "IN_PROGRESS" ? "In Progress" : "Start Match"}
                                           </Button>
+                                        ) : null}
+                                        {normalizeRound(match.status) === "IN_PROGRESS" ? (
                                           <Button
-                                            variant="contained"
+                                            variant="text"
                                             size="small"
                                             disabled={saving}
                                             onClick={() => {
-                                              setEditingCompletedByMatch((prev) => ({
-                                                ...prev,
-                                                [match.id]: false,
-                                              }));
-                                              void upsertMatch(match, "COMPLETED");
+                                              void upsertMatch(match, "SCHEDULED");
                                             }}
-                                            sx={{ borderRadius: "8px", textTransform: "none" }}
+                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
                                           >
-                                            Complete
+                                            Move Back To Scheduled
                                           </Button>
-                                          {isCompleted ? (
-                                            <Button
-                                              variant="text"
+                                        ) : null}
+                                      </Stack>
+                                    </Box>
+
+                                    {expanded ? (
+                                      <Stack
+                                        spacing={1}
+                                        sx={{
+                                          p: 1.1,
+                                          borderRadius: "12px",
+                                          border: "1px solid #E5E7EB",
+                                          bgcolor: "#FFFFFF",
+                                        }}
+                                      >
+                                        {phaseDrafts.map((phase, phaseIndex) => (
+                                          <Box
+                                            key={`${match.id}-draft-phase-${phase.phaseId ?? phase.phaseNumber}`}
+                                            sx={{
+                                              display: "grid",
+                                              gridTemplateColumns: { xs: "1fr", md: "140px 1fr 1fr" },
+                                              gap: 1,
+                                              alignItems: "center",
+                                            }}
+                                          >
+                                            <Typography sx={{ fontWeight: 700, color: "#344054" }}>
+                                              Set {phase.phaseNumber}
+                                            </Typography>
+                                            <TextField
                                               size="small"
-                                              onClick={() =>
-                                                setEditingCompletedByMatch((prev) => ({
+                                              label={resolveTeamName(match.homeTeamId, match.homeTeamName)}
+                                              type="number"
+                                              value={phase.home}
+                                              onChange={(e) =>
+                                                setPhaseDraftsByMatchId((prev) => ({
                                                   ...prev,
-                                                  [match.id]: false,
+                                                  [match.id]: (prev[match.id] ?? phaseDrafts).map((entry, idx) =>
+                                                    idx === phaseIndex ? { ...entry, home: e.target.value } : entry,
+                                                  ),
                                                 }))
                                               }
-                                              sx={{ borderRadius: "8px", textTransform: "none" }}
-                                            >
-                                              Cancel
-                                            </Button>
+                                              inputProps={{ min: 0 }}
+                                            />
+                                            <TextField
+                                              size="small"
+                                              label={resolveTeamName(match.awayTeamId, match.awayTeamName)}
+                                              type="number"
+                                              value={phase.away}
+                                              onChange={(e) =>
+                                                setPhaseDraftsByMatchId((prev) => ({
+                                                  ...prev,
+                                                  [match.id]: (prev[match.id] ?? phaseDrafts).map((entry, idx) =>
+                                                    idx === phaseIndex ? { ...entry, away: e.target.value } : entry,
+                                                  ),
+                                                }))
+                                              }
+                                              inputProps={{ min: 0 }}
+                                            />
+                                          </Box>
+                                        ))}
+
+                                        <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                                          <Button
+                                            variant="text"
+                                            size="small"
+                                            onClick={() =>
+                                              setPhaseDraftsByMatchId((prev) => ({
+                                                ...prev,
+                                                [match.id]: [
+                                                  ...(prev[match.id] ?? phaseDrafts),
+                                                  createEmptyPhaseDraft((prev[match.id] ?? phaseDrafts).length + 1),
+                                                ],
+                                              }))
+                                            }
+                                            sx={{ alignSelf: "flex-start", textTransform: "none" }}
+                                          >
+                                            Add Set
+                                          </Button>
+                                          {match.tiebreakRequired ? (
+                                            <Alert severity="warning" sx={{ py: 0 }}>
+                                              Sets are tied. Enter match tie-break points before saving again.
+                                            </Alert>
                                           ) : null}
                                         </Stack>
+
+                                        {(match.tiebreakRequired || tiebreakDraft.home || tiebreakDraft.away) ? (
+                                          <Box
+                                            sx={{
+                                              display: "grid",
+                                              gridTemplateColumns: { xs: "1fr", md: "140px 1fr 1fr" },
+                                              gap: 1,
+                                              alignItems: "center",
+                                            }}
+                                          >
+                                            <Typography sx={{ fontWeight: 700, color: "#344054" }}>
+                                              Match Tie-break
+                                            </Typography>
+                                            <TextField
+                                              size="small"
+                                              label={resolveTeamName(match.homeTeamId, match.homeTeamName)}
+                                              type="number"
+                                              value={tiebreakDraft.home}
+                                              onChange={(e) =>
+                                                setTiebreakDraftsByMatchId((prev) => ({
+                                                  ...prev,
+                                                  [match.id]: { ...(prev[match.id] ?? tiebreakDraft), home: e.target.value },
+                                                }))
+                                              }
+                                              inputProps={{ min: 0 }}
+                                            />
+                                            <TextField
+                                              size="small"
+                                              label={resolveTeamName(match.awayTeamId, match.awayTeamName)}
+                                              type="number"
+                                              value={tiebreakDraft.away}
+                                              onChange={(e) =>
+                                                setTiebreakDraftsByMatchId((prev) => ({
+                                                  ...prev,
+                                                  [match.id]: { ...(prev[match.id] ?? tiebreakDraft), away: e.target.value },
+                                                }))
+                                              }
+                                              inputProps={{ min: 0 }}
+                                            />
+                                          </Box>
+                                        ) : null}
+
+                                        <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                                          <Button
+                                            variant="contained"
+                                            size="small"
+                                            disabled={savingScores}
+                                            onClick={() => {
+                                              void saveMatchScoring(match);
+                                            }}
+                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
+                                          >
+                                            {savingScores ? "Saving Scores..." : "Save Scores"}
+                                          </Button>
+                                          <Button
+                                            variant="outlined"
+                                            size="small"
+                                            disabled={savingScores}
+                                            onClick={() =>
+                                              setExpandedMatchById((prev) => ({ ...prev, [match.id]: false }))
+                                            }
+                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
+                                          >
+                                            Close
+                                          </Button>
+                                        </Stack>
                                       </Stack>
-                                    )}
+                                    ) : null}
                                   </Stack>
                                 </Box>
                               );
-                            })}
-                            </Stack>
-                          </Box>
+                              })}
+                              </Stack>
+                            </Box>
+                          </Stack>
                         )
                       ) : null}
 
@@ -1628,9 +1991,10 @@ export default function RunTournamentPage() {
                                           "W",
                                           "D",
                                           "L",
-                                          "GF",
-                                          "GA",
-                                          "GD",
+                                          "Sets +",
+                                          "Sets -",
+                                          "Games +",
+                                          "Games -",
                                           "Pts",
                                         ].map((col) => (
                                           <Box
@@ -1667,9 +2031,10 @@ export default function RunTournamentPage() {
                                             <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.wins}</Box>
                                             <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.draws}</Box>
                                             <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.losses}</Box>
-                                            <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.gf}</Box>
-                                            <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.ga}</Box>
-                                            <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.gd}</Box>
+                                            <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.setsWon}</Box>
+                                            <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.setsLost}</Box>
+                                            <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.gamesWon}</Box>
+                                            <Box component="td" sx={{ p: 0.75, textAlign: "center" }}>{row.gamesLost}</Box>
                                             <Box component="td" sx={{ p: 0.75, textAlign: "center", fontWeight: 700 }}>
                                               {row.points}
                                             </Box>
