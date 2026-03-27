@@ -75,8 +75,23 @@ export function StructureTab({
   );
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const initialConfigSignature = React.useMemo(
+    () =>
+      JSON.stringify({
+        selectedCategoryId,
+        initialHasPersistedStructure,
+        structureMode: initialConfig?.structureMode ?? "",
+        groupCount: initialConfig?.groupCount ?? "",
+        teamsPerGroup: initialConfig?.teamsPerGroup ?? "",
+        qualifiedPerGroup: initialConfig?.qualifiedPerGroup ?? "",
+      }),
+    [initialConfig, initialHasPersistedStructure, selectedCategoryId],
+  );
+  const lastAppliedSignatureRef = React.useRef<string>(initialConfigSignature);
 
   React.useEffect(() => {
+    if (lastAppliedSignatureRef.current === initialConfigSignature) return;
+    lastAppliedSignatureRef.current = initialConfigSignature;
     setConfig(
       initialConfig ?? {
         formats: [],
@@ -86,7 +101,7 @@ export function StructureTab({
     );
     setHasPersistedStructure(initialHasPersistedStructure);
     setError(null);
-  }, [initialConfig, initialHasPersistedStructure, selectedCategoryId]);
+  }, [initialConfig, initialConfigSignature, initialHasPersistedStructure, selectedCategoryId]);
 
   const hasGroupStructureConfig = React.useMemo(() => {
     if (config.structureMode !== "groups_knockout") return false;
@@ -114,6 +129,25 @@ export function StructureTab({
           Number(config.groupCount ?? 0) * Number(config.teamsPerGroup ?? 0),
         )
       : 0;
+  const hasInsufficientCapacity =
+    config.structureMode === "groups_knockout" &&
+    selectedTargetTeamsForStructure > 0 &&
+    selectedCategoryTeamsCount > selectedTargetTeamsForStructure;
+  const remainingCapacity =
+    config.structureMode === "groups_knockout"
+      ? selectedTargetTeamsForStructure - selectedCategoryTeamsCount
+      : 0;
+
+  const updateGroupStructureField = React.useCallback(
+    (field: "groupCount" | "teamsPerGroup" | "qualifiedPerGroup", value: number) => {
+      setError(null);
+      setConfig((current) => ({
+        ...current,
+        [field]: value,
+      }));
+    },
+    [],
+  );
 
   const persistStructure = React.useCallback(async (): Promise<boolean> => {
     const token = getToken();
@@ -326,6 +360,12 @@ export function StructureTab({
           </Alert>
         ) : null}
 
+        {hasInsufficientCapacity ? (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Total capacity is too small for the number of teams in this category. Increase groups or teams per group before continuing.
+          </Alert>
+        ) : null}
+
         <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
           Structure
         </Typography>
@@ -390,10 +430,10 @@ export function StructureTab({
                 type="number"
                 value={config.groupCount ?? ""}
                 onChange={(e) =>
-                  setConfig((current) => ({
-                    ...current,
-                    groupCount: Math.max(1, Number(e.target.value || 0)),
-                  }))
+                  updateGroupStructureField(
+                    "groupCount",
+                    Math.max(1, Number(e.target.value || 0)),
+                  )
                 }
                 fullWidth
               />
@@ -402,10 +442,10 @@ export function StructureTab({
                 type="number"
                 value={config.teamsPerGroup ?? ""}
                 onChange={(e) =>
-                  setConfig((current) => ({
-                    ...current,
-                    teamsPerGroup: Math.max(2, Number(e.target.value || 0)),
-                  }))
+                  updateGroupStructureField(
+                    "teamsPerGroup",
+                    Math.max(2, Number(e.target.value || 0)),
+                  )
                 }
                 fullWidth
               />
@@ -414,14 +454,30 @@ export function StructureTab({
                 type="number"
                 value={config.qualifiedPerGroup ?? ""}
                 onChange={(e) =>
-                  setConfig((current) => ({
-                    ...current,
-                    qualifiedPerGroup: Math.max(1, Number(e.target.value || 0)),
-                  }))
+                  updateGroupStructureField(
+                    "qualifiedPerGroup",
+                    Math.max(1, Number(e.target.value || 0)),
+                  )
                 }
                 fullWidth
               />
             </Stack>
+            <Typography
+              variant="caption"
+              sx={{
+                mt: 1,
+                display: "block",
+                color: hasInsufficientCapacity ? "#B42318" : "#475467",
+                fontWeight: hasInsufficientCapacity ? 700 : 500,
+              }}
+            >
+              Capacity: {selectedTargetTeamsForStructure} team slots for {selectedCategoryTeamsCount} registered teams.
+              {hasInsufficientCapacity
+                ? ` Add ${Math.abs(remainingCapacity)} more slot${Math.abs(remainingCapacity) === 1 ? "" : "s"} to continue.`
+                : remainingCapacity > 0
+                  ? ` ${remainingCapacity} slot${remainingCapacity === 1 ? "" : "s"} remaining.`
+                  : " Capacity is exactly full."}
+            </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
               Groups and bracket will be prepared in the Groups & Brackets tab.
             </Typography>
@@ -448,7 +504,7 @@ export function StructureTab({
               submitting ||
               !canSaveSelectedCategorySetup ||
               (config.structureMode === "groups_knockout" &&
-                !hasGroupStructureConfig)
+                (!hasGroupStructureConfig || hasInsufficientCapacity))
             }
             sx={{ borderRadius: 999 }}
           >

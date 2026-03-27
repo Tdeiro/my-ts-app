@@ -29,6 +29,54 @@ import { parseTournamentCategoriesResponse } from "../Utils/tournamentCategories
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
+type RunTournamentUiState = {
+  finalizedByCategory: Record<string, boolean>;
+  qualifiedByCategory: Record<string, number[]>;
+  knockoutByesByCategory: Record<
+    string,
+    Array<{
+      sourceRound: string;
+      advancesToRound: string;
+      teamIds: number[];
+      seededTeamIds: Array<{ seed: number; teamId: number }>;
+    }>
+  >;
+};
+
+function runTournamentUiStateKey(eventId: string) {
+  return `run_tournament_ui_${eventId}`;
+}
+
+function loadRunTournamentUiState(eventId: string): RunTournamentUiState {
+  try {
+    const raw = localStorage.getItem(runTournamentUiStateKey(eventId));
+    if (!raw) {
+      return { finalizedByCategory: {}, qualifiedByCategory: {}, knockoutByesByCategory: {} };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      finalizedByCategory:
+        parsed?.finalizedByCategory && typeof parsed.finalizedByCategory === "object"
+          ? parsed.finalizedByCategory
+          : {},
+      qualifiedByCategory:
+        parsed?.qualifiedByCategory && typeof parsed.qualifiedByCategory === "object"
+          ? parsed.qualifiedByCategory
+          : {},
+      knockoutByesByCategory:
+        parsed?.knockoutByesByCategory && typeof parsed.knockoutByesByCategory === "object"
+          ? parsed.knockoutByesByCategory
+          : {},
+    };
+  } catch {
+    return { finalizedByCategory: {}, qualifiedByCategory: {}, knockoutByesByCategory: {} };
+  }
+}
+
+function saveRunTournamentUiState(eventId: string, state: RunTournamentUiState) {
+  localStorage.setItem(runTournamentUiStateKey(eventId), JSON.stringify(state));
+}
+
 function prettifyDisplayName(raw?: string): string {
   const source = String(raw ?? "").trim();
   if (!source) return "";
@@ -179,6 +227,23 @@ type ApiGroupStandingDto = {
   points?: number | string;
 };
 
+type ApiKnockoutRoundCreateResponse = {
+  categoryId?: number | string;
+  round?: string;
+  qualifiedTeams?: number | string;
+  bracketSize?: number | string;
+  byes?: number | string;
+  autoAdvancedTeams?: Array<{
+    seed?: number | string;
+    advancesToRound?: string;
+    team?: {
+      id?: number | string;
+      name?: string;
+    };
+  }>;
+  createdMatches?: ApiMatchDto[];
+};
+
 type GroupDto = {
   id: string;
   name: string;
@@ -244,6 +309,20 @@ type MatchPhaseDraft = {
 type MatchTiebreakDraft = {
   home: string;
   away: string;
+};
+
+type KnockoutScheduleDraft = {
+  matchDate: string;
+  startTime: string;
+  venue: string;
+  bufferMinutes: string;
+};
+
+type KnockoutByeSummary = {
+  sourceRound: string;
+  advancesToRound: string;
+  teamIds: number[];
+  seededTeamIds: Array<{ seed: number; teamId: number }>;
 };
 
 type OperationsTab = "matches" | "standings" | "knockout";
@@ -397,6 +476,47 @@ function getPhaseScoreValue(
   return side === "home" ? phase.homeScore ?? "-" : phase.awayScore ?? "-";
 }
 
+const KNOCKOUT_ROUNDS = ["QUARTERFINAL", "SEMIFINAL", "FINAL"] as const;
+
+function getRoundLabel(round: string): string {
+  const normalized = normalizeRound(round);
+  if (normalized === "QUARTERFINAL") return "Quarterfinal";
+  if (normalized === "SEMIFINAL") return "Semifinal";
+  if (normalized === "FINAL") return "Final";
+  return normalized.replaceAll("_", " ");
+}
+
+function getNextKnockoutRound(round: string): string | null {
+  const normalized = normalizeRound(round);
+  if (normalized === "QUARTERFINAL") return "SEMIFINAL";
+  if (normalized === "SEMIFINAL") return "FINAL";
+  return null;
+}
+
+function getFirstKnockoutRound(qualifiedTeams: number): string | null {
+  if (!Number.isInteger(qualifiedTeams) || qualifiedTeams < 2) return null;
+  let bracketSize = 1;
+  while (bracketSize < qualifiedTeams) {
+    bracketSize <<= 1;
+  }
+  if (bracketSize >= 8) return "QUARTERFINAL";
+  if (bracketSize >= 4) return "SEMIFINAL";
+  return "FINAL";
+}
+
+function formatMinutesToTime(totalMinutes: number): string {
+  const safe = Math.max(0, Math.min(24 * 60 - 1, Math.round(totalMinutes)));
+  const hh = Math.floor(safe / 60);
+  const mm = safe % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function toApiTime(raw?: string): string {
+  const value = String(raw ?? "").trim();
+  if (!value) return "00:00:00";
+  return value.length === 5 ? `${value}:00` : value;
+}
+
 export default function RunTournamentPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -418,10 +538,17 @@ export default function RunTournamentPage() {
     React.useState<Record<string, number>>({});
   const [qualifiedByCategory, setQualifiedByCategory] = React.useState<Record<string, number[]>>({});
   const [finalizedByCategory, setFinalizedByCategory] = React.useState<Record<string, boolean>>({});
+  const [knockoutByesByCategory, setKnockoutByesByCategory] = React.useState<
+    Record<string, KnockoutByeSummary[]>
+  >({});
 
   const [loadingCategoryOpsById, setLoadingCategoryOpsById] = React.useState<Record<string, boolean>>({});
   const [savingScoreByMatchId, setSavingScoreByMatchId] = React.useState<Record<string, boolean>>({});
   const [finalizingByCategory, setFinalizingByCategory] = React.useState<Record<string, boolean>>({});
+  const [creatingKnockoutByCategory, setCreatingKnockoutByCategory] = React.useState<Record<string, boolean>>({});
+  const [knockoutScheduleDraftByCategory, setKnockoutScheduleDraftByCategory] = React.useState<
+    Record<string, KnockoutScheduleDraft>
+  >({});
   const [expandedMatchById, setExpandedMatchById] = React.useState<Record<string, boolean>>({});
   const [phaseDraftsByMatchId, setPhaseDraftsByMatchId] = React.useState<
     Record<string, MatchPhaseDraft[]>
@@ -526,19 +653,114 @@ export default function RunTournamentPage() {
   const currentQualifiedIds =
     selectedCategory != null ? qualifiedByCategory[selectedCategory.id] ?? [] : [];
 
-  const knockoutPreviewPairs = React.useMemo(() => {
-    const ids = [...currentQualifiedIds];
-    if (ids.length < 2) return [] as Array<{ home: number; away: number }>;
-    const pairs: Array<{ home: number; away: number }> = [];
-    let left = 0;
-    let right = ids.length - 1;
-    while (left < right) {
-      pairs.push({ home: ids[left], away: ids[right] });
-      left += 1;
-      right -= 1;
+  const knockoutMatches = React.useMemo(
+    () =>
+      selectedMatches.filter(
+        (match) =>
+          (!Number.isFinite(Number(match.groupId)) || Number(match.groupId) <= 0) &&
+          KNOCKOUT_ROUNDS.includes(normalizeRound(match.round) as (typeof KNOCKOUT_ROUNDS)[number]),
+      ),
+    [selectedMatches],
+  );
+
+  const knockoutRounds = React.useMemo(() => {
+    const grouped = new Map<string, RunMatch[]>();
+    knockoutMatches.forEach((match) => {
+      const round = normalizeRound(match.round);
+      const current = grouped.get(round) ?? [];
+      grouped.set(round, [...current, match]);
+    });
+
+    return KNOCKOUT_ROUNDS.filter((round) => grouped.has(round)).map((round) => ({
+      round,
+      label: getRoundLabel(round),
+      matches: (grouped.get(round) ?? []).slice().sort((a, b) => {
+        if (a.matchDate !== b.matchDate) return String(a.matchDate).localeCompare(String(b.matchDate));
+        return parseMinutes(a.startTime) - parseMinutes(b.startTime);
+      }),
+    }));
+  }, [knockoutMatches]);
+
+  const nextKnockoutCreation = React.useMemo(() => {
+    const categoryFinalized = Boolean(selectedCategory ? finalizedByCategory[selectedCategory.id] : false);
+    if (!categoryFinalized || currentQualifiedIds.length < 2) {
+      return { round: null, reason: "Finalize the group phase first." };
     }
-    return pairs;
-  }, [currentQualifiedIds]);
+
+    if (knockoutRounds.length === 0) {
+      const firstRound = getFirstKnockoutRound(currentQualifiedIds.length);
+      return {
+        round: firstRound,
+        reason: firstRound ? null : "Need at least two qualified teams.",
+      };
+    }
+
+    const latestRound = knockoutRounds[knockoutRounds.length - 1];
+    const latestRoundComplete = latestRound.matches.every(
+      (match) => normalizeRound(match.status) === "COMPLETED" && Number.isFinite(Number(match.winnerTeamId)),
+    );
+    if (!latestRoundComplete) {
+      return {
+        round: null,
+        reason: `Complete all ${latestRound.label.toLowerCase()} matches before creating the next round.`,
+      };
+    }
+
+    const nextRound = getNextKnockoutRound(latestRound.round);
+    if (!nextRound) {
+      return {
+        round: null,
+        reason: "Knockout is already complete.",
+      };
+    }
+    if (knockoutRounds.some((entry) => entry.round === nextRound)) {
+      return {
+        round: null,
+        reason: `${getRoundLabel(nextRound)} matches already exist.`,
+      };
+    }
+
+    return {
+      round: nextRound,
+      reason: null,
+    };
+  }, [currentQualifiedIds, finalizedByCategory, knockoutRounds, selectedCategory]);
+
+  React.useEffect(() => {
+    if (!id || !selectedCategory) return;
+    const categoryId = String(selectedCategory.id);
+    const draft = loadTournamentSetup(String(id));
+    const categoryConfig = draft?.categoryConfigs?.[categoryId];
+    const latestScheduledMinutes = selectedMatches.reduce((latest, match) => {
+      const current = parseMinutes(match.startTime);
+      return Number.isFinite(current) && current !== Number.MAX_SAFE_INTEGER ? Math.max(latest, current) : latest;
+    }, parseMinutes(String(categoryConfig?.scheduleStartTime ?? "")));
+    const defaultStartMinutes =
+      latestScheduledMinutes !== Number.MAX_SAFE_INTEGER
+        ? latestScheduledMinutes + Math.max(0, Number(categoryConfig?.scheduleBufferMinutes ?? 30) || 30)
+        : parseMinutes(String(categoryConfig?.scheduleStartTime ?? "")) !== Number.MAX_SAFE_INTEGER
+          ? parseMinutes(String(categoryConfig?.scheduleStartTime ?? ""))
+          : 8 * 60;
+
+    setKnockoutScheduleDraftByCategory((prev) => {
+      if (prev[categoryId]) return prev;
+      return {
+        ...prev,
+        [categoryId]: {
+          matchDate:
+            String(categoryConfig?.scheduleDate ?? "").trim() ||
+            selectedMatches.find((match) => Boolean(match.matchDate))?.matchDate ||
+            "",
+          startTime: formatMinutesToTime(defaultStartMinutes),
+          venue:
+            String(categoryConfig?.scheduleVenue ?? "").trim() ||
+            selectedMatches.find((match) => Boolean(match.venue))?.venue ||
+            "",
+          bufferMinutes: String(Math.max(0, Number(categoryConfig?.scheduleBufferMinutes ?? 30) || 30)),
+        },
+      };
+    });
+  }, [id, selectedCategory, selectedMatches]);
 
   const liveByVenue = React.useMemo(() => {
     const active = selectedMatches
@@ -782,10 +1004,39 @@ export default function RunTournamentPage() {
           }),
         );
 
+        const completedGroupMatches = normalizedMatches.filter(
+          (match) =>
+            Number.isFinite(Number(match.groupId)) &&
+            Number(match.groupId) > 0 &&
+            normalizeRound(match.status) === "COMPLETED",
+        );
+        const totalGroupMatches = normalizedMatches.filter(
+          (match) => Number.isFinite(Number(match.groupId)) && Number(match.groupId) > 0,
+        ).length;
+        const categoryQualifiersPerGroup = Math.max(
+          1,
+          Number(qualifiersPerGroupByCategory[categoryId] ?? 1),
+        );
+        const derivedQualifiedIds =
+          totalGroupMatches > 0 && completedGroupMatches.length === totalGroupMatches
+            ? standingsForGroups.flatMap((group) =>
+                group.rows
+                  .slice(0, categoryQualifiersPerGroup)
+                  .map((row) => row.teamId)
+                  .filter((teamId) => Number.isFinite(teamId) && teamId > 0),
+              )
+            : [];
+        const derivedFinalized =
+          totalGroupMatches > 0 &&
+          completedGroupMatches.length === totalGroupMatches &&
+          derivedQualifiedIds.length > 0;
+
         setGroupsByCategory((prev) => ({ ...prev, [categoryId]: normalizedGroups }));
         setTeamsByCategory((prev) => ({ ...prev, [categoryId]: teamsRaw }));
         setMatchesByCategory((prev) => ({ ...prev, [categoryId]: normalizedMatches }));
         setStandingsByCategory((prev) => ({ ...prev, [categoryId]: standingsForGroups }));
+        setQualifiedByCategory((prev) => ({ ...prev, [categoryId]: derivedQualifiedIds }));
+        setFinalizedByCategory((prev) => ({ ...prev, [categoryId]: derivedFinalized }));
         setPhaseDraftsByMatchId((prev) => {
           const next = { ...prev };
           normalizedMatches.forEach((match) => {
@@ -806,7 +1057,7 @@ export default function RunTournamentPage() {
         setLoadingCategoryOpsById((prev) => ({ ...prev, [categoryId]: false }));
       }
     },
-    [id],
+    [id, qualifiersPerGroupByCategory],
   );
 
   React.useEffect(() => {
@@ -873,6 +1124,7 @@ export default function RunTournamentPage() {
         const loadedCategories: ApiTournamentCategory[] =
           parseTournamentCategoriesResponse(categoriesBody);
         const draft = loadTournamentSetup(String(id));
+        const persistedRunUiState = loadRunTournamentUiState(String(id));
         const qualifiersMap: Record<string, number> = {};
         (loadedCategories ?? []).forEach((cat) => {
           const cfg = draft?.categoryConfigs?.[String(cat.id)];
@@ -883,6 +1135,9 @@ export default function RunTournamentPage() {
         setEvent(selectedEvent);
         setCategories(loadedCategories);
         setQualifiersPerGroupByCategory(qualifiersMap);
+        setFinalizedByCategory(persistedRunUiState.finalizedByCategory);
+        setQualifiedByCategory(persistedRunUiState.qualifiedByCategory);
+        setKnockoutByesByCategory(persistedRunUiState.knockoutByesByCategory);
         if (loadedCategories.length > 0) {
           setSelectedCategoryId(String(loadedCategories[0].id));
         }
@@ -906,6 +1161,15 @@ export default function RunTournamentPage() {
     if (!selectedCategoryId) return;
     void loadCategoryOperations(selectedCategoryId);
   }, [selectedCategoryId, loadCategoryOperations]);
+
+  React.useEffect(() => {
+    if (!id) return;
+    saveRunTournamentUiState(String(id), {
+      finalizedByCategory,
+      qualifiedByCategory,
+      knockoutByesByCategory,
+    });
+  }, [finalizedByCategory, id, knockoutByesByCategory, qualifiedByCategory]);
 
   const loadMatchScoring = React.useCallback(
     async (match: RunMatch) => {
@@ -1161,16 +1425,27 @@ export default function RunTournamentPage() {
       for (const group of selectedGroups) {
         const groupId = Number(group.id);
         if (!Number.isFinite(groupId) || groupId <= 0) continue;
-        const standingsRes = await fetch(`${API_URL}/groups/${groupId}/tennis/standings/recalculate`, {
+        const recalcRes = await fetch(`${API_URL}/groups/${groupId}/tennis/standings/recalculate`, {
           method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const recalcBody = await recalcRes.json().catch(() => null);
+        if (!recalcRes.ok) {
+          throw new Error(
+            recalcBody?.message?.[0] || recalcBody?.error || "Failed to recalculate standings.",
+          );
+        }
+
+        const standingsRes = await fetch(`${API_URL}/groups/${groupId}/tennis/standings`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const standingsBody = await standingsRes.json().catch(() => null);
         if (!standingsRes.ok) {
           throw new Error(
-            standingsBody?.message?.[0] || standingsBody?.error || "Failed to recalculate standings.",
+            standingsBody?.message?.[0] || standingsBody?.error || "Failed to load recalculated standings.",
           );
         }
+
         const rows = parseApiList<ApiGroupStandingDto>(standingsBody)
           .map((row) => {
             const teamId = Number(row.teamId);
@@ -1196,6 +1471,10 @@ export default function RunTournamentPage() {
         });
       }
 
+      if (recalculatedStandings.length > 0 && recalculatedStandings.every((group) => group.rows.length === 0)) {
+        throw new Error("Standings recalculation returned no rows. Group phase was not finalized.");
+      }
+
       await loadCategoryOperations(String(selectedCategory.id));
 
       const qualified: number[] = [];
@@ -1205,9 +1484,14 @@ export default function RunTournamentPage() {
         });
       });
 
+      if (selectedGroups.length > 0 && qualified.length === 0) {
+        throw new Error("No qualified teams were produced from the recalculated standings.");
+      }
+
       setStandingsByCategory((prev) => ({ ...prev, [String(selectedCategory.id)]: recalculatedStandings }));
       setQualifiedByCategory((prev) => ({ ...prev, [selectedCategory.id]: qualified }));
       setFinalizedByCategory((prev) => ({ ...prev, [selectedCategory.id]: true }));
+      setKnockoutByesByCategory((prev) => ({ ...prev, [selectedCategory.id]: [] }));
       setOperationsTab("knockout");
       setStatusMessage("Group phase finalized. Qualified teams are ready for knockout.");
     } catch (err) {
@@ -1224,10 +1508,645 @@ export default function RunTournamentPage() {
     selectedTeams,
   ]);
 
+  const createNextKnockoutRound = React.useCallback(async () => {
+    if (!id || !selectedCategory || !nextKnockoutCreation.round) {
+      if (nextKnockoutCreation.reason) {
+        setError(nextKnockoutCreation.reason);
+      }
+      return;
+    }
+
+    const token = getToken();
+    if (!token) {
+      setError("Invalid session. Please sign in again.");
+      return;
+    }
+
+    const categoryId = String(selectedCategory.id);
+    const scheduleDraft = knockoutScheduleDraftByCategory[categoryId];
+    const fallbackDate = String(scheduleDraft?.matchDate ?? "").trim();
+    const fallbackVenue = String(scheduleDraft?.venue ?? "").trim();
+    const startBase = parseMinutes(String(scheduleDraft?.startTime ?? ""));
+    const bufferMinutes = Math.max(0, Number(scheduleDraft?.bufferMinutes ?? 30) || 30);
+
+    if (!fallbackDate || !fallbackVenue || startBase === Number.MAX_SAFE_INTEGER) {
+      setError("Provide knockout match date, start time, and court/field before creating the round.");
+      return;
+    }
+
+    setError(null);
+    setCreatingKnockoutByCategory((prev) => ({ ...prev, [String(selectedCategory.id)]: true }));
+    try {
+      const res = await fetch(
+        `${API_URL}/tournament-categories/${encodeURIComponent(String(selectedCategory.id))}/knockout/next-round`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            matchDate: fallbackDate,
+            startTime: toApiTime(formatMinutesToTime(startBase)),
+            venue: fallbackVenue,
+            bufferMinutes,
+          }),
+        },
+      );
+      const body: ApiKnockoutRoundCreateResponse | null = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          (Array.isArray((body as any)?.message) ? (body as any).message[0] : undefined) ||
+            (body as any)?.error ||
+            "Failed to create knockout matches.",
+        );
+      }
+
+      const autoAdvanced = parseApiList(body?.autoAdvancedTeams).map((entry) => ({
+        seed: Number(entry.seed),
+        teamId: Number(entry.team?.id),
+        advancesToRound: normalizeRound(entry.advancesToRound),
+      })).filter((entry) => Number.isFinite(entry.seed) && Number.isFinite(entry.teamId) && entry.teamId > 0);
+
+      setKnockoutByesByCategory((prev) => {
+        const current = prev[categoryId] ?? [];
+        const nextEntry: KnockoutByeSummary = {
+          sourceRound: normalizeRound(body?.round),
+          advancesToRound:
+            autoAdvanced[0]?.advancesToRound ||
+            getNextKnockoutRound(normalizeRound(body?.round)) ||
+            "FINAL",
+          teamIds: autoAdvanced.map((entry) => entry.teamId),
+          seededTeamIds: autoAdvanced.map((entry) => ({ seed: entry.seed, teamId: entry.teamId })),
+        };
+
+        const filtered = current.filter(
+          (entry) =>
+            !(
+              normalizeRound(entry.sourceRound) === normalizeRound(nextEntry.sourceRound) &&
+              normalizeRound(entry.advancesToRound) === normalizeRound(nextEntry.advancesToRound)
+            ),
+        );
+
+        return {
+          ...prev,
+          [categoryId]:
+            nextEntry.teamIds.length > 0 ? [...filtered, nextEntry] : filtered,
+        };
+      });
+
+      await loadCategoryOperations(String(selectedCategory.id));
+      setStatusMessage(
+        autoAdvanced.length > 0
+          ? `${getRoundLabel(body?.round ?? nextKnockoutCreation.round)} created. ${autoAdvanced.length} team${autoAdvanced.length === 1 ? "" : "s"} advanced by bye.`
+          : `${getRoundLabel(body?.round ?? nextKnockoutCreation.round)} matches created.`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create knockout matches.");
+    } finally {
+      setCreatingKnockoutByCategory((prev) => ({ ...prev, [String(selectedCategory.id)]: false }));
+    }
+  }, [id, knockoutScheduleDraftByCategory, loadCategoryOperations, nextKnockoutCreation, selectedCategory]);
+
   const selectedCategoryLoading = Boolean(loadingCategoryOpsById[selectedCategoryId]);
   const selectedCategoryFinalized = Boolean(
     selectedCategory ? finalizedByCategory[selectedCategory.id] : false,
   );
+  const selectedKnockoutScheduleDraft =
+    selectedCategory != null ? knockoutScheduleDraftByCategory[String(selectedCategory.id)] : undefined;
+  const activeKnockoutByes =
+    selectedCategory != null
+      ? (knockoutByesByCategory[String(selectedCategory.id)] ?? []).filter(
+          (entry) =>
+            entry.teamIds.length > 0 &&
+            !knockoutRounds.some((roundEntry) => roundEntry.round === normalizeRound(entry.advancesToRound)),
+        )
+      : [];
+
+  const renderMatchCard = (match: RunMatch) => {
+    const phaseDrafts = phaseDraftsByMatchId[match.id] ?? buildPhaseDraftsFromMatch(match);
+    const tiebreakDraft = tiebreakDraftsByMatchId[match.id] ?? buildTiebreakDraftFromMatch(match);
+    const savingScores = Boolean(savingScoreByMatchId[match.id]);
+    const expanded = Boolean(expandedMatchById[match.id]);
+    const isCompleted = normalizeRound(match.status) === "COMPLETED";
+    const statusLabel =
+      normalizeRound(match.status) === "IN_PROGRESS"
+        ? "Live"
+        : isCompleted
+          ? "Completed"
+          : "Scheduled";
+    const hasScore =
+      Number.isFinite(Number(match.homeScore)) &&
+      Number.isFinite(Number(match.awayScore));
+    const winnerLabel = Number.isFinite(Number(match.winnerTeamId))
+      ? resolveTeamName(match.winnerTeamId)
+      : null;
+    const knockoutRoundLabel =
+      !Number.isFinite(Number(match.groupId)) &&
+      KNOCKOUT_ROUNDS.includes(normalizeRound(match.round) as (typeof KNOCKOUT_ROUNDS)[number])
+        ? getRoundLabel(match.round)
+        : null;
+
+    return (
+      <Box
+        key={match.id}
+        sx={{
+          p: { xs: 1.05, md: 1.15 },
+          borderRadius: "16px",
+          border:
+            normalizeRound(match.status) === "IN_PROGRESS"
+              ? "1px solid rgba(239, 68, 68, 0.28)"
+              : "1px solid #E5E7EB",
+          background: "#FFFFFF",
+          boxShadow:
+            normalizeRound(match.status) === "IN_PROGRESS"
+              ? "0 6px 18px rgba(239, 68, 68, 0.08)"
+              : "0 1px 3px rgba(15, 23, 42, 0.08)",
+        }}
+      >
+        <Stack spacing={0.75}>
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            spacing={0.35}
+            alignItems={{ md: "center" }}
+            justifyContent="space-between"
+          >
+            <Typography
+              sx={{
+                color: "#4B5563",
+                fontSize: "0.84rem",
+                fontWeight: 500,
+                lineHeight: 1.25,
+              }}
+            >
+              {match.venue || "Venue TBD"} • {match.matchDate || "Date TBD"} •{" "}
+              {match.startTime || "Time TBD"}
+            </Typography>
+            <Stack direction="row" spacing={0.55}>
+              {match.groupId ? (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  sx={{
+                    height: 26,
+                    borderColor: "#D1D5DB",
+                    bgcolor: "#FFFFFF",
+                    fontWeight: 700,
+                    color: "#1F2937",
+                    borderRadius: "999px",
+                  }}
+                  label={
+                    match.groupName ||
+                    selectedGroups.find((group) => String(group.id) === String(match.groupId))
+                      ?.name ||
+                    `Group ${match.groupId}`
+                  }
+                />
+              ) : null}
+              {knockoutRoundLabel ? (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  sx={{
+                    height: 26,
+                    borderColor: "#C7D7FE",
+                    bgcolor: "#EEF4FF",
+                    color: "#1D4ED8",
+                    fontWeight: 700,
+                    borderRadius: "999px",
+                  }}
+                  label={knockoutRoundLabel}
+                />
+              ) : null}
+              {normalizeRound(match.status) === "IN_PROGRESS" ? (
+                <Chip
+                  size="small"
+                  sx={{
+                    height: 26,
+                    bgcolor: "#FEE2E2",
+                    color: "#B91C1C",
+                    fontWeight: 700,
+                    borderRadius: "999px",
+                  }}
+                  label="Live"
+                />
+              ) : isCompleted ? (
+                <Chip
+                  size="small"
+                  sx={{
+                    height: 26,
+                    bgcolor: "#DCFCE7",
+                    color: "#15803D",
+                    fontWeight: 700,
+                    borderRadius: "999px",
+                  }}
+                  label="Completed"
+                />
+              ) : (
+                <Chip
+                  size="small"
+                  sx={{
+                    height: 26,
+                    bgcolor: "#DBEAFE",
+                    color: "#1D4ED8",
+                    fontWeight: 700,
+                    borderRadius: "999px",
+                  }}
+                  label="Scheduled"
+                />
+              )}
+            </Stack>
+          </Stack>
+
+          <Stack spacing={0.05}>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "56px minmax(0, 1fr) auto", md: "70px minmax(0, 1fr) auto" },
+                gap: 0.75,
+                alignItems: "center",
+                py: 0.4,
+                borderBottom: "1px solid #F3F4F6",
+              }}
+            >
+              <Typography
+                sx={{
+                  fontSize: "0.68rem",
+                  color: "#6B7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  fontWeight: 600,
+                  lineHeight: 1,
+                }}
+              >
+                Home
+              </Typography>
+              <Typography
+                sx={{
+                  fontWeight: 800,
+                  color: "#101828",
+                  fontSize: { xs: "0.98rem", md: "1.03rem" },
+                  lineHeight: 1.15,
+                  letterSpacing: "-0.015em",
+                  whiteSpace: { md: "nowrap" },
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {resolveTeamName(match.homeTeamId, match.homeTeamName)}
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: { xs: "0.92rem", md: "0.98rem" },
+                  lineHeight: 1,
+                  fontWeight: 800,
+                  letterSpacing: "-0.02em",
+                  color: "#111827",
+                  minWidth: 54,
+                  textAlign: "right",
+                  px: 0.65,
+                  py: 0.45,
+                  borderRadius: "8px",
+                  bgcolor: "#F9FAFB",
+                  border: "1px solid #E5E7EB",
+                }}
+              >
+                {hasScore ? `${match.homeScore} - ${match.awayScore}` : "0 - 0"}
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "56px minmax(0, 1fr) auto", md: "70px minmax(0, 1fr) auto" },
+                gap: 0.75,
+                alignItems: "center",
+                py: 0.4,
+              }}
+            >
+              <Typography
+                sx={{
+                  fontSize: "0.68rem",
+                  color: "#6B7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  fontWeight: 600,
+                  lineHeight: 1,
+                }}
+              >
+                Away
+              </Typography>
+              <Typography
+                sx={{
+                  fontWeight: 800,
+                  color: "#101828",
+                  fontSize: { xs: "0.98rem", md: "1.03rem" },
+                  lineHeight: 1.15,
+                  letterSpacing: "-0.015em",
+                  whiteSpace: { md: "nowrap" },
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {resolveTeamName(match.awayTeamId, match.awayTeamName)}
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: { xs: "0.92rem", md: "0.98rem" },
+                  lineHeight: 1,
+                  fontWeight: 800,
+                  letterSpacing: "-0.02em",
+                  color: "#111827",
+                  minWidth: 54,
+                  textAlign: "right",
+                  px: 0.65,
+                  py: 0.45,
+                  borderRadius: "8px",
+                  bgcolor: "#F9FAFB",
+                  border: "1px solid #E5E7EB",
+                  visibility: "hidden",
+                }}
+              >
+                {hasScore ? `${match.homeScore} - ${match.awayScore}` : "0 - 0"}
+              </Typography>
+            </Box>
+          </Stack>
+
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) 200px" },
+              gap: 0.7,
+              alignItems: "stretch",
+            }}
+          >
+            <Stack
+              spacing={0.8}
+              sx={{
+                p: 0.8,
+                borderRadius: "10px",
+                bgcolor: isCompleted ? "#F0FDF4" : "#F9FAFB",
+                border: isCompleted ? "1px solid #BBF7D0" : "1px solid #F3F4F6",
+              }}
+            >
+              <Stack direction="row" spacing={0.55} flexWrap="wrap" useFlexGap>
+                <Chip
+                  size="small"
+                  label={statusLabel}
+                  sx={{
+                    height: 21,
+                    fontWeight: 700,
+                    borderRadius: "999px",
+                    bgcolor: isCompleted
+                      ? "#DCFCE7"
+                      : normalizeRound(match.status) === "IN_PROGRESS"
+                        ? "#FEE2E2"
+                        : "#DBEAFE",
+                    color: isCompleted
+                      ? "#15803D"
+                      : normalizeRound(match.status) === "IN_PROGRESS"
+                        ? "#B91C1C"
+                        : "#1D4ED8",
+                  }}
+                />
+                {(match.phases.length > 0 ? match.phases : phaseDrafts)
+                  .slice()
+                  .sort((a, b) => a.phaseNumber - b.phaseNumber)
+                  .map((phase) => (
+                    <Chip
+                      key={`${match.id}-set-${phase.phaseId ?? phase.phaseNumber}`}
+                      size="small"
+                      variant="outlined"
+                      label={`Set ${phase.phaseNumber}: ${getPhaseScoreValue(phase, "home")}-${getPhaseScoreValue(phase, "away")}`}
+                      sx={{
+                        height: 21,
+                        bgcolor: "#FFFFFF",
+                        fontWeight: 700,
+                        borderColor: "#E5E7EB",
+                        borderRadius: "999px",
+                      }}
+                    />
+                  ))}
+                {match.tiebreakRequired || tiebreakDraft.home || tiebreakDraft.away ? (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`Tie-break: ${tiebreakDraft.home || match.tiebreakScore?.home || "-"}-${tiebreakDraft.away || match.tiebreakScore?.away || "-"}`}
+                    sx={{
+                      height: 21,
+                      bgcolor: "#FFFFFF",
+                      fontWeight: 700,
+                      borderColor: "#E5E7EB",
+                      borderRadius: "999px",
+                    }}
+                  />
+                ) : null}
+              </Stack>
+              <Typography sx={{ color: "#344054", fontSize: "0.86rem", fontWeight: 700, lineHeight: 1.3 }}>
+                {hasScore
+                  ? winnerLabel
+                    ? `Result: ${match.homeScore} - ${match.awayScore}. Winner: ${winnerLabel}.`
+                    : `Result: ${match.homeScore} - ${match.awayScore}.`
+                  : "No result recorded yet."}
+              </Typography>
+              <Typography sx={{ color: "#6B7280", fontSize: "0.78rem", lineHeight: 1.35 }}>
+                {expanded
+                  ? "Enter one row per set, then save scores to recalculate the tennis result."
+                  : "Open scoring to enter set results and complete the match through backend tennis scoring."}
+              </Typography>
+            </Stack>
+
+            <Stack spacing={0.8} sx={{ minWidth: 0, justifyContent: "center" }}>
+              <Button
+                variant={expanded ? "contained" : "outlined"}
+                size="small"
+                startIcon={<SaveRoundedIcon />}
+                disabled={savingScores}
+                onClick={() => {
+                  void toggleMatchScoring(match);
+                }}
+                sx={{
+                  borderRadius: "12px",
+                  textTransform: "none",
+                  minHeight: 40,
+                  fontWeight: 800,
+                  boxShadow: expanded ? "0 1px 3px rgba(124, 58, 237, 0.18)" : "none",
+                  px: 1.35,
+                }}
+              >
+                {expanded ? "Hide Scoring" : "Open Scoring"}
+              </Button>
+            </Stack>
+          </Box>
+
+          {expanded ? (
+            <Stack
+              spacing={0.9}
+              sx={{
+                p: 0.95,
+                borderRadius: "12px",
+                border: "1px solid #E5E7EB",
+                background: "#FFFFFF",
+              }}
+            >
+              {phaseDrafts.map((phase, phaseIndex) => (
+                <Box
+                  key={`${match.id}-draft-phase-${phase.phaseId ?? phase.phaseNumber}`}
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", md: "88px minmax(0, 1fr) 20px minmax(0, 1fr)" },
+                    gap: 0.75,
+                    alignItems: "center",
+                    p: 0.65,
+                    borderRadius: "10px",
+                    bgcolor: "#F9FAFB",
+                    border: "1px solid #F3F4F6",
+                  }}
+                >
+                  <Typography sx={{ fontWeight: 800, color: "#1F2937", letterSpacing: "-0.02em" }}>
+                    Set {phase.phaseNumber}
+                  </Typography>
+                  <TextField
+                    size="small"
+                    label={resolveTeamName(match.homeTeamId, match.homeTeamName)}
+                    type="number"
+                    value={phase.home}
+                    onChange={(e) =>
+                      setPhaseDraftsByMatchId((prev) => ({
+                        ...prev,
+                        [match.id]: (prev[match.id] ?? phaseDrafts).map((entry, idx) =>
+                          idx === phaseIndex ? { ...entry, home: e.target.value } : entry,
+                        ),
+                      }))
+                    }
+                    inputProps={{ min: 0 }}
+                    sx={{ "& .MuiInputBase-root": { height: 38 }, minWidth: 0 }}
+                  />
+                  <Typography sx={{ color: "#6B7280", textAlign: "center", fontWeight: 700 }}>
+                    -
+                  </Typography>
+                  <TextField
+                    size="small"
+                    label={resolveTeamName(match.awayTeamId, match.awayTeamName)}
+                    type="number"
+                    value={phase.away}
+                    onChange={(e) =>
+                      setPhaseDraftsByMatchId((prev) => ({
+                        ...prev,
+                        [match.id]: (prev[match.id] ?? phaseDrafts).map((entry, idx) =>
+                          idx === phaseIndex ? { ...entry, away: e.target.value } : entry,
+                        ),
+                      }))
+                    }
+                    inputProps={{ min: 0 }}
+                    sx={{ "& .MuiInputBase-root": { height: 38 }, minWidth: 0 }}
+                  />
+                </Box>
+              ))}
+
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={0.75}>
+                <Button
+                  variant="text"
+                  size="small"
+                  onClick={() =>
+                    setPhaseDraftsByMatchId((prev) => ({
+                      ...prev,
+                      [match.id]: [
+                        ...(prev[match.id] ?? phaseDrafts),
+                        createEmptyPhaseDraft((prev[match.id] ?? phaseDrafts).length + 1),
+                      ],
+                    }))
+                  }
+                  sx={{ alignSelf: "flex-start", textTransform: "none", minHeight: 34, px: 0.5 }}
+                >
+                  Add Set
+                </Button>
+                {match.tiebreakRequired ? (
+                  <Alert severity="warning" sx={{ py: 0 }}>
+                    Sets are tied. Enter match tie-break points before saving again.
+                  </Alert>
+                ) : null}
+              </Stack>
+
+              {(match.tiebreakRequired || tiebreakDraft.home || tiebreakDraft.away) ? (
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", md: "88px minmax(0, 1fr) 20px minmax(0, 1fr)" },
+                    gap: 0.75,
+                    alignItems: "center",
+                    p: 0.65,
+                    borderRadius: "10px",
+                    bgcolor: "#F9FAFB",
+                    border: "1px solid #F3F4F6",
+                  }}
+                >
+                  <Typography sx={{ fontWeight: 800, color: "#1F2937" }}>
+                    Match Tie-break
+                  </Typography>
+                  <TextField
+                    size="small"
+                    label={resolveTeamName(match.homeTeamId, match.homeTeamName)}
+                    type="number"
+                    value={tiebreakDraft.home}
+                    onChange={(e) =>
+                      setTiebreakDraftsByMatchId((prev) => ({
+                        ...prev,
+                        [match.id]: { ...(prev[match.id] ?? tiebreakDraft), home: e.target.value },
+                      }))
+                    }
+                    inputProps={{ min: 0 }}
+                    sx={{ "& .MuiInputBase-root": { height: 38 }, minWidth: 0 }}
+                  />
+                  <Typography sx={{ color: "#6B7280", textAlign: "center", fontWeight: 700 }}>
+                    -
+                  </Typography>
+                  <TextField
+                    size="small"
+                    label={resolveTeamName(match.awayTeamId, match.awayTeamName)}
+                    type="number"
+                    value={tiebreakDraft.away}
+                    onChange={(e) =>
+                      setTiebreakDraftsByMatchId((prev) => ({
+                        ...prev,
+                        [match.id]: { ...(prev[match.id] ?? tiebreakDraft), away: e.target.value },
+                      }))
+                    }
+                    inputProps={{ min: 0 }}
+                    sx={{ "& .MuiInputBase-root": { height: 38 }, minWidth: 0 }}
+                  />
+                </Box>
+              ) : null}
+
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={0.75} justifyContent="flex-end" alignItems="center">
+                <Button
+                  variant="contained"
+                  size="small"
+                  disabled={savingScores}
+                  onClick={() => {
+                    void saveMatchScoring(match);
+                  }}
+                  sx={{ borderRadius: "12px", textTransform: "none", minHeight: 40, fontWeight: 800, px: 1.5 }}
+                >
+                  {savingScores ? "Saving Scores..." : "Save Scores"}
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  disabled={savingScores}
+                  onClick={() =>
+                    setExpandedMatchById((prev) => ({ ...prev, [match.id]: false }))
+                  }
+                  sx={{ borderRadius: "12px", textTransform: "none", minHeight: 40, fontWeight: 700, px: 1.5 }}
+                >
+                  Close
+                </Button>
+              </Stack>
+            </Stack>
+          ) : null}
+        </Stack>
+      </Box>
+    );
+  };
 
   return (
     <Box
@@ -1531,6 +2450,11 @@ export default function RunTournamentPage() {
                             <Alert severity="info">
                               Record tennis results by set. Save set scores to recalculate the match result and refresh standings.
                             </Alert>
+                            {knockoutMatches.length > 0 ? (
+                              <Alert severity="info">
+                                Knockout matches are scored here too. Look for the round badges like Quarterfinal, Semifinal, and Final on the match cards below.
+                              </Alert>
+                            ) : null}
                             <Box
                               sx={{
                                 maxHeight: { xs: 520, md: 620 },
@@ -1539,469 +2463,7 @@ export default function RunTournamentPage() {
                               }}
                             >
                               <Stack spacing={1.25}>
-                              {selectedMatches.map((match) => {
-                              const phaseDrafts = phaseDraftsByMatchId[match.id] ?? buildPhaseDraftsFromMatch(match);
-                              const tiebreakDraft = tiebreakDraftsByMatchId[match.id] ?? buildTiebreakDraftFromMatch(match);
-                              const savingScores = Boolean(savingScoreByMatchId[match.id]);
-                              const expanded = Boolean(expandedMatchById[match.id]);
-                              const isCompleted = normalizeRound(match.status) === "COMPLETED";
-                              const statusLabel =
-                                normalizeRound(match.status) === "IN_PROGRESS"
-                                  ? "Live"
-                                  : isCompleted
-                                    ? "Completed"
-                                    : "Scheduled";
-                              const hasScore =
-                                Number.isFinite(Number(match.homeScore)) &&
-                                Number.isFinite(Number(match.awayScore));
-                              const winnerLabel = Number.isFinite(Number(match.winnerTeamId))
-                                ? resolveTeamName(match.winnerTeamId)
-                                : null;
-                              return (
-                                <Box
-                                  key={match.id}
-                                  sx={{
-                                    p: { xs: 1.35, md: 1.6 },
-                                    borderRadius: "28px",
-                                    border: isCompleted
-                                      ? "1px solid rgba(74, 222, 128, 0.34)"
-                                      : expanded
-                                        ? "1px solid rgba(168, 85, 247, 0.24)"
-                                        : "1px solid rgba(148, 163, 184, 0.18)",
-                                    background: isCompleted
-                                      ? "linear-gradient(180deg, rgba(236, 253, 243, 0.96) 0%, #FFFFFF 100%)"
-                                      : expanded
-                                        ? "linear-gradient(180deg, rgba(255, 247, 237, 0.96) 0%, rgba(250, 245, 255, 0.96) 100%)"
-                                        : "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%)",
-                                    boxShadow: expanded
-                                      ? "0 24px 48px rgba(249, 115, 22, 0.12)"
-                                      : "0 16px 36px rgba(15, 23, 42, 0.07)",
-                                    position: "relative",
-                                    overflow: "hidden",
-                                    "&::before": {
-                                      content: '""',
-                                      position: "absolute",
-                                      inset: 0,
-                                      background: expanded
-                                        ? "radial-gradient(circle at top right, rgba(249, 115, 22, 0.12), transparent 32%), radial-gradient(circle at bottom left, rgba(168, 85, 247, 0.10), transparent 36%)"
-                                        : "radial-gradient(circle at top right, rgba(168, 85, 247, 0.08), transparent 30%)",
-                                      pointerEvents: "none",
-                                    },
-                                  }}
-                                >
-                                  <Stack spacing={1.35} sx={{ position: "relative", zIndex: 1 }}>
-                                    <Stack
-                                      direction={{ xs: "column", md: "row" }}
-                                      spacing={0.8}
-                                      alignItems={{ md: "center" }}
-                                      justifyContent="space-between"
-                                    >
-                                      <Typography
-                                        sx={{
-                                          color: "#667085",
-                                          fontSize: { xs: "0.98rem", md: "1.02rem" },
-                                          fontWeight: 600,
-                                          letterSpacing: "-0.01em",
-                                        }}
-                                      >
-                                        {match.venue || "Venue TBD"} • {match.matchDate || "Date TBD"} •{" "}
-                                        {match.startTime || "Time TBD"}
-                                      </Typography>
-                                      <Stack direction="row" spacing={0.75}>
-                                        {match.groupId ? (
-                                          <Chip
-                                            size="small"
-                                            variant="outlined"
-                                            sx={{
-                                              borderColor: "rgba(99, 102, 241, 0.2)",
-                                              bgcolor: "rgba(255,255,255,0.78)",
-                                              fontWeight: 700,
-                                              color: "#1F2937",
-                                            }}
-                                            label={
-                                              match.groupName ||
-                                              selectedGroups.find((group) => String(group.id) === String(match.groupId))
-                                                ?.name ||
-                                              `Group ${match.groupId}`
-                                            }
-                                          />
-                                        ) : null}
-                                        {isCompleted ? (
-                                          <Chip
-                                            size="small"
-                                            color="success"
-                                            sx={{ fontWeight: 700 }}
-                                            label="Completed"
-                                          />
-                                        ) : null}
-                                      </Stack>
-                                    </Stack>
-
-                                    <Box
-                                      sx={{
-                                        display: "grid",
-                                        gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) 112px minmax(0, 1fr)" },
-                                        gap: 1.1,
-                                        alignItems: "stretch",
-                                      }}
-                                    >
-                                      <Box
-                                        sx={{
-                                          p: 1.4,
-                                          borderRadius: "22px",
-                                          border: "1px solid rgba(249, 115, 22, 0.12)",
-                                          background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,250,244,0.92) 100%)",
-                                          minHeight: 102,
-                                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.8)",
-                                        }}
-                                      >
-                                        <Typography
-                                          sx={{
-                                            fontSize: "0.75rem",
-                                            color: "#9A3412",
-                                            textTransform: "uppercase",
-                                            letterSpacing: "0.12em",
-                                            fontWeight: 800,
-                                            mb: 0.55,
-                                          }}
-                                        >
-                                          Home
-                                        </Typography>
-                                        <Typography
-                                          sx={{
-                                            fontWeight: 800,
-                                            color: "#101828",
-                                            fontSize: { xs: "1.1rem", md: "1.24rem" },
-                                            lineHeight: 1.18,
-                                            wordBreak: "break-word",
-                                            letterSpacing: "-0.03em",
-                                          }}
-                                        >
-                                          {resolveTeamName(match.homeTeamId, match.homeTeamName)}
-                                        </Typography>
-                                      </Box>
-                                      <Stack
-                                        spacing={0.6}
-                                        alignItems="center"
-                                        justifyContent="center"
-                                        sx={{
-                                          p: 0.75,
-                                          borderRadius: "999px",
-                                          border: "1px solid rgba(148, 163, 184, 0.14)",
-                                          background: "rgba(255,255,255,0.86)",
-                                          minHeight: 102,
-                                          backdropFilter: "blur(10px)",
-                                        }}
-                                      >
-                                        <Typography
-                                          sx={{
-                                            fontSize: "0.64rem",
-                                            textTransform: "uppercase",
-                                            letterSpacing: "0.14em",
-                                            color: "#667085",
-                                            fontWeight: 800,
-                                          }}
-                                        >
-                                          Score
-                                        </Typography>
-                                        <Typography
-                                          sx={{
-                                            fontSize: { xs: "1.7rem", md: "1.9rem" },
-                                            lineHeight: 1,
-                                            fontWeight: 900,
-                                            letterSpacing: "-0.05em",
-                                            color: "#111827",
-                                          }}
-                                        >
-                                          {hasScore ? `${match.homeScore} - ${match.awayScore}` : "0 - 0"}
-                                        </Typography>
-                                      </Stack>
-                                      <Box
-                                        sx={{
-                                          p: 1.4,
-                                          borderRadius: "22px",
-                                          border: "1px solid rgba(168, 85, 247, 0.12)",
-                                          background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(252,248,255,0.92) 100%)",
-                                          minHeight: 102,
-                                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.8)",
-                                        }}
-                                      >
-                                        <Typography
-                                          sx={{
-                                            fontSize: "0.75rem",
-                                            color: "#7E22CE",
-                                            textTransform: "uppercase",
-                                            letterSpacing: "0.12em",
-                                            fontWeight: 800,
-                                            mb: 0.55,
-                                          }}
-                                        >
-                                          Away
-                                        </Typography>
-                                        <Typography
-                                          sx={{
-                                            fontWeight: 800,
-                                            color: "#101828",
-                                            fontSize: { xs: "1.1rem", md: "1.24rem" },
-                                            lineHeight: 1.18,
-                                            wordBreak: "break-word",
-                                            letterSpacing: "-0.03em",
-                                          }}
-                                        >
-                                          {resolveTeamName(match.awayTeamId, match.awayTeamName)}
-                                        </Typography>
-                                      </Box>
-                                    </Box>
-
-                                    <Box
-                                      sx={{
-                                        display: "grid",
-                                        gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) auto" },
-                                        gap: 1.25,
-                                        alignItems: "start",
-                                      }}
-                                    >
-                                      <Stack
-                                        spacing={1}
-                                        sx={{
-                                          p: 1.35,
-                                          borderRadius: "22px",
-                                          bgcolor: isCompleted ? "rgba(236, 253, 243, 0.88)" : "rgba(255,255,255,0.78)",
-                                          border: isCompleted ? "1px solid rgba(134, 239, 172, 0.62)" : "1px solid rgba(148, 163, 184, 0.15)",
-                                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.7)",
-                                        }}
-                                      >
-                                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                                          <Chip
-                                            size="small"
-                                            color={isCompleted ? "success" : normalizeRound(match.status) === "IN_PROGRESS" ? "warning" : "default"}
-                                            label={statusLabel}
-                                            sx={{ fontWeight: 700 }}
-                                          />
-                                          {(match.phases.length > 0 ? match.phases : phaseDrafts)
-                                            .slice()
-                                            .sort((a, b) => a.phaseNumber - b.phaseNumber)
-                                            .map((phase) => (
-                                              <Chip
-                                                key={`${match.id}-set-${phase.phaseId ?? phase.phaseNumber}`}
-                                                size="small"
-                                                variant="outlined"
-                                                label={`Set ${phase.phaseNumber}: ${getPhaseScoreValue(phase, "home")}-${getPhaseScoreValue(phase, "away")}`}
-                                                sx={{
-                                                  bgcolor: "rgba(255,255,255,0.88)",
-                                                  fontWeight: 700,
-                                                  borderColor: "rgba(148, 163, 184, 0.24)",
-                                                }}
-                                              />
-                                            ))}
-                                          {match.tiebreakRequired || tiebreakDraft.home || tiebreakDraft.away ? (
-                                            <Chip
-                                              size="small"
-                                              variant="outlined"
-                                              label={`Tie-break: ${tiebreakDraft.home || match.tiebreakScore?.home || "-"}-${tiebreakDraft.away || match.tiebreakScore?.away || "-"}`}
-                                              sx={{
-                                                bgcolor: "rgba(255,255,255,0.88)",
-                                                fontWeight: 700,
-                                                borderColor: "rgba(168, 85, 247, 0.22)",
-                                              }}
-                                            />
-                                          ) : null}
-                                        </Stack>
-                                        <Typography sx={{ color: "#344054", fontSize: "0.92rem", fontWeight: 700 }}>
-                                          {hasScore
-                                            ? winnerLabel
-                                              ? `Result: ${match.homeScore} - ${match.awayScore}. Winner: ${winnerLabel}.`
-                                              : `Result: ${match.homeScore} - ${match.awayScore}.`
-                                            : "No result recorded yet."}
-                                        </Typography>
-                                        <Typography sx={{ color: "#667085", fontSize: "0.84rem", lineHeight: 1.55 }}>
-                                          {expanded
-                                            ? "Enter one row per set, then save scores to recalculate the tennis result."
-                                            : "Open scoring to enter set results and complete the match through backend tennis scoring."}
-                                        </Typography>
-                                      </Stack>
-
-                                      <Stack spacing={1} sx={{ minWidth: { lg: 220 } }}>
-                                        <Button
-                                          variant={expanded ? "contained" : "outlined"}
-                                          size="small"
-                                          startIcon={<SaveRoundedIcon />}
-                                          disabled={savingScores}
-                                          onClick={() => {
-                                            void toggleMatchScoring(match);
-                                          }}
-                                          sx={{
-                                            borderRadius: "18px",
-                                            textTransform: "none",
-                                            minHeight: 48,
-                                            fontWeight: 800,
-                                            boxShadow: expanded ? "0 12px 24px rgba(168, 85, 247, 0.18)" : "none",
-                                          }}
-                                        >
-                                          {expanded ? "Hide Scoring" : "Open Scoring"}
-                                        </Button>
-                                      </Stack>
-                                    </Box>
-
-                                    {expanded ? (
-                                      <Stack
-                                        spacing={1}
-                                        sx={{
-                                          p: 1.35,
-                                          borderRadius: "22px",
-                                          border: "1px solid rgba(148, 163, 184, 0.14)",
-                                          background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(249,250,251,0.96) 100%)",
-                                        }}
-                                      >
-                                        {phaseDrafts.map((phase, phaseIndex) => (
-                                          <Box
-                                            key={`${match.id}-draft-phase-${phase.phaseId ?? phase.phaseNumber}`}
-                                            sx={{
-                                              display: "grid",
-                                              gridTemplateColumns: { xs: "1fr", md: "120px 1fr 1fr" },
-                                              gap: 1,
-                                              alignItems: "center",
-                                              p: 0.95,
-                                              borderRadius: "16px",
-                                              bgcolor: "rgba(255,255,255,0.92)",
-                                              border: "1px solid rgba(148, 163, 184, 0.14)",
-                                            }}
-                                          >
-                                            <Typography sx={{ fontWeight: 800, color: "#1F2937", letterSpacing: "-0.02em" }}>
-                                              Set {phase.phaseNumber}
-                                            </Typography>
-                                            <TextField
-                                              size="small"
-                                              label={resolveTeamName(match.homeTeamId, match.homeTeamName)}
-                                              type="number"
-                                              value={phase.home}
-                                              onChange={(e) =>
-                                                setPhaseDraftsByMatchId((prev) => ({
-                                                  ...prev,
-                                                  [match.id]: (prev[match.id] ?? phaseDrafts).map((entry, idx) =>
-                                                    idx === phaseIndex ? { ...entry, home: e.target.value } : entry,
-                                                  ),
-                                                }))
-                                              }
-                                              inputProps={{ min: 0 }}
-                                            />
-                                            <TextField
-                                              size="small"
-                                              label={resolveTeamName(match.awayTeamId, match.awayTeamName)}
-                                              type="number"
-                                              value={phase.away}
-                                              onChange={(e) =>
-                                                setPhaseDraftsByMatchId((prev) => ({
-                                                  ...prev,
-                                                  [match.id]: (prev[match.id] ?? phaseDrafts).map((entry, idx) =>
-                                                    idx === phaseIndex ? { ...entry, away: e.target.value } : entry,
-                                                  ),
-                                                }))
-                                              }
-                                              inputProps={{ min: 0 }}
-                                            />
-                                          </Box>
-                                        ))}
-
-                                        <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                                          <Button
-                                            variant="text"
-                                            size="small"
-                                            onClick={() =>
-                                              setPhaseDraftsByMatchId((prev) => ({
-                                                ...prev,
-                                                [match.id]: [
-                                                  ...(prev[match.id] ?? phaseDrafts),
-                                                  createEmptyPhaseDraft((prev[match.id] ?? phaseDrafts).length + 1),
-                                                ],
-                                              }))
-                                            }
-                                            sx={{ alignSelf: "flex-start", textTransform: "none" }}
-                                          >
-                                          Add Set
-                                          </Button>
-                                          {match.tiebreakRequired ? (
-                                            <Alert severity="warning" sx={{ py: 0 }}>
-                                              Sets are tied. Enter match tie-break points before saving again.
-                                            </Alert>
-                                          ) : null}
-                                        </Stack>
-
-                                        {(match.tiebreakRequired || tiebreakDraft.home || tiebreakDraft.away) ? (
-                                          <Box
-                                            sx={{
-                                              display: "grid",
-                                              gridTemplateColumns: { xs: "1fr", md: "120px 1fr 1fr" },
-                                              gap: 1,
-                                              alignItems: "center",
-                                              p: 0.95,
-                                              borderRadius: "16px",
-                                              bgcolor: "rgba(255,255,255,0.92)",
-                                              border: "1px solid rgba(148, 163, 184, 0.14)",
-                                            }}
-                                          >
-                                            <Typography sx={{ fontWeight: 800, color: "#1F2937" }}>
-                                              Match Tie-break
-                                            </Typography>
-                                            <TextField
-                                              size="small"
-                                              label={resolveTeamName(match.homeTeamId, match.homeTeamName)}
-                                              type="number"
-                                              value={tiebreakDraft.home}
-                                              onChange={(e) =>
-                                                setTiebreakDraftsByMatchId((prev) => ({
-                                                  ...prev,
-                                                  [match.id]: { ...(prev[match.id] ?? tiebreakDraft), home: e.target.value },
-                                                }))
-                                              }
-                                              inputProps={{ min: 0 }}
-                                            />
-                                            <TextField
-                                              size="small"
-                                              label={resolveTeamName(match.awayTeamId, match.awayTeamName)}
-                                              type="number"
-                                              value={tiebreakDraft.away}
-                                              onChange={(e) =>
-                                                setTiebreakDraftsByMatchId((prev) => ({
-                                                  ...prev,
-                                                  [match.id]: { ...(prev[match.id] ?? tiebreakDraft), away: e.target.value },
-                                                }))
-                                              }
-                                              inputProps={{ min: 0 }}
-                                            />
-                                          </Box>
-                                        ) : null}
-
-                                        <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                                          <Button
-                                            variant="contained"
-                                            size="small"
-                                            disabled={savingScores}
-                                            onClick={() => {
-                                              void saveMatchScoring(match);
-                                            }}
-                                            sx={{ borderRadius: "16px", textTransform: "none", minHeight: 44, fontWeight: 800 }}
-                                          >
-                                            {savingScores ? "Saving Scores..." : "Save Scores"}
-                                          </Button>
-                                          <Button
-                                            variant="outlined"
-                                            size="small"
-                                            disabled={savingScores}
-                                            onClick={() =>
-                                              setExpandedMatchById((prev) => ({ ...prev, [match.id]: false }))
-                                            }
-                                            sx={{ borderRadius: "16px", textTransform: "none", minHeight: 44, fontWeight: 700 }}
-                                          >
-                                            Close
-                                          </Button>
-                                        </Stack>
-                                      </Stack>
-                                    ) : null}
-                                  </Stack>
-                                </Box>
-                              );
-                              })}
+                              {selectedMatches.map((match) => renderMatchCard(match))}
                               </Stack>
                             </Box>
                           </Stack>
@@ -2109,32 +2571,203 @@ export default function RunTournamentPage() {
                                 Qualified Teams
                               </Typography>
                               <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                                {currentQualifiedIds.map((teamId) => (
-                                  <Chip key={`q-${teamId}`} color="success" label={resolveTeamName(teamId)} />
+                                {currentQualifiedIds.map((teamId, index) => (
+                                  <Chip
+                                    key={`q-${teamId}`}
+                                    color="success"
+                                    label={`Seed ${index + 1} · ${resolveTeamName(teamId)}`}
+                                  />
                                 ))}
                               </Stack>
+                              <Typography sx={{ color: "#027A48", fontSize: "0.8rem", mt: 0.75 }}>
+                                Seeds are ordered from overall group-phase ranking. Backend byes use these seeds.
+                              </Typography>
                             </Box>
 
                             <Box sx={{ p: 1.25, borderRadius: "12px", border: "1px solid #E5E7EB" }}>
-                              <Typography sx={{ fontWeight: 700, mb: 1 }}>Knockout Preview</Typography>
-                              {knockoutPreviewPairs.length === 0 ? (
-                                <Typography sx={{ color: "#667085" }}>Need at least 2 qualified teams.</Typography>
-                              ) : (
-                                <Stack spacing={0.75}>
-                                  {knockoutPreviewPairs.map((pair, idx) => (
-                                    <Box
-                                      key={`kp-${idx + 1}`}
-                                      sx={{
-                                        px: 1,
-                                        py: 0.8,
-                                        borderRadius: "8px",
-                                        bgcolor: "#F9FAFB",
-                                        border: "1px solid #EAECF0",
-                                      }}
+                              <Stack
+                                direction={{ xs: "column", md: "row" }}
+                                spacing={1}
+                                alignItems={{ md: "center" }}
+                                justifyContent="space-between"
+                                sx={{ mb: 1 }}
+                              >
+                                <Box>
+                                  <Typography sx={{ fontWeight: 700 }}>Knockout Progression</Typography>
+                                  <Typography sx={{ color: "#667085", fontSize: "0.86rem" }}>
+                                    Quarterfinals, semifinals, and final are created as real backend matches, one round at a time.
+                                  </Typography>
+                                </Box>
+                                <Button
+                                  variant="contained"
+                                  disabled={
+                                    !nextKnockoutCreation.round ||
+                                    Boolean(creatingKnockoutByCategory[String(selectedCategory.id)])
+                                  }
+                                  onClick={() => void createNextKnockoutRound()}
+                                  sx={{ borderRadius: "10px", textTransform: "none", fontWeight: 800 }}
+                                >
+                                  {creatingKnockoutByCategory[String(selectedCategory.id)]
+                                    ? "Creating..."
+                                    : nextKnockoutCreation.round
+                                      ? `Create ${getRoundLabel(nextKnockoutCreation.round)}`
+                                      : "Next Round Unavailable"}
+                                </Button>
+                              </Stack>
+
+                              <Alert severity={nextKnockoutCreation.round ? "info" : "warning"} sx={{ mb: 1 }}>
+                                {nextKnockoutCreation.round
+                                  ? `${getRoundLabel(nextKnockoutCreation.round)} will be created by backend seeding and bye rules using the schedule you set below.`
+                                  : nextKnockoutCreation.reason || "No knockout round can be created yet."}
+                              </Alert>
+
+                              <Typography sx={{ color: "#667085", fontSize: "0.84rem", mb: 1 }}>
+                                Created knockout matches appear below and can be scored directly in this tab. When every match in the current round is completed, the next round becomes available here. If byes apply, the backend will advance the top seeds automatically.
+                              </Typography>
+
+                              {activeKnockoutByes.length > 0 ? (
+                                <Stack spacing={0.75} sx={{ mb: 1.25 }}>
+                                  {activeKnockoutByes.map((entry) => (
+                                    <Alert
+                                      key={`${entry.sourceRound}-${entry.advancesToRound}-${entry.teamIds.join("-")}`}
+                                      severity="success"
                                     >
-                                      <Typography sx={{ fontWeight: 600, fontSize: "0.9rem" }}>
-                                        Quarterfinal {idx + 1}: {resolveTeamName(pair.home)} vs {resolveTeamName(pair.away)}
-                                      </Typography>
+                                      {entry.seededTeamIds
+                                        .slice()
+                                        .sort((a, b) => a.seed - b.seed)
+                                        .map(({ seed, teamId }) => `Seed ${seed} ${resolveTeamName(teamId)}`)
+                                        .join(", ")}{" "}
+                                      {entry.teamIds.length === 1 ? "has" : "have"} advanced directly to{" "}
+                                      {getRoundLabel(entry.advancesToRound).toLowerCase()} by bye.
+                                    </Alert>
+                                  ))}
+                                </Stack>
+                              ) : null}
+
+                              {nextKnockoutCreation.round ? (
+                                <Stack spacing={0.75} sx={{ mb: knockoutRounds.length > 0 ? 1.25 : 0 }}>
+                                  <Typography sx={{ fontWeight: 700, color: "#101828" }}>
+                                    Ready to Create {getRoundLabel(nextKnockoutCreation.round)}
+                                  </Typography>
+                                  <Box
+                                    sx={{
+                                      p: 1,
+                                      borderRadius: "10px",
+                                      border: "1px solid #E5E7EB",
+                                      bgcolor: "#F9FAFB",
+                                    }}
+                                  >
+                                    <Stack direction={{ xs: "column", md: "row" }} spacing={1}>
+                                      <TextField
+                                        label="Match date"
+                                        type="date"
+                                        fullWidth
+                                        value={selectedKnockoutScheduleDraft?.matchDate ?? ""}
+                                        onChange={(e) =>
+                                          selectedCategory
+                                            ? setKnockoutScheduleDraftByCategory((prev) => ({
+                                                ...prev,
+                                                [String(selectedCategory.id)]: {
+                                                  ...(prev[String(selectedCategory.id)] ?? {
+                                                    matchDate: "",
+                                                    startTime: "",
+                                                    venue: "",
+                                                    bufferMinutes: "30",
+                                                  }),
+                                                  matchDate: e.target.value,
+                                                },
+                                              }))
+                                            : undefined
+                                        }
+                                        InputLabelProps={{ shrink: true }}
+                                      />
+                                      <TextField
+                                        label="Start time"
+                                        type="time"
+                                        fullWidth
+                                        value={selectedKnockoutScheduleDraft?.startTime ?? ""}
+                                        onChange={(e) =>
+                                          selectedCategory
+                                            ? setKnockoutScheduleDraftByCategory((prev) => ({
+                                                ...prev,
+                                                [String(selectedCategory.id)]: {
+                                                  ...(prev[String(selectedCategory.id)] ?? {
+                                                    matchDate: "",
+                                                    startTime: "",
+                                                    venue: "",
+                                                    bufferMinutes: "30",
+                                                  }),
+                                                  startTime: e.target.value,
+                                                },
+                                              }))
+                                            : undefined
+                                        }
+                                        InputLabelProps={{ shrink: true }}
+                                      />
+                                      <TextField
+                                        label="Court / Field"
+                                        fullWidth
+                                        value={selectedKnockoutScheduleDraft?.venue ?? ""}
+                                        onChange={(e) =>
+                                          selectedCategory
+                                            ? setKnockoutScheduleDraftByCategory((prev) => ({
+                                                ...prev,
+                                                [String(selectedCategory.id)]: {
+                                                  ...(prev[String(selectedCategory.id)] ?? {
+                                                    matchDate: "",
+                                                    startTime: "",
+                                                    venue: "",
+                                                    bufferMinutes: "30",
+                                                  }),
+                                                  venue: e.target.value,
+                                                },
+                                              }))
+                                            : undefined
+                                        }
+                                      />
+                                      <TextField
+                                        label="Buffer (min)"
+                                        type="number"
+                                        fullWidth
+                                        value={selectedKnockoutScheduleDraft?.bufferMinutes ?? "30"}
+                                        onChange={(e) =>
+                                          selectedCategory
+                                            ? setKnockoutScheduleDraftByCategory((prev) => ({
+                                                ...prev,
+                                                [String(selectedCategory.id)]: {
+                                                  ...(prev[String(selectedCategory.id)] ?? {
+                                                    matchDate: "",
+                                                    startTime: "",
+                                                    venue: "",
+                                                    bufferMinutes: "30",
+                                                  }),
+                                                  bufferMinutes: e.target.value,
+                                                },
+                                              }))
+                                            : undefined
+                                        }
+                                        inputProps={{ min: 0 }}
+                                      />
+                                    </Stack>
+                                  </Box>
+                                  <Typography sx={{ color: "#667085", fontSize: "0.84rem" }}>
+                                    Pairings and any bye advances are decided by the backend from qualified-team seeding, then the created matches appear below in this tab.
+                                  </Typography>
+                                </Stack>
+                              ) : null}
+
+                              {knockoutRounds.length === 0 ? (
+                                <Typography sx={{ color: "#667085" }}>
+                                  No knockout matches have been created for this category yet. Use the action above to create the next valid round.
+                                </Typography>
+                              ) : (
+                                <Stack spacing={1}>
+                                  {knockoutRounds.map((roundEntry) => (
+                                    <Box key={roundEntry.round} sx={{ borderTop: "1px solid #F2F4F7", pt: 1 }}>
+                                      <Typography sx={{ fontWeight: 700, mb: 0.75 }}>{roundEntry.label}</Typography>
+                                      <Stack spacing={0.75}>
+                                        {roundEntry.matches.map((match) => renderMatchCard(match))}
+                                      </Stack>
                                     </Box>
                                   ))}
                                 </Stack>
