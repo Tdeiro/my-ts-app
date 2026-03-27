@@ -323,20 +323,69 @@ export function TeamsTab({
   const handleDeleteTeam = React.useCallback(
     async (teamId: number) => {
       const token = getToken();
+      const parsedCategoryId = Number(selectedCategoryId);
       if (!token) {
         setTeamError("You are not logged in.");
         return;
       }
+      if (!Number.isFinite(parsedCategoryId) || parsedCategoryId <= 0) {
+        setTeamError("Select a valid category before deleting a team.");
+        return;
+      }
       setTeamError(null);
       try {
+        const matchesRes = await fetch(
+          `${API_URL}/matches?categoryId=${encodeURIComponent(parsedCategoryId)}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const matchesBody = await matchesRes.json().catch(() => null);
+        if (!matchesRes.ok) {
+          throw new Error(
+            matchesBody?.message?.[0] ||
+              matchesBody?.error ||
+              "Failed to verify whether this team is scheduled in matches.",
+          );
+        }
+
+        const matches = (Array.isArray(matchesBody)
+          ? matchesBody
+          : (matchesBody?.data ?? [])) as Array<{
+          homeTeamId?: number | string;
+          awayTeamId?: number | string;
+          home_team_id?: number | string;
+          away_team_id?: number | string;
+          homeTeam?: { id?: number | string };
+          awayTeam?: { id?: number | string };
+        }>;
+
+        const isScheduled = matches.some((match) => {
+          const homeTeamId = Number(
+            match.homeTeamId ?? match.home_team_id ?? match.homeTeam?.id,
+          );
+          const awayTeamId = Number(
+            match.awayTeamId ?? match.away_team_id ?? match.awayTeam?.id,
+          );
+          return homeTeamId === teamId || awayTeamId === teamId;
+        });
+
+        if (isScheduled) {
+          throw new Error(
+            "Cannot delete this team because it is already used in scheduled matches. Remove the related matches first.",
+          );
+        }
+
         const res = await fetch(`${API_URL}/teams/${teamId}`, {
           method: "DELETE",
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
+          const message =
+            body?.message?.[0] || body?.error || "Failed to delete team.";
           throw new Error(
-            body?.message?.[0] || body?.error || "Failed to delete team.",
+            message === "Database constraint violation"
+              ? "Cannot delete this team because it is still referenced by matches or scoring data. Remove those references first."
+              : message,
           );
         }
         if (teamEditor.editingTeamId === teamId) {
@@ -349,7 +398,7 @@ export function TeamsTab({
         );
       }
     },
-    [loadTeams, teamEditor.editingTeamId],
+    [loadTeams, selectedCategoryId, teamEditor.editingTeamId],
   );
 
   return (

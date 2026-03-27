@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   MenuItem,
   Stack,
   TextField,
@@ -934,14 +935,33 @@ export function ScheduleTab({
             </Box>
 
             {scheduleItems.length > 0 ? (
-              <Box sx={{ mt: 1, p: 1.5, borderRadius: "10px", bgcolor: "#F9FAFB", border: "1px solid #E5E7EB" }}>
-                <Typography sx={{ fontWeight: 700, color: "#101828", fontSize: "0.95rem", mb: 1 }}>
+              <Box
+                sx={{
+                  mt: 1,
+                  p: 1.75,
+                  borderRadius: "24px",
+                  border: "1px solid rgba(148, 163, 184, 0.18)",
+                  background:
+                    "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,247,237,0.55) 60%, rgba(248,250,252,0.96) 100%)",
+                  boxShadow: "0 16px 38px rgba(15, 23, 42, 0.06)",
+                }}
+              >
+                <Typography sx={{ fontWeight: 800, color: "#101828", fontSize: "1rem", mb: 1.1, letterSpacing: "-0.02em" }}>
                   Schedule Overview
                 </Typography>
                 <Stack spacing={1.5}>
                   {groupedScheduleItems.map(([groupName, matches]) => (
                     <Box key={groupName}>
-                      <Typography sx={{ fontWeight: 700, fontSize: "0.85rem", color: "#6A7282", textTransform: "uppercase", letterSpacing: "0.03em", mb: 0.75 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 800,
+                          fontSize: "0.8rem",
+                          color: "#6A7282",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.12em",
+                          mb: 0.85,
+                        }}
+                      >
                         {groupName}
                       </Typography>
                       <Stack spacing={1}>
@@ -961,33 +981,88 @@ export function ScheduleTab({
                               : teams;
 
                           return (
-                            <Box key={item.id} sx={{ p: 1.25, borderRadius: "10px", border: "1px solid #E5E7EB", bgcolor: "#FFFFFF" }}>
+                            <Box
+                              key={item.id}
+                              sx={{
+                                p: 1.35,
+                                borderRadius: "22px",
+                                border: !Number.isFinite(Number(item.backendMatchId)) || Number(item.backendMatchId) <= 0
+                                  ? "1px solid rgba(249, 115, 22, 0.26)"
+                                  : "1px solid rgba(148, 163, 184, 0.16)",
+                                background: !Number.isFinite(Number(item.backendMatchId)) || Number(item.backendMatchId) <= 0
+                                  ? "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,247,237,0.9) 100%)"
+                                  : "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.92) 100%)",
+                                boxShadow: "0 12px 28px rgba(15, 23, 42, 0.05)",
+                              }}
+                            >
                               {!isEditing ? (
-                                <Stack spacing={0.75}>
-                                  <Stack direction={{ xs: "column", md: "row" }} spacing={0.75} alignItems={{ md: "center" }}>
-                                    <Typography sx={{ fontWeight: 600, color: "#111827", flex: 1 }}>
-                                      {item.matchLabel}
-                                    </Typography>
-                                    <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems={{ md: "center" }}>
-                                      {!Number.isFinite(Number(item.backendMatchId)) ||
-                                      Number(item.backendMatchId) <= 0 ? (
-                                        <Typography sx={{ color: "#B54708", fontSize: "0.8rem", fontWeight: 700 }}>
-                                          DRAFT
-                                        </Typography>
-                                      ) : null}
-                                      <Typography sx={{ color: "#6B7280", fontSize: "0.85rem" }}>
+                                <Stack spacing={1}>
+                                  <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems={{ md: "center" }}>
+                                    <Box sx={{ flex: 1 }}>
+                                      <Typography
+                                        sx={{
+                                          fontWeight: 800,
+                                          color: "#111827",
+                                          fontSize: { xs: "1.02rem", md: "1.08rem" },
+                                          letterSpacing: "-0.02em",
+                                        }}
+                                      >
+                                        {item.matchLabel}
+                                      </Typography>
+                                      <Typography sx={{ color: "#667085", fontSize: "0.88rem", mt: 0.35 }}>
                                         {item.matchDate} at {item.startTime} · {item.venue}
                                       </Typography>
+                                    </Box>
+                                    <Stack direction={{ xs: "row", md: "row" }} spacing={0.75} alignItems={{ md: "center" }} flexWrap="wrap" useFlexGap>
+                                      {!Number.isFinite(Number(item.backendMatchId)) ||
+                                      Number(item.backendMatchId) <= 0 ? (
+                                        <Chip
+                                          size="small"
+                                          label="Draft"
+                                          sx={{
+                                            bgcolor: "rgba(255,237,213,0.9)",
+                                            color: "#B45309",
+                                            fontWeight: 800,
+                                            border: "1px solid rgba(249,115,22,0.18)",
+                                          }}
+                                        />
+                                      ) : null}
+                                      <Chip
+                                        size="small"
+                                        variant="outlined"
+                                        label={String(item.status ?? "SCHEDULED").replaceAll("_", " ")}
+                                        sx={{
+                                          bgcolor: "rgba(255,255,255,0.78)",
+                                          fontWeight: 700,
+                                          borderColor: "rgba(148, 163, 184, 0.24)",
+                                        }}
+                                      />
+                                      <Chip
+                                        size="small"
+                                        variant="outlined"
+                                        label={`Match ${index + 1}`}
+                                        sx={{
+                                          bgcolor: "rgba(255,255,255,0.78)",
+                                          fontWeight: 700,
+                                          borderColor: "rgba(168, 85, 247, 0.16)",
+                                        }}
+                                      />
                                     </Stack>
                                   </Stack>
                                   <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                    <Button size="small" variant="outlined" onClick={() => setEditingItemId(item.id)}>
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      onClick={() => setEditingItemId(item.id)}
+                                      sx={{ borderRadius: "14px", textTransform: "none", fontWeight: 700 }}
+                                    >
                                       Edit
                                     </Button>
                                     <Button
                                       size="small"
                                       color="error"
                                       variant="outlined"
+                                      sx={{ borderRadius: "14px", textTransform: "none", fontWeight: 700 }}
                                       onClick={() => {
                                         void (async () => {
                                           try {
@@ -1011,10 +1086,18 @@ export function ScheduleTab({
                                   </Stack>
                                 </Stack>
                               ) : (
-                                <Stack spacing={1}>
-                                  <Stack direction={{ xs: "column", md: "row" }} spacing={1}>
-                                    <TextField
-                                      label="Home Team"
+                                  <Stack
+                                    spacing={1}
+                                    sx={{
+                                      p: 1,
+                                      borderRadius: "18px",
+                                      bgcolor: "rgba(255,255,255,0.74)",
+                                      border: "1px solid rgba(148, 163, 184, 0.14)",
+                                    }}
+                                  >
+                                    <Stack direction={{ xs: "column", md: "row" }} spacing={1}>
+                                      <TextField
+                                        label="Home Team"
                                       select
                                       fullWidth
                                       value={String(item.homeTeamId ?? "")}
@@ -1114,12 +1197,18 @@ export function ScheduleTab({
                                     </TextField>
                                   </Stack>
                                   <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                    <Button size="small" variant="outlined" onClick={() => setEditingItemId(null)}>
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      onClick={() => setEditingItemId(null)}
+                                      sx={{ borderRadius: "14px", textTransform: "none", fontWeight: 700 }}
+                                    >
                                       Cancel
                                     </Button>
                                     <Button
                                       size="small"
                                       variant="contained"
+                                      sx={{ borderRadius: "14px", textTransform: "none", fontWeight: 700 }}
                                       onClick={() => {
                                         void (async () => {
                                           const currentItem = scheduleItems.find((row) => row.id === item.id);
@@ -1188,9 +1277,6 @@ export function ScheduleTab({
                                   </Stack>
                                 </Stack>
                               )}
-                              <Typography sx={{ mt: 0.75, color: "#6B7280", fontSize: "0.8rem" }}>
-                                Match {index + 1}
-                              </Typography>
                             </Box>
                           );
                         })}
@@ -1201,9 +1287,9 @@ export function ScheduleTab({
                 {draftScheduleItems.length > 0 ? (
                   <Box
                     sx={{
-                      mt: 1.5,
+                      mt: 1.75,
                       pt: 1.5,
-                      borderTop: "1px solid #E5E7EB",
+                      borderTop: "1px solid rgba(148, 163, 184, 0.18)",
                       display: "flex",
                       flexDirection: { xs: "column", md: "row" },
                       justifyContent: "space-between",
@@ -1211,14 +1297,14 @@ export function ScheduleTab({
                       gap: 1,
                     }}
                   >
-                    <Typography sx={{ color: "#6B7280", fontSize: "0.9rem" }}>
+                    <Typography sx={{ color: "#6B7280", fontSize: "0.92rem", fontWeight: 600 }}>
                       {draftScheduleItems.length} draft match{draftScheduleItems.length === 1 ? "" : "es"} pending publication.
                     </Typography>
                     <Button
                       variant="contained"
                       onClick={() => void handlePublishDraftMatches()}
                       disabled={submitting}
-                      sx={{ borderRadius: "10px", textTransform: "none" }}
+                      sx={{ borderRadius: "16px", textTransform: "none", fontWeight: 800, minHeight: 46 }}
                     >
                       {`Publish Draft Matches (${draftScheduleItems.length})`}
                     </Button>

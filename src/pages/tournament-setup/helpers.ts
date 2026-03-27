@@ -60,11 +60,27 @@ export function groupLetter(index: number): string {
   return String.fromCharCode(65 + index);
 }
 
+export function prettifyDisplayName(raw?: string): string {
+  const source = String(raw ?? "").trim();
+  if (!source) return "";
+  if (/[a-z]/.test(source)) return source;
+
+  return source
+    .split(/([/\-\s]+)/)
+    .map((part) => {
+      if (!part || /^[\/\-\s]+$/.test(part)) return part;
+      if (!/[A-Z]/.test(part)) return part;
+      if (part.length <= 2) return part;
+      return `${part[0]}${part.slice(1).toLowerCase()}`;
+    })
+    .join("");
+}
+
 export function getTeamDisplayName(team: TeamDto): string {
   const explicitName = String(team.name ?? "").trim();
-  if (explicitName) return explicitName;
+  if (explicitName) return prettifyDisplayName(explicitName);
   const memberNames = (team.members ?? [])
-    .map((member) => String(member.userFullName ?? "").trim())
+    .map((member) => prettifyDisplayName(String(member.userFullName ?? "").trim()))
     .filter(Boolean);
   if (memberNames.length > 0) return memberNames.join(" / ");
   return `Team #${team.id}`;

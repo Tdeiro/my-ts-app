@@ -29,6 +29,22 @@ import { parseTournamentCategoriesResponse } from "../Utils/tournamentCategories
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
+function prettifyDisplayName(raw?: string): string {
+  const source = String(raw ?? "").trim();
+  if (!source) return "";
+  if (/[a-z]/.test(source)) return source;
+
+  return source
+    .split(/([/\-\s]+)/)
+    .map((part) => {
+      if (!part || /^[\/\-\s]+$/.test(part)) return part;
+      if (!/[A-Z]/.test(part)) return part;
+      if (part.length <= 2) return part;
+      return `${part[0]}${part.slice(1).toLowerCase()}`;
+    })
+    .join("");
+}
+
 type ApiEvent = {
   id: number | string;
   userId?: number | string;
@@ -309,9 +325,9 @@ function parseMinutes(raw?: string): number {
 function getTeamDisplayName(team?: TeamDto): string {
   if (!team) return "TBD";
   const explicit = String(team.name ?? "").trim();
-  if (explicit) return explicit;
+  if (explicit) return prettifyDisplayName(explicit);
   const memberNames = (team.members ?? [])
-    .map((member) => String(member.userFullName ?? "").trim())
+    .map((member) => prettifyDisplayName(String(member.userFullName ?? "").trim()))
     .filter(Boolean);
   if (memberNames.length > 0) return memberNames.join(" / ");
   return `Team #${team.id}`;
@@ -404,7 +420,6 @@ export default function RunTournamentPage() {
   const [finalizedByCategory, setFinalizedByCategory] = React.useState<Record<string, boolean>>({});
 
   const [loadingCategoryOpsById, setLoadingCategoryOpsById] = React.useState<Record<string, boolean>>({});
-  const [savingMatchById, setSavingMatchById] = React.useState<Record<string, boolean>>({});
   const [savingScoreByMatchId, setSavingScoreByMatchId] = React.useState<Record<string, boolean>>({});
   const [finalizingByCategory, setFinalizingByCategory] = React.useState<Record<string, boolean>>({});
   const [expandedMatchById, setExpandedMatchById] = React.useState<Record<string, boolean>>({});
@@ -989,62 +1004,6 @@ export default function RunTournamentPage() {
     [expandedMatchById, loadMatchScoring],
   );
 
-  const upsertMatch = React.useCallback(
-    async (match: RunMatch, nextStatus?: string) => {
-      if (!selectedCategory) return;
-      const token = getToken();
-      if (!token) {
-        setError("Invalid session. Please sign in again.");
-        return;
-      }
-
-      setSavingMatchById((prev) => ({ ...prev, [match.id]: true }));
-      setError(null);
-
-      try {
-        if (Number.isFinite(Number(match.backendMatchId)) && Number(match.backendMatchId) > 0) {
-          const payload = {
-            ...(Number.isFinite(Number(match.groupId)) && Number(match.groupId) > 0
-              ? { groupId: Number(match.groupId) }
-              : { categoryId: Number(selectedCategory.id) }),
-            round: normalizeRound(match.round),
-            homeTeamId: Number(match.homeTeamId),
-            awayTeamId: Number(match.awayTeamId),
-            matchDate: String(match.matchDate ?? ""),
-            startTime: `${toHmTime(match.startTime) || "00:00"}:00`,
-            venue: String(match.venue ?? ""),
-            status: normalizeRound(nextStatus ?? match.status),
-          };
-
-          const res = await fetch(`${API_URL}/matches/${Number(match.backendMatchId)}`, {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(payload),
-          });
-          const body = await res.json().catch(() => null);
-          if (!res.ok) {
-            throw new Error(body?.message?.[0] || body?.error || "Failed to update match.");
-          }
-        }
-
-        await loadCategoryOperations(selectedCategoryId);
-        setStatusMessage(
-          normalizeRound(nextStatus ?? match.status) === "IN_PROGRESS"
-            ? "Match started."
-            : "Match updated.",
-        );
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to update match.");
-      } finally {
-        setSavingMatchById((prev) => ({ ...prev, [match.id]: false }));
-      }
-    },
-    [loadCategoryOperations, selectedCategory, selectedCategoryId],
-  );
-
   const saveMatchScoring = React.useCallback(
     async (match: RunMatch) => {
       const token = getToken();
@@ -1583,10 +1542,15 @@ export default function RunTournamentPage() {
                               {selectedMatches.map((match) => {
                               const phaseDrafts = phaseDraftsByMatchId[match.id] ?? buildPhaseDraftsFromMatch(match);
                               const tiebreakDraft = tiebreakDraftsByMatchId[match.id] ?? buildTiebreakDraftFromMatch(match);
-                              const saving = Boolean(savingMatchById[match.id]);
                               const savingScores = Boolean(savingScoreByMatchId[match.id]);
                               const expanded = Boolean(expandedMatchById[match.id]);
                               const isCompleted = normalizeRound(match.status) === "COMPLETED";
+                              const statusLabel =
+                                normalizeRound(match.status) === "IN_PROGRESS"
+                                  ? "Live"
+                                  : isCompleted
+                                    ? "Completed"
+                                    : "Scheduled";
                               const hasScore =
                                 Number.isFinite(Number(match.homeScore)) &&
                                 Number.isFinite(Number(match.awayScore));
@@ -1597,23 +1561,49 @@ export default function RunTournamentPage() {
                                 <Box
                                   key={match.id}
                                   sx={{
-                                    p: { xs: 1.25, md: 1.5 },
-                                    borderRadius: "16px",
+                                    p: { xs: 1.35, md: 1.6 },
+                                    borderRadius: "28px",
                                     border: isCompleted
-                                      ? "1px solid #BBF7D0"
-                                      : "1px solid #E5E7EB",
-                                    bgcolor: isCompleted ? "#F0FDF4" : "#FFFFFF",
-                                    boxShadow: "0 1px 2px rgba(16, 24, 40, 0.04)",
+                                      ? "1px solid rgba(74, 222, 128, 0.34)"
+                                      : expanded
+                                        ? "1px solid rgba(168, 85, 247, 0.24)"
+                                        : "1px solid rgba(148, 163, 184, 0.18)",
+                                    background: isCompleted
+                                      ? "linear-gradient(180deg, rgba(236, 253, 243, 0.96) 0%, #FFFFFF 100%)"
+                                      : expanded
+                                        ? "linear-gradient(180deg, rgba(255, 247, 237, 0.96) 0%, rgba(250, 245, 255, 0.96) 100%)"
+                                        : "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%)",
+                                    boxShadow: expanded
+                                      ? "0 24px 48px rgba(249, 115, 22, 0.12)"
+                                      : "0 16px 36px rgba(15, 23, 42, 0.07)",
+                                    position: "relative",
+                                    overflow: "hidden",
+                                    "&::before": {
+                                      content: '""',
+                                      position: "absolute",
+                                      inset: 0,
+                                      background: expanded
+                                        ? "radial-gradient(circle at top right, rgba(249, 115, 22, 0.12), transparent 32%), radial-gradient(circle at bottom left, rgba(168, 85, 247, 0.10), transparent 36%)"
+                                        : "radial-gradient(circle at top right, rgba(168, 85, 247, 0.08), transparent 30%)",
+                                      pointerEvents: "none",
+                                    },
                                   }}
                                 >
-                                  <Stack spacing={1.25}>
+                                  <Stack spacing={1.35} sx={{ position: "relative", zIndex: 1 }}>
                                     <Stack
                                       direction={{ xs: "column", md: "row" }}
                                       spacing={0.8}
                                       alignItems={{ md: "center" }}
                                       justifyContent="space-between"
                                     >
-                                      <Typography sx={{ color: "#667085", fontSize: "0.9rem" }}>
+                                      <Typography
+                                        sx={{
+                                          color: "#667085",
+                                          fontSize: { xs: "0.98rem", md: "1.02rem" },
+                                          fontWeight: 600,
+                                          letterSpacing: "-0.01em",
+                                        }}
+                                      >
                                         {match.venue || "Venue TBD"} • {match.matchDate || "Date TBD"} •{" "}
                                         {match.startTime || "Time TBD"}
                                       </Typography>
@@ -1622,6 +1612,12 @@ export default function RunTournamentPage() {
                                           <Chip
                                             size="small"
                                             variant="outlined"
+                                            sx={{
+                                              borderColor: "rgba(99, 102, 241, 0.2)",
+                                              bgcolor: "rgba(255,255,255,0.78)",
+                                              fontWeight: 700,
+                                              color: "#1F2937",
+                                            }}
                                             label={
                                               match.groupName ||
                                               selectedGroups.find((group) => String(group.id) === String(match.groupId))
@@ -1634,6 +1630,7 @@ export default function RunTournamentPage() {
                                           <Chip
                                             size="small"
                                             color="success"
+                                            sx={{ fontWeight: 700 }}
                                             label="Completed"
                                           />
                                         ) : null}
@@ -1643,60 +1640,100 @@ export default function RunTournamentPage() {
                                     <Box
                                       sx={{
                                         display: "grid",
-                                        gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
-                                        gap: 1,
+                                        gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) 112px minmax(0, 1fr)" },
+                                        gap: 1.1,
+                                        alignItems: "stretch",
                                       }}
                                     >
                                       <Box
                                         sx={{
-                                          p: 1.1,
-                                          borderRadius: "10px",
-                                          border: "1px solid #E5E7EB",
-                                          bgcolor: "#F9FAFB",
-                                          minHeight: 88,
+                                          p: 1.4,
+                                          borderRadius: "22px",
+                                          border: "1px solid rgba(249, 115, 22, 0.12)",
+                                          background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,250,244,0.92) 100%)",
+                                          minHeight: 102,
+                                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.8)",
                                         }}
                                       >
                                         <Typography
                                           sx={{
-                                            fontSize: "0.72rem",
-                                            color: "#667085",
+                                            fontSize: "0.75rem",
+                                            color: "#9A3412",
                                             textTransform: "uppercase",
-                                            letterSpacing: "0.03em",
-                                            fontWeight: 700,
-                                            mb: 0.35,
+                                            letterSpacing: "0.12em",
+                                            fontWeight: 800,
+                                            mb: 0.55,
                                           }}
                                         >
                                           Home
                                         </Typography>
-                                          <Typography
+                                        <Typography
                                           sx={{
                                             fontWeight: 800,
                                             color: "#101828",
-                                            fontSize: "1.1rem",
-                                            lineHeight: 1.2,
+                                            fontSize: { xs: "1.1rem", md: "1.24rem" },
+                                            lineHeight: 1.18,
                                             wordBreak: "break-word",
+                                            letterSpacing: "-0.03em",
                                           }}
                                         >
                                           {resolveTeamName(match.homeTeamId, match.homeTeamName)}
                                         </Typography>
                                       </Box>
-                                      <Box
+                                      <Stack
+                                        spacing={0.6}
+                                        alignItems="center"
+                                        justifyContent="center"
                                         sx={{
-                                          p: 1.1,
-                                          borderRadius: "10px",
-                                          border: "1px solid #E5E7EB",
-                                          bgcolor: "#F9FAFB",
-                                          minHeight: 88,
+                                          p: 0.75,
+                                          borderRadius: "999px",
+                                          border: "1px solid rgba(148, 163, 184, 0.14)",
+                                          background: "rgba(255,255,255,0.86)",
+                                          minHeight: 102,
+                                          backdropFilter: "blur(10px)",
                                         }}
                                       >
                                         <Typography
                                           sx={{
-                                            fontSize: "0.72rem",
-                                            color: "#667085",
+                                            fontSize: "0.64rem",
                                             textTransform: "uppercase",
-                                            letterSpacing: "0.03em",
-                                            fontWeight: 700,
-                                            mb: 0.35,
+                                            letterSpacing: "0.14em",
+                                            color: "#667085",
+                                            fontWeight: 800,
+                                          }}
+                                        >
+                                          Score
+                                        </Typography>
+                                        <Typography
+                                          sx={{
+                                            fontSize: { xs: "1.7rem", md: "1.9rem" },
+                                            lineHeight: 1,
+                                            fontWeight: 900,
+                                            letterSpacing: "-0.05em",
+                                            color: "#111827",
+                                          }}
+                                        >
+                                          {hasScore ? `${match.homeScore} - ${match.awayScore}` : "0 - 0"}
+                                        </Typography>
+                                      </Stack>
+                                      <Box
+                                        sx={{
+                                          p: 1.4,
+                                          borderRadius: "22px",
+                                          border: "1px solid rgba(168, 85, 247, 0.12)",
+                                          background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(252,248,255,0.92) 100%)",
+                                          minHeight: 102,
+                                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.8)",
+                                        }}
+                                      >
+                                        <Typography
+                                          sx={{
+                                            fontSize: "0.75rem",
+                                            color: "#7E22CE",
+                                            textTransform: "uppercase",
+                                            letterSpacing: "0.12em",
+                                            fontWeight: 800,
+                                            mb: 0.55,
                                           }}
                                         >
                                           Away
@@ -1705,9 +1742,10 @@ export default function RunTournamentPage() {
                                           sx={{
                                             fontWeight: 800,
                                             color: "#101828",
-                                            fontSize: "1.1rem",
-                                            lineHeight: 1.2,
+                                            fontSize: { xs: "1.1rem", md: "1.24rem" },
+                                            lineHeight: 1.18,
                                             wordBreak: "break-word",
+                                            letterSpacing: "-0.03em",
                                           }}
                                         >
                                           {resolveTeamName(match.awayTeamId, match.awayTeamName)}
@@ -1726,17 +1764,19 @@ export default function RunTournamentPage() {
                                       <Stack
                                         spacing={1}
                                         sx={{
-                                          p: 1.1,
-                                          borderRadius: "12px",
-                                          bgcolor: isCompleted ? "#ECFDF3" : "#F8FAFC",
-                                          border: isCompleted ? "1px solid #A6F4C5" : "1px solid #E5E7EB",
+                                          p: 1.35,
+                                          borderRadius: "22px",
+                                          bgcolor: isCompleted ? "rgba(236, 253, 243, 0.88)" : "rgba(255,255,255,0.78)",
+                                          border: isCompleted ? "1px solid rgba(134, 239, 172, 0.62)" : "1px solid rgba(148, 163, 184, 0.15)",
+                                          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.7)",
                                         }}
                                       >
                                         <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                                           <Chip
                                             size="small"
                                             color={isCompleted ? "success" : normalizeRound(match.status) === "IN_PROGRESS" ? "warning" : "default"}
-                                            label={normalizeRound(match.status).replaceAll("_", " ")}
+                                            label={statusLabel}
+                                            sx={{ fontWeight: 700 }}
                                           />
                                           {(match.phases.length > 0 ? match.phases : phaseDrafts)
                                             .slice()
@@ -1747,6 +1787,11 @@ export default function RunTournamentPage() {
                                                 size="small"
                                                 variant="outlined"
                                                 label={`Set ${phase.phaseNumber}: ${getPhaseScoreValue(phase, "home")}-${getPhaseScoreValue(phase, "away")}`}
+                                                sx={{
+                                                  bgcolor: "rgba(255,255,255,0.88)",
+                                                  fontWeight: 700,
+                                                  borderColor: "rgba(148, 163, 184, 0.24)",
+                                                }}
                                               />
                                             ))}
                                           {match.tiebreakRequired || tiebreakDraft.home || tiebreakDraft.away ? (
@@ -1754,17 +1799,22 @@ export default function RunTournamentPage() {
                                               size="small"
                                               variant="outlined"
                                               label={`Tie-break: ${tiebreakDraft.home || match.tiebreakScore?.home || "-"}-${tiebreakDraft.away || match.tiebreakScore?.away || "-"}`}
+                                              sx={{
+                                                bgcolor: "rgba(255,255,255,0.88)",
+                                                fontWeight: 700,
+                                                borderColor: "rgba(168, 85, 247, 0.22)",
+                                              }}
                                             />
                                           ) : null}
                                         </Stack>
-                                        <Typography sx={{ color: "#667085", fontSize: "0.84rem" }}>
+                                        <Typography sx={{ color: "#344054", fontSize: "0.92rem", fontWeight: 700 }}>
                                           {hasScore
                                             ? winnerLabel
                                               ? `Result: ${match.homeScore} - ${match.awayScore}. Winner: ${winnerLabel}.`
                                               : `Result: ${match.homeScore} - ${match.awayScore}.`
                                             : "No result recorded yet."}
                                         </Typography>
-                                        <Typography sx={{ color: "#667085", fontSize: "0.8rem" }}>
+                                        <Typography sx={{ color: "#667085", fontSize: "0.84rem", lineHeight: 1.55 }}>
                                           {expanded
                                             ? "Enter one row per set, then save scores to recalculate the tennis result."
                                             : "Open scoring to enter set results and complete the match through backend tennis scoring."}
@@ -1780,36 +1830,16 @@ export default function RunTournamentPage() {
                                           onClick={() => {
                                             void toggleMatchScoring(match);
                                           }}
-                                          sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
+                                          sx={{
+                                            borderRadius: "18px",
+                                            textTransform: "none",
+                                            minHeight: 48,
+                                            fontWeight: 800,
+                                            boxShadow: expanded ? "0 12px 24px rgba(168, 85, 247, 0.18)" : "none",
+                                          }}
                                         >
                                           {expanded ? "Hide Scoring" : "Open Scoring"}
                                         </Button>
-                                        {!isCompleted ? (
-                                          <Button
-                                            variant="outlined"
-                                            size="small"
-                                            disabled={saving}
-                                            onClick={() => {
-                                              void upsertMatch(match, "IN_PROGRESS");
-                                            }}
-                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
-                                          >
-                                            {normalizeRound(match.status) === "IN_PROGRESS" ? "In Progress" : "Start Match"}
-                                          </Button>
-                                        ) : null}
-                                        {normalizeRound(match.status) === "IN_PROGRESS" ? (
-                                          <Button
-                                            variant="text"
-                                            size="small"
-                                            disabled={saving}
-                                            onClick={() => {
-                                              void upsertMatch(match, "SCHEDULED");
-                                            }}
-                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
-                                          >
-                                            Move Back To Scheduled
-                                          </Button>
-                                        ) : null}
                                       </Stack>
                                     </Box>
 
@@ -1817,10 +1847,10 @@ export default function RunTournamentPage() {
                                       <Stack
                                         spacing={1}
                                         sx={{
-                                          p: 1.1,
-                                          borderRadius: "12px",
-                                          border: "1px solid #E5E7EB",
-                                          bgcolor: "#FFFFFF",
+                                          p: 1.35,
+                                          borderRadius: "22px",
+                                          border: "1px solid rgba(148, 163, 184, 0.14)",
+                                          background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(249,250,251,0.96) 100%)",
                                         }}
                                       >
                                         {phaseDrafts.map((phase, phaseIndex) => (
@@ -1828,12 +1858,16 @@ export default function RunTournamentPage() {
                                             key={`${match.id}-draft-phase-${phase.phaseId ?? phase.phaseNumber}`}
                                             sx={{
                                               display: "grid",
-                                              gridTemplateColumns: { xs: "1fr", md: "140px 1fr 1fr" },
+                                              gridTemplateColumns: { xs: "1fr", md: "120px 1fr 1fr" },
                                               gap: 1,
                                               alignItems: "center",
+                                              p: 0.95,
+                                              borderRadius: "16px",
+                                              bgcolor: "rgba(255,255,255,0.92)",
+                                              border: "1px solid rgba(148, 163, 184, 0.14)",
                                             }}
                                           >
-                                            <Typography sx={{ fontWeight: 700, color: "#344054" }}>
+                                            <Typography sx={{ fontWeight: 800, color: "#1F2937", letterSpacing: "-0.02em" }}>
                                               Set {phase.phaseNumber}
                                             </Typography>
                                             <TextField
@@ -1884,7 +1918,7 @@ export default function RunTournamentPage() {
                                             }
                                             sx={{ alignSelf: "flex-start", textTransform: "none" }}
                                           >
-                                            Add Set
+                                          Add Set
                                           </Button>
                                           {match.tiebreakRequired ? (
                                             <Alert severity="warning" sx={{ py: 0 }}>
@@ -1897,12 +1931,16 @@ export default function RunTournamentPage() {
                                           <Box
                                             sx={{
                                               display: "grid",
-                                              gridTemplateColumns: { xs: "1fr", md: "140px 1fr 1fr" },
+                                              gridTemplateColumns: { xs: "1fr", md: "120px 1fr 1fr" },
                                               gap: 1,
                                               alignItems: "center",
+                                              p: 0.95,
+                                              borderRadius: "16px",
+                                              bgcolor: "rgba(255,255,255,0.92)",
+                                              border: "1px solid rgba(148, 163, 184, 0.14)",
                                             }}
                                           >
-                                            <Typography sx={{ fontWeight: 700, color: "#344054" }}>
+                                            <Typography sx={{ fontWeight: 800, color: "#1F2937" }}>
                                               Match Tie-break
                                             </Typography>
                                             <TextField
@@ -1942,7 +1980,7 @@ export default function RunTournamentPage() {
                                             onClick={() => {
                                               void saveMatchScoring(match);
                                             }}
-                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
+                                            sx={{ borderRadius: "16px", textTransform: "none", minHeight: 44, fontWeight: 800 }}
                                           >
                                             {savingScores ? "Saving Scores..." : "Save Scores"}
                                           </Button>
@@ -1953,7 +1991,7 @@ export default function RunTournamentPage() {
                                             onClick={() =>
                                               setExpandedMatchById((prev) => ({ ...prev, [match.id]: false }))
                                             }
-                                            sx={{ borderRadius: "10px", textTransform: "none", minHeight: 38 }}
+                                            sx={{ borderRadius: "16px", textTransform: "none", minHeight: 44, fontWeight: 700 }}
                                           >
                                             Close
                                           </Button>
