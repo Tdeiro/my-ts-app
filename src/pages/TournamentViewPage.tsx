@@ -17,32 +17,8 @@ import PlaceRoundedIcon from "@mui/icons-material/PlaceRounded";
 import AttachMoneyRoundedIcon from "@mui/icons-material/AttachMoneyRounded";
 import CategoryRoundedIcon from "@mui/icons-material/CategoryRounded";
 import { useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client";
-
-type EventCategoryDto = {
-  id: number | string;
-  name?: string;
-  level?: string;
-  gender?: string;
-  price?: number | string;
-};
-
-type EventDetailsDto = {
-  id: number | string;
-  name?: string;
-  locationName?: string;
-  address?: string;
-  startDate?: string;
-  endDate?: string;
-  startTime?: string;
-  endTime?: string;
-  registrationDeadline?: string;
-  entryFee?: number | string;
-  currency?: string;
-  tournamentStage?: string;
-  status?: string;
-  categories?: EventCategoryDto[];
-};
+import { api } from "../shared/api/client";
+import type { EventDetailsDto } from "../features/tournaments/types/eventDetailsTypes";
 
 function toDateLabel(value?: string): string {
   if (!value) return "TBD";

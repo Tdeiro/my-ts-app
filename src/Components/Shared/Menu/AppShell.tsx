@@ -39,7 +39,7 @@ import {
   getLoggedInRole,
   getToken,
   hasCreatorAccess,
-} from "../../../auth/tokens";
+} from "../../../features/auth/services/tokens";
 import { designTokens } from "../../../Theme/designTokens";
 
 const drawerWidth = 256;

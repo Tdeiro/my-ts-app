@@ -27,109 +27,21 @@ import ExpandLessRoundedIcon from "@mui/icons-material/ExpandLessRounded";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "../api/client";
-import { getLoggedInUserId } from "../auth/tokens";
+import { api } from "../shared/api/client";
+import { getLoggedInUserId } from "../features/auth/services/tokens";
+import type {
+  Category,
+  DashboardApiResp,
+  DashboardEventDto,
+  EventDetailsCategoryDto,
+  EventDetailsDto,
+  InviteUiModel,
+  SelectedCategory,
+  SubscribeMePayload,
+  UserScopedEventDto,
+} from "../features/tournaments/types/inviteTypes";
 
 const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
-
-type EventDetailsCategoryDto = {
-  id: number | string;
-  name?: string;
-  level?: string;
-  minAge?: number | null;
-  maxAge?: number | null;
-  gender?: string;
-  price?: number | string;
-};
-
-type EventDetailsDto = {
-  id: number | string;
-  createdBy?: number | string;
-  name?: string;
-  eventType?: string;
-  sport?: string;
-  level?: string;
-  timezone?: string;
-  locationName?: string;
-  address?: string;
-  startDate?: string;
-  endDate?: string;
-  startTime?: string;
-  endTime?: string;
-  registrationDeadline?: string;
-  entryFee?: number | string;
-  currency?: string;
-  tournamentStage?: string;
-  categories?: EventDetailsCategoryDto[];
-};
-
-type DashboardEventDto = {
-  id?: number | string;
-  status?: string;
-  subscriptionStatus?: string;
-  eventType?: string;
-};
-type DashboardApiResp = {
-  events?:
-    | Array<
-        | DashboardEventDto
-        | {
-            event?: DashboardEventDto | null;
-          }
-      >
-    | null;
-};
-
-type UserScopedEventDto = {
-  id?: number | string;
-  eventType?: string;
-};
-
-type SubscribeMePayload = {
-  eventId: number;
-  categories: Array<{
-    id: number;
-    suggestedPlayer?: string;
-    note?: string;
-  }>;
-};
-
-type Category = {
-  id: string;
-  name: string;
-  level: string;
-  gender: "Men" | "Women" | "Mixed";
-  format: "Singles" | "Doubles" | "Mixed";
-  tabLabel: string;
-  optionLabel: string;
-  selectionLabel: string;
-  minAge: string;
-  maxAge: string;
-  fee: number;
-};
-
-type SelectedCategory = Category & {
-  partnerName: string;
-  partnerNote: string;
-};
-
-type InviteUiModel = {
-  eventId: number;
-  name: string;
-  timezone: string;
-  location: string;
-  address: string;
-  dateLabel: string;
-  dateMeta: string;
-  timeLabel: string;
-  timeMeta: string;
-  feeLabel: string;
-  feeMeta: string;
-  deadlineLabel: string;
-  deadlineMeta: string;
-  stage: string;
-  currency: string;
-};
 
 function parseInviteTournamentId(raw: string | null): number | null {
   if (!raw) return null;

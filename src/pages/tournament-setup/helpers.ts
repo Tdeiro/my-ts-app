@@ -5,7 +5,7 @@ import {
   type StructureMode,
   type TeamDto,
   type TournamentFormat,
-} from "./types";
+} from "../../features/tournament-setup/types";
 
 export const STRUCTURE_OPTIONS: Array<{
   id: StructureMode;

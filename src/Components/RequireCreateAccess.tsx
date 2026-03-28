@@ -1,6 +1,6 @@
 import type { JSX } from "react";
 import { Navigate } from "react-router-dom";
-import { getLoggedInRole, hasCreatorAccess, isLoggedIn } from "../auth/tokens";
+import { getLoggedInRole, hasCreatorAccess, isLoggedIn } from "../features/auth/services/tokens";
 
 export default function RequireCreateAccess({
   children,

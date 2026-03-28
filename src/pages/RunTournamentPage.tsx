@@ -23,25 +23,33 @@ import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
 import { useNavigate, useParams } from "react-router-dom";
-import { getLoggedInUserId, getToken } from "../auth/tokens";
+import { getLoggedInUserId, getToken } from "../features/auth/services/tokens";
 import { loadTournamentSetup } from "../Utils/tournamentPlanner";
 import { parseTournamentCategoriesResponse } from "../Utils/tournamentCategoriesApi";
+import type {
+  ApiEvent,
+  ApiGroupStandingDto,
+  ApiKnockoutRoundCreateResponse,
+  ApiMatchDto,
+  ApiMatchPhaseDto,
+  ApiMatchPhaseScoreDto,
+  ApiMatchTiebreakDto,
+  ApiTournamentCategory,
+  ApiTournamentGroup,
+  GroupDto,
+  KnockoutByeSummary,
+  KnockoutScheduleDraft,
+  MatchPhaseDraft,
+  MatchTiebreakDraft,
+  OperationsTab,
+  RunMatch,
+  RunTournamentUiState,
+  StandingsRow,
+  TeamDto,
+  TeamMemberDto,
+} from "../features/run-tournament/types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
-
-type RunTournamentUiState = {
-  finalizedByCategory: Record<string, boolean>;
-  qualifiedByCategory: Record<string, number[]>;
-  knockoutByesByCategory: Record<
-    string,
-    Array<{
-      sourceRound: string;
-      advancesToRound: string;
-      teamIds: number[];
-      seededTeamIds: Array<{ seed: number; teamId: number }>;
-    }>
-  >;
-};
 
 function runTournamentUiStateKey(eventId: string) {
   return `run_tournament_ui_${eventId}`;
@@ -93,239 +101,6 @@ function prettifyDisplayName(raw?: string): string {
     .join("");
 }
 
-type ApiEvent = {
-  id: number | string;
-  userId?: number | string;
-  user_id?: number | string;
-  name?: string;
-  eventType?: string;
-  locationName?: string;
-  startDate?: string;
-};
-
-type ApiTournamentCategory = {
-  id: number | string;
-  name?: string;
-};
-
-type TeamMemberDto = {
-  userId: number;
-  userFullName?: string;
-};
-
-type TeamDto = {
-  id: number;
-  categoryId: number;
-  name?: string;
-  autoNameFromMembers?: boolean;
-  members?: TeamMemberDto[];
-};
-
-type ApiTournamentGroup = {
-  id?: number | string;
-  name?: string;
-  teamIds?: Array<number | string>;
-  teams?: Array<{ id?: number | string }>;
-};
-
-type ApiMatchDto = {
-  id?: number | string;
-  matchId?: number | string;
-  groupId?: number | string;
-  group_id?: number | string;
-  group?: {
-    id?: number | string;
-    name?: string;
-  };
-  round?: string;
-  stage?: string;
-  categoryId?: number | string;
-  category?: {
-    id?: number | string;
-    name?: string;
-  };
-  homeTeamId?: number | string;
-  home_team_id?: number | string;
-  homeTeam?: {
-    id?: number | string;
-    name?: string;
-  };
-  awayTeamId?: number | string;
-  away_team_id?: number | string;
-  awayTeam?: {
-    id?: number | string;
-    name?: string;
-  };
-  matchDate?: string;
-  match_date?: string;
-  startTime?: string;
-  start_time?: string;
-  venue?: string;
-  court?: string;
-  field?: string;
-  status?: string;
-  matchStatus?: string;
-  result?: {
-    matchId?: number | string;
-    homeScore?: number | string;
-    awayScore?: number | string;
-    winnerTeamId?: number | string;
-    completedAt?: string;
-    phases?: Array<{
-      phaseId?: number | string;
-      phaseType?: string;
-      phaseNumber?: number | string;
-      scores?: Array<{
-        phaseId?: number | string;
-        teamId?: number | string;
-        score?: number | string;
-      }>;
-    }>;
-    tiebreakRequired?: boolean;
-    tiebreak?: {
-      scores?: Array<{
-        matchId?: number | string;
-        teamId?: number | string;
-        points?: number | string;
-      }>;
-    };
-  };
-};
-
-type ApiMatchPhaseDto = {
-  id?: number | string;
-  matchId?: number | string;
-  phaseType?: string;
-  phaseNumber?: number | string;
-};
-
-type ApiMatchPhaseScoreDto = {
-  phaseId?: number | string;
-  teamId?: number | string;
-  score?: number | string;
-};
-
-type ApiMatchTiebreakDto = {
-  matchId?: number | string;
-  teamId?: number | string;
-  points?: number | string;
-};
-
-type ApiGroupStandingDto = {
-  groupId?: number | string;
-  teamId?: number | string;
-  played?: number | string;
-  wins?: number | string;
-  draws?: number | string;
-  losses?: number | string;
-  goalsFor?: number | string;
-  goalsAgainst?: number | string;
-  setsWon?: number | string;
-  setsLost?: number | string;
-  gamesWon?: number | string;
-  gamesLost?: number | string;
-  points?: number | string;
-};
-
-type ApiKnockoutRoundCreateResponse = {
-  categoryId?: number | string;
-  round?: string;
-  qualifiedTeams?: number | string;
-  bracketSize?: number | string;
-  byes?: number | string;
-  autoAdvancedTeams?: Array<{
-    seed?: number | string;
-    advancesToRound?: string;
-    team?: {
-      id?: number | string;
-      name?: string;
-    };
-  }>;
-  createdMatches?: ApiMatchDto[];
-};
-
-type GroupDto = {
-  id: string;
-  name: string;
-  participants: string[];
-};
-
-type RunMatch = {
-  id: string;
-  backendMatchId?: number;
-  categoryId: string;
-  groupId?: number;
-  groupName?: string;
-  round: string;
-  homeTeamId: number;
-  homeTeamName?: string;
-  awayTeamId: number;
-  awayTeamName?: string;
-  matchDate: string;
-  startTime: string;
-  venue: string;
-  status: string;
-  homeScore?: number;
-  awayScore?: number;
-  winnerTeamId?: number;
-  completedAt?: string;
-  resultExists?: boolean;
-  phases: Array<{
-    phaseId?: number;
-    phaseType: string;
-    phaseNumber: number;
-    homeScore?: number;
-    awayScore?: number;
-  }>;
-  tiebreakRequired: boolean;
-  tiebreakScore?: {
-    home?: number;
-    away?: number;
-  };
-};
-
-type StandingsRow = {
-  teamId: number;
-  teamName: string;
-  played: number;
-  wins: number;
-  draws: number;
-  losses: number;
-  setsWon: number;
-  setsLost: number;
-  gamesWon: number;
-  gamesLost: number;
-  points: number;
-};
-
-type MatchPhaseDraft = {
-  phaseId?: number;
-  phaseType: string;
-  phaseNumber: number;
-  home: string;
-  away: string;
-};
-
-type MatchTiebreakDraft = {
-  home: string;
-  away: string;
-};
-
-type KnockoutScheduleDraft = {
-  matchDate: string;
-  startTime: string;
-  venue: string;
-  bufferMinutes: string;
-};
-
-type KnockoutByeSummary = {
-  sourceRound: string;
-  advancesToRound: string;
-  teamIds: number[];
-  seededTeamIds: Array<{ seed: number; teamId: number }>;
-};
-
-type OperationsTab = "matches" | "standings" | "knockout";
 
 function extractLevelFromCategoryName(name?: string): string | null {
   const normalized = String(name ?? "").trim().toLowerCase();

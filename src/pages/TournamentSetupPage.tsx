@@ -12,7 +12,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { getToken } from "../auth/tokens";
+import { getToken } from "../features/auth/services/tokens";
 import {
   type GroupBucket,
   loadTournamentGroups,
@@ -47,7 +47,7 @@ import {
   type StructureMode,
   type TeamDto,
   type TournamentFormat,
-} from "./tournament-setup/types";
+} from "../features/tournament-setup/types";
 import { TeamsTab } from "./tournament-setup/TeamsTab";
 import { StructureTab } from "./tournament-setup/StructureTab";
 import { GroupsTab } from "./tournament-setup/GroupsTab";

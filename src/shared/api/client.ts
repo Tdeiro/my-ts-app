@@ -1,5 +1,5 @@
 import axios from "axios";
-import { clearToken, getToken } from "../auth/tokens";
+import { clearToken, getToken } from "../../features/auth/services/tokens";
 
 
 export const api = axios.create({

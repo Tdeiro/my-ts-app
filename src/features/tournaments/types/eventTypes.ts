@@ -1,5 +1,3 @@
-import { api } from "./client";
-
 export type EventDto = {
   id?: number;
   userId?: number;
@@ -11,7 +9,7 @@ export type EventDto = {
   timezone: string;
   locationName?: string;
   address?: string;
-  startDate: string; 
+  startDate: string;
   endDate?: string;
   startTime?: string;
   endTime?: string;
@@ -24,13 +22,3 @@ export type EventDto = {
   allowWaitlist?: boolean;
   requireApproval?: boolean;
 };
-
-export async function createEvent(payload: EventDto) {
-  const { data } = await api.post<EventDto>("/events", payload);
-  return data;
-}
-
-export async function getEvents() {
-  const { data } = await api.get<EventDto[]>("/events");
-  return data;
-}

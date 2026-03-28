@@ -12,7 +12,7 @@ import {
   Typography,
 } from "@mui/material";
 import CalendarMonthOutlinedIcon from "@mui/icons-material/CalendarMonthOutlined";
-import { getToken } from "../../auth/tokens";
+import { getToken } from "../../features/auth/services/tokens";
 import type { GroupBucket } from "../../Utils/tournamentPlanner";
 import {
   formatMinutesToTime,
@@ -28,7 +28,7 @@ import type {
   CategorySetupConfig,
   ScheduleDraftInput,
   TeamDto,
-} from "./types";
+} from "../../features/tournament-setup/types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 const GROUP_STAGE_ROUND = "GROUP_STAGE";

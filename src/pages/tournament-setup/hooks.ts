@@ -1,6 +1,6 @@
 import * as React from "react";
 import { type TournamentCategory } from "../../Utils/tournamentPlanner";
-import { type SetupTab } from "./types";
+import { type SetupTab } from "../../features/tournament-setup/types";
 
 type UseTournamentSetupNavigationArgs = {
   categories: TournamentCategory[];

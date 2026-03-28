@@ -3,23 +3,19 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Box,
   Button,
-  Card,
-  CardContent,
-  Container,
   Divider,
-  Stack,
   TextField,
-  Typography,
-  Alert,
   InputAdornment,
   IconButton,
 } from "@mui/material";
-import { setToken } from "../auth/tokens";
+import { setToken } from "../features/auth/services/tokens";
 import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import type { FormErrors, SignupForm } from "../Utils/FormTypes";
 import { validateInput } from "../Utils/FormValidationUtil";
-import Logo from "../assets/onora.png";
+import AuthPage from "../features/auth/components/AuthPage";
+import AuthFooterLink from "../features/auth/components/AuthFooterLink";
+import AuthAlertStack from "../features/auth/components/AuthAlertStack";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -124,180 +120,128 @@ export default function SignupPage() {
   };
 
   return (
-    <Box
-      sx={{
-        minHeight: "100vh",
-        bgcolor: "background.default",
-        display: "flex",
-        alignItems: "center",
-        py: { xs: 4, sm: 6 },
-      }}
+    <AuthPage
+      title="Create an account"
+      subtitle="Get started with Onora"
+      footer={
+        <AuthFooterLink
+          prompt="Already have an account?"
+          actionLabel="Sign in"
+          onAction={() =>
+            navigate(
+              inviteTournamentId
+                ? `/login?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+                : "/login"
+            )
+          }
+        />
+      }
     >
-      <Container maxWidth="sm">
-        <Card sx={{ borderRadius: 3 }}>
-          <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
-            <Box sx={{ textAlign: "center", mb: 3 }}>
-              <Box
-                component="img"
-                src={Logo}
-                alt="Onora logo"
-                sx={{
-                  height: 60,
-                  display: "block",
-                  mx: "auto",
-                  mb: 1,
-                }}
-              />
-              <Typography variant="h5" fontWeight={600}>
-                Create an account
-              </Typography>
-              <Typography color="text.secondary">
-                Get started with Onora
-              </Typography>
-            </Box>
+      <AuthAlertStack error={apiError} success={apiSuccess} />
 
-            {/* API Alerts */}
-            {apiError ? (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {apiError}
-              </Alert>
-            ) : null}
-            {apiSuccess ? (
-              <Alert severity="success" sx={{ mb: 2 }}>
-                {apiSuccess}
-              </Alert>
-            ) : null}
+      <Box
+        component="form"
+        noValidate
+        onSubmit={handleSubmit}
+        sx={{ display: "flex", flexDirection: "column", gap: 2 }}
+      >
+        <TextField
+          required
+          label="First Name"
+          value={form.firstName}
+          onChange={setField("firstName")}
+          error={!!errors.firstName}
+          helperText={errors.firstName || " "}
+          autoComplete="given-name"
+        />
+        <TextField
+          required
+          label="Last Name"
+          value={form.lastName}
+          onChange={setField("lastName")}
+          error={!!errors.lastName}
+          helperText={errors.lastName || " "}
+          autoComplete="family-name"
+        />
+        <TextField
+          required
+          label="Email address"
+          type="email"
+          value={form.email}
+          onChange={setField("email")}
+          error={!!errors.email}
+          helperText={errors.email || " "}
+          autoComplete="email"
+        />
 
-            <Box
-              component="form"
-              noValidate
-              onSubmit={handleSubmit}
-              sx={{ display: "flex", flexDirection: "column", gap: 2 }}
-            >
-              <TextField
-                required
-                label="First Name"
-                value={form.firstName}
-                onChange={setField("firstName")}
-                error={!!errors.firstName}
-                helperText={errors.firstName || " "}
-                autoComplete="given-name"
-              />
-              <TextField
-                required
-                label="Last Name"
-                value={form.lastName}
-                onChange={setField("lastName")}
-                error={!!errors.lastName}
-                helperText={errors.lastName || " "}
-                autoComplete="family-name"
-              />
-              <TextField
-                required
-                label="Email address"
-                type="email"
-                value={form.email}
-                onChange={setField("email")}
-                error={!!errors.email}
-                helperText={errors.email || " "}
-                autoComplete="email"
-              />
+        <TextField
+          required
+          label="Phone"
+          value={form.phone}
+          onChange={setField("phone")}
+          error={!!errors.phone}
+          helperText={errors.phone || " "}
+          autoComplete="tel"
+        />
 
-              <TextField
-                required
-                label="Phone"
-                value={form.phone}
-                onChange={setField("phone")}
-                error={!!errors.phone}
-                helperText={errors.phone || " "}
-                autoComplete="tel"
-              />
-
-              <TextField
-                required
-                label="Password"
-                type={showPassword ? "text" : "password"}
-                value={form.password}
-                onChange={setField("password")}
-                error={!!errors.password}
-                helperText={errors.password || " "}
-                autoComplete="new-password"
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton
-                        onClick={() => setShowPassword((prev) => !prev)}
-                        edge="end"
-                      >
-                        {showPassword ? <VisibilityOff /> : <Visibility />}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-              />
-
-              <TextField
-                required
-                label="Confirm password"
-                type={showConfirmPassword ? "text" : "password"}
-                value={form.confirmPassword}
-                onChange={setField("confirmPassword")}
-                error={!!errors.confirmPassword}
-                helperText={errors.confirmPassword || " "}
-                autoComplete="new-password"
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton
-                        onClick={() => setShowConfirmPassword((prev) => !prev)}
-                        edge="end"
-                      >
-                        {showConfirmPassword ? (
-                          <VisibilityOff />
-                        ) : (
-                          <Visibility />
-                        )}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-              />
-
-              <Button
-                type="submit"
-                variant="contained"
-                size="large"
-                fullWidth
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? "Creating account..." : "Sign up"}
-              </Button>
-
-              <Divider sx={{ my: 1 }}>or</Divider>
-            </Box>
-
-            {/* Footer */}
-            <Stack spacing={1} sx={{ mt: 3, textAlign: "center" }}>
-              <Typography variant="body2" color="text.secondary">
-                Already have an account?{""}
-                <Button
-                  variant="text"
-                  size="small"
-                  onClick={() =>
-                    navigate(
-                      inviteTournamentId
-                        ? `/login?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
-                        : "/login"
-                    )
-                  }
+        <TextField
+          required
+          label="Password"
+          type={showPassword ? "text" : "password"}
+          value={form.password}
+          onChange={setField("password")}
+          error={!!errors.password}
+          helperText={errors.password || " "}
+          autoComplete="new-password"
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end">
+                <IconButton
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  edge="end"
                 >
-                  Sign in
-                </Button>
-              </Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-      </Container>
-    </Box>
+                  {showPassword ? <VisibilityOff /> : <Visibility />}
+                </IconButton>
+              </InputAdornment>
+            ),
+          }}
+        />
+
+        <TextField
+          required
+          label="Confirm password"
+          type={showConfirmPassword ? "text" : "password"}
+          value={form.confirmPassword}
+          onChange={setField("confirmPassword")}
+          error={!!errors.confirmPassword}
+          helperText={errors.confirmPassword || " "}
+          autoComplete="new-password"
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end">
+                <IconButton
+                  onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  edge="end"
+                >
+                  {showConfirmPassword ? <VisibilityOff /> : <Visibility />}
+                </IconButton>
+              </InputAdornment>
+            ),
+          }}
+        />
+
+        <Button
+          type="submit"
+          variant="contained"
+          size="large"
+          fullWidth
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? "Creating account..." : "Sign up"}
+        </Button>
+
+        <Divider sx={{ my: 1 }}>or</Divider>
+      </Box>
+    </AuthPage>
   );
 }

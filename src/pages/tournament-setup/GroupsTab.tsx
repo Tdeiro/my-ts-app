@@ -8,14 +8,14 @@ import {
   Typography,
 } from "@mui/material";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
-import { getToken } from "../../auth/tokens";
+import { getToken } from "../../features/auth/services/tokens";
 import TournamentPhaseBuilder, {
   generateBracketSkeleton,
   generateGroupsSkeleton,
   type BuilderBracketMatch,
 } from "../../Components/Shared/TournamentPhaseBuilder";
 import type { GroupBucket } from "../../Utils/tournamentPlanner";
-import type { ApiTournamentGroup, StructureMode, TeamDto } from "./types";
+import type { ApiTournamentGroup, StructureMode, TeamDto } from "../../features/tournament-setup/types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 

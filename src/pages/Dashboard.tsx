@@ -18,7 +18,7 @@ import {
   getToken,
   hasCreatorAccess,
   isParticipantRole,
-} from "../auth/tokens";
+} from "../features/auth/services/tokens";
 import { type WeeklyClass } from "../Components/Shared/WeeklyScheduleCard";
 import CoachWeeklyScheduleBoard, {
   type CoachScheduleDay,

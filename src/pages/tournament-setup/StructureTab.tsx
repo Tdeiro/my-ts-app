@@ -12,8 +12,8 @@ import {
   Typography,
 } from "@mui/material";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
-import { getToken } from "../../auth/tokens";
-import type { CategorySetupConfig, StructureMode } from "./types";
+import { getToken } from "../../features/auth/services/tokens";
+import type { CategorySetupConfig, StructureMode } from "../../features/tournament-setup/types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 

@@ -11,13 +11,13 @@ import {
   Typography,
 } from "@mui/material";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
-import { getToken } from "../../auth/tokens";
+import { getToken } from "../../features/auth/services/tokens";
 import type {
   ApiEventSubscription,
   RegisteredPlayer,
   TeamDto,
   TeamEditorState,
-} from "./types";
+} from "../../features/tournament-setup/types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 

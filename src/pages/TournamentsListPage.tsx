@@ -32,147 +32,15 @@ import {
   getLoggedInRole,
   getLoggedInUserId,
   hasCreatorAccess,
-  getToken,
-} from "../auth/tokens";
+} from "../features/auth/services/tokens";
 import { designTokens } from "../Theme/designTokens";
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
-const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
-
-type ApiEvent = {
-  id: number;
-  createdBy?: number | string;
-  name: string;
-  eventType: string;
-  sport?: string;
-  format?: string;
-  level?: string;
-  locationName?: string;
-  startDate: string;
-  registrationDeadline?: string;
-  capacity?: number | string;
-  subscriptionsCount?: number | string;
-  capacityLeft?: number | string;
-  status?: string;
-  entryFee?: number | string;
-  currency?: string;
-  isPublic?: boolean;
-  tournamentStage?: string;
-  categoriesCount?: number | string;
-  groupsCount?: number | string;
-  teamsCount?: number | string;
-  membersCount?: number | string;
-};
-
-type Tournament = {
-  id: string;
-  ownerId: number | null;
-  name: string;
-  sport: string;
-  format: string;
-  level: string;
-  locationName: string;
-  startDate: string;
-  capacity: number;
-  subscriptionsCount: number;
-  capacityLeft: number;
-  entryFee: number;
-  currency: string;
-  status: "Open";
-  isPublic: boolean;
-  apiStatus?: string;
-  registrationDeadline: string;
-  tournamentStage: string;
-};
-
-type TournamentDisplayMeta = {
-  timeLabel: string;
-  organizer: string;
-  totalSpots: number;
-  spotsLeft: number;
-  registrationDeadline: string;
-};
-
-function formatTournamentLevelLabel(level?: string): string {
-  const raw = String(level ?? "").trim();
-  if (!raw) return "Open";
-  const normalized = raw.toUpperCase().replaceAll("_", " ");
-  if (normalized === "ALL LEVELS") return "Open";
-  return raw
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function mapApiEvent(e: ApiEvent): Tournament {
-  const ownerRaw = e.createdBy;
-  const ownerId = ownerRaw == null ? null : Number(ownerRaw);
-  const capacity = Number(e.capacity ?? 0);
-  const subscriptionsCount = Number(e.subscriptionsCount ?? 0);
-  const capacityLeftRaw = Number(e.capacityLeft);
-  const safeCapacity = Number.isFinite(capacity) ? Math.max(0, capacity) : 0;
-  const safeSubscriptions = Number.isFinite(subscriptionsCount)
-    ? Math.max(0, subscriptionsCount)
-    : 0;
-  const safeCapacityLeft = Number.isFinite(capacityLeftRaw)
-    ? Math.max(0, capacityLeftRaw)
-    : Math.max(0, safeCapacity - safeSubscriptions);
-  return {
-    id: String(e.id),
-    ownerId: Number.isFinite(ownerId) ? ownerId : null,
-    name: e.name ?? "Untitled",
-    sport: e.sport ?? "Other",
-    format: e.format ?? "-",
-    level: formatTournamentLevelLabel(e.level ?? "All levels"),
-    locationName: e.locationName ?? "-",
-    startDate: e.startDate,
-    capacity: safeCapacity,
-    subscriptionsCount: safeSubscriptions,
-    capacityLeft: safeCapacityLeft,
-    entryFee:
-      typeof e.entryFee === "string" ? Number(e.entryFee) : (e.entryFee ?? 0),
-    currency: (e.currency ?? "AUD").toUpperCase(),
-    status: "Open",
-    isPublic: e.isPublic ?? true,
-    apiStatus: String(e.status ?? "").toUpperCase(),
-    registrationDeadline: e.registrationDeadline ?? e.startDate,
-    tournamentStage: String(e.tournamentStage ?? "REGISTRATION").toUpperCase(),
-  };
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function formatDateShort(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function deriveDisplayMeta(item: Tournament): TournamentDisplayMeta {
-  const totalSpots = Math.max(0, Number(item.capacity) || 0);
-  const spotsLeft = Math.max(
-    0,
-    Number.isFinite(Number(item.capacityLeft))
-      ? Number(item.capacityLeft)
-      : totalSpots - Math.max(0, Number(item.subscriptionsCount) || 0),
-  );
-  return {
-    timeLabel: "-",
-    organizer: "-",
-    totalSpots,
-    spotsLeft,
-    registrationDeadline: formatDate(item.registrationDeadline),
-  };
-}
+import { useTournamentsList } from "../features/tournaments/hooks/useTournamentsList";
+import {
+  deriveDisplayMeta,
+  formatDate,
+  formatDateShort,
+} from "../features/tournaments/utils/tournamentListFormatters";
+import { readSubscribedEventIds } from "../features/tournaments/utils/tournamentListStorage";
 
 function statusChipSx() {
   return {
@@ -186,22 +54,6 @@ function statusChipSx() {
   };
 }
 
-function readSubscribedEventIds(): Set<string> {
-  try {
-    const raw = window.localStorage.getItem(UPCOMING_SUBSCRIBED_EVENTS_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(
-      parsed
-        .map((item) => Number(item))
-        .filter((item) => Number.isFinite(item) && item > 0)
-        .map((item) => String(item)),
-    );
-  } catch {
-    return new Set();
-  }
-}
-
 export default function TournamentsListPage() {
   const navigate = useNavigate();
   const role = getLoggedInRole();
@@ -210,71 +62,7 @@ export default function TournamentsListPage() {
 
   const [query, setQuery] = React.useState("");
   const [sportFilter, setSportFilter] = React.useState("All");
-
-  const [items, setItems] = React.useState<Tournament[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
-
-  const loadEvents = React.useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    const token = getToken();
-    if (!token) {
-      setError("You are not logged in.");
-      setLoading(false);
-      return;
-    }
-    if (currentUserId === null) {
-      setError("Invalid session. Please sign in again.");
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API_URL}/events`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        setError(
-          data?.message?.[0] ||
-            data?.error ||
-            `Failed to load events (${res.status})`,
-        );
-        setItems([]);
-        return;
-      }
-
-      const raw: ApiEvent[] = Array.isArray(data) ? data : (data?.data ?? []);
-      const mapped = raw
-        .filter((e) => e.eventType?.toUpperCase() === "TOURNAMENT")
-        .filter((e) => {
-          const status = String(e.status ?? "").toUpperCase();
-          const stage = String(e.tournamentStage ?? "").toUpperCase();
-          return (
-            !status ||
-            ["OPEN", "ACTIVE", "ONGOING", "REGISTRATION"].includes(status) ||
-            ["REGISTRATION", "ACTIVE", "ONGOING"].includes(stage)
-          );
-        })
-        .map(mapApiEvent)
-        .sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
-
-      setItems(mapped);
-    } catch {
-      setError("Network error loading tournaments.");
-      setItems([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentUserId]);
-
-  React.useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
+  const { items, loading, error } = useTournamentsList({ currentUserId });
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();

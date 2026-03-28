@@ -17,8 +17,8 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import LockIcon from "@mui/icons-material/Lock";
 import VerifiedUserIcon from "@mui/icons-material/VerifiedUser";
 import MonetizationOnIcon from "@mui/icons-material/MonetizationOn";
-import { api } from "../api/client";
-import { setLoggedInPlanOverride, setToken } from "../auth/tokens";
+import { api } from "../shared/api/client";
+import { setLoggedInPlanOverride, setToken } from "../features/auth/services/tokens";
 
 export default function AccountCheckoutPage() {
   const navigate = useNavigate();

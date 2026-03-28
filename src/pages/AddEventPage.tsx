@@ -5,246 +5,49 @@ import {
   Button,
   Card,
   CardContent,
-  Checkbox,
-  Divider,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControl,
-  FormControlLabel,
-  InputLabel,
-  MenuItem,
-  Select,
   Stack,
-  Switch,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TextField,
   Typography,
-  Chip,
 } from "@mui/material";
 import { useNavigate, useParams } from "react-router-dom";
-import { getToken } from "../auth/tokens";
+import { getToken } from "../features/auth/services/tokens";
 import { parseTournamentCategoriesResponse } from "../Utils/tournamentCategoriesApi";
+import type {
+  CategoryPricingRule,
+  TournamentCategoryForm,
+  TournamentForm,
+} from "../features/tournaments/types/addEventTypes";
+import {
+  SPORT_TO_API_VALUE,
+  buildAutoCategoryName,
+  formatCategoryFormatLabel,
+  formatCategoryLevelLabel,
+  getTodayIsoDate,
+  inferFormatFromCategoryName,
+  initialCategoryPricingRule,
+  initialForm,
+  mapApiTournamentLevel,
+  newCategory,
+  resolveCategorySpecialPrice,
+  teamsLimitSizeFromFormat,
+  validateTournamentBasics,
+} from "../features/tournaments/utils/addEventHelpers";
+import DetailsStep from "../features/tournaments/components/add-event/DetailsStep";
+import CategoriesStep from "../features/tournaments/components/add-event/CategoriesStep";
+import PreviewStep from "../features/tournaments/components/add-event/PreviewStep";
+import CategoryModal from "../features/tournaments/components/add-event/CategoryModal";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
-type TournamentForm = {
-  name: string;
-  sport: "" | "Tennis" | "Beach Tennis" | "Padel" | "Pickleball" | "Other";
-  level: "" | "Beginner" | "Intermediate" | "Advanced" | "All levels";
-  timezone: string;
-  locationName: string;
-  address: string;
-  startDate: string;
-  endDate: string;
-  startTime: string;
-  endTime: string;
-  registrationDeadline: string;
-  capacity: number;
-  entryFee: number;
-  currency: "" | "AUD" | "USD" | "EUR" | "BRL";
-  description: string;
-  isPublic: boolean;
-  allowWaitlist: boolean;
-  requireApproval: boolean;
-  tournamentStage: "DRAFT" | "REGISTRATION";
-};
-
-type TournamentCategoryForm = {
-  id: string;
-  backendId?: number;
-  name: string;
-  level: "BEGINNER" | "INTERMEDIATE" | "ADVANCED" | "ALL_LEVELS";
-  format: "SINGLES" | "DOUBLES" | "MIXED";
-  gender: "Women" | "Men";
-  price: number;
-  specialPrice?: number | null;
-};
-
-type CategoryPricingRule = {
-  enabled: boolean;
-  specialPricePerCategory: number;
-  currency: "" | "AUD" | "USD" | "EUR" | "BRL";
-};
-
-const initialForm: TournamentForm = {
-  name: "",
-  sport: "",
-  level: "",
-  timezone: "",
-  locationName: "",
-  address: "",
-  startDate: "",
-  endDate: "",
-  startTime: "",
-  endTime: "",
-  registrationDeadline: "",
-  capacity: 0,
-  entryFee: 0,
-  currency: "",
-  description: "",
-  isPublic: true,
-  allowWaitlist: false,
-  requireApproval: false,
-  tournamentStage: "DRAFT",
-};
-
-const SPORT_TO_API_VALUE: Record<TournamentForm["sport"], string> = {
-  "": "OTHER",
-  Tennis: "TENNIS",
-  "Beach Tennis": "BEACH_TENNIS",
-  Padel: "PADEL",
-  Pickleball: "PICKLEBALL",
-  Other: "OTHER",
-};
-
-function newCategory(): TournamentCategoryForm {
-  return {
-    id: crypto.randomUUID(),
-    name: "",
-    level: "INTERMEDIATE",
-    format: "DOUBLES",
-    gender: "Men",
-    price: 0,
-  };
-}
-
-function formatTournamentLevelLabel(level?: string): string {
-  const raw = String(level ?? "").trim();
-  if (!raw) return "Open";
-  const normalized = raw.toUpperCase().replaceAll("_", " ");
-  if (normalized === "ALL LEVELS") return "Open";
-  return raw.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function formatCategoryLevelLabel(
-  level: TournamentCategoryForm["level"],
-): string {
-  const normalized = String(level).toUpperCase().replaceAll("_", " ");
-  if (normalized === "ALL LEVELS") return "Open";
-  return normalized.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function formatCategoryFormatLabel(
-  format: TournamentCategoryForm["format"],
-): string {
-  if (format === "SINGLES") return "Singles";
-  if (format === "DOUBLES") return "Doubles";
-  return "Mixed";
-}
-
-function inferFormatFromCategoryName(
-  name: string,
-): TournamentCategoryForm["format"] {
-  const normalized = String(name ?? "").toLowerCase();
-  if (normalized.includes("single")) return "SINGLES";
-  if (normalized.includes("mixed")) return "MIXED";
-  return "DOUBLES";
-}
-
-function teamsLimitSizeFromFormat(
-  format: TournamentCategoryForm["format"],
-): number {
-  if (format === "SINGLES") return 1;
-  return 2;
-}
-
-function resolveCategorySpecialPrice(
-  basePrice: number,
-  pricingRule: CategoryPricingRule,
-): number {
-  if (pricingRule.enabled) {
-    return Math.max(0, Number(pricingRule.specialPricePerCategory || 0));
-  }
-  return Math.max(0, Number(basePrice || 0));
-}
-
-function buildAutoCategoryName(category: TournamentCategoryForm): string {
-  return `${category.gender} - ${formatCategoryLevelLabel(category.level)} - ${formatCategoryFormatLabel(category.format)}`;
-}
-
-function mapApiTournamentLevel(level?: string): TournamentForm["level"] {
-  const normalized = String(level ?? "")
-    .toUpperCase()
-    .replaceAll("_", " ")
-    .trim();
-  if (normalized === "BEGINNER") return "Beginner";
-  if (normalized === "INTERMEDIATE") return "Intermediate";
-  if (normalized === "ADVANCED") return "Advanced";
-  return "All levels";
-}
-
-function getTodayIsoDate(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-function validateTournamentBasics(form: TournamentForm): string | null {
-  const today = getTodayIsoDate();
-  if (!form.name.trim()) return "Tournament name is required.";
-  if (!form.sport) return "Sport is required.";
-  if (!form.timezone) return "Timezone is required.";
-  if (!form.startDate) return "Start date is required.";
-  if (form.startDate < today) return "Start date cannot be before today.";
-  if (!form.endDate) return "End date is required.";
-  if (form.endDate < form.startDate)
-    return "End date must be on or after start date.";
-  if (!form.startTime) return "Start time is required.";
-  if (!form.endTime) return "End time is required.";
-  if (form.startDate === form.endDate && form.endTime <= form.startTime) {
-    return "End time must be after start time for the same day.";
-  }
-  return null;
-}
-
-const initialCategoryPricingRule: CategoryPricingRule = {
-  enabled: false,
-  specialPricePerCategory: 0,
-  currency: "AUD",
-};
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <Typography
-      variant="body1"
-      sx={{ fontWeight: 900, fontSize: "0.95rem", mb: 1 }}
-    >
-      {children}
-    </Typography>
-  );
-}
-
-function SoftCard({ children }: { children: React.ReactNode }) {
-  return (
-    <Card
-      sx={{
-        borderRadius: 3,
-        boxShadow: "none",
-        border: "1px solid rgba(15, 23, 42, 0.08)",
-        overflow: "hidden",
-      }}
-    >
-      {children}
-    </Card>
-  );
-}
 
 export default function AddTournamentPage() {
   const navigate = useNavigate();
   const { id } = useParams();
   const isEditMode = Boolean(id);
+  // Core form state for the 3-step flow.
   const [form, setForm] = React.useState<TournamentForm>(initialForm);
   const [step, setStep] = React.useState<1 | 2 | 3>(1);
 
+  // Category builder state (add/edit/list categories).
   const [savedCategories, setSavedCategories] = React.useState<
     TournamentCategoryForm[]
   >([]);
@@ -252,7 +55,7 @@ export default function AddTournamentPage() {
     React.useState<TournamentCategoryForm>(newCategory());
   const [draftFormats, setDraftFormats] = React.useState<
     TournamentCategoryForm["format"][]
-  >(["DOUBLES"]);
+  >([]);
   const [draftGenders, setDraftGenders] = React.useState<
     TournamentCategoryForm["gender"][]
   >(["Men"]);
@@ -276,7 +79,9 @@ export default function AddTournamentPage() {
   const [inviteLink, setInviteLink] = React.useState("");
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  // Cache today's date once for validation and date input constraints.
   const todayIsoDate = React.useMemo(() => getTodayIsoDate(), []);
+  // Lightweight validation for step 1 navigation and final submit.
   const basicsValidationError = React.useMemo(
     () => validateTournamentBasics(form),
     [form],
@@ -294,6 +99,7 @@ export default function AddTournamentPage() {
       }
 
       try {
+        // Load existing tournament + categories in parallel for edit mode.
         const [eventRes, categoriesRes] = await Promise.all([
           fetch(`${API_URL}/events`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -452,6 +258,7 @@ export default function AddTournamentPage() {
       setForm((prev) => ({ ...prev, [key]: checked as unknown }));
     };
 
+  // Step transition from Details -> Categories.
   const handleCancel = () => navigate(-1);
   const handleStepOneNext = () => {
     setStatusMessage(null);
@@ -464,6 +271,7 @@ export default function AddTournamentPage() {
     setStep(2);
   };
 
+  // Add or update a category draft into the saved list.
   const addCategory = () => {
     const cleanName = draftCategory.name.trim();
     setErrorMessage(null);
@@ -487,10 +295,10 @@ export default function AddTournamentPage() {
         setErrorMessage("Select at least one gender.");
         return;
       }
-      if (draftFormats.length === 0) {
-        setErrorMessage("Select at least one format.");
-        return;
-      }
+      // if (draftFormats.length === 0) {
+      //   setErrorMessage("Select at least one format.");
+      //   return;
+      // }
       const targetGenders = draftGenders;
       const targetFormats =
         draftFormats.length > 0 ? draftFormats : [normalizedDraft.format];
@@ -523,7 +331,7 @@ export default function AddTournamentPage() {
     }
 
     setDraftCategory(newCategory());
-    setDraftFormats(["DOUBLES"]);
+    setDraftFormats([]);
     setDraftGenders(["Men"]);
     setIsCategoryModalOpen(false);
     setEditingCategoryId(null);
@@ -582,6 +390,7 @@ export default function AddTournamentPage() {
     }
   };
 
+  // Begin editing an existing category.
   const editCategory = (id: string) => {
     const selected = savedCategories.find((c) => c.id === id);
     if (!selected) return;
@@ -593,14 +402,16 @@ export default function AddTournamentPage() {
     setStatusMessage("Editing category. Save to update.");
   };
 
+  // Close category editor and reset draft fields.
   const cancelEditCategory = () => {
     setEditingCategoryId(null);
     setDraftCategory(newCategory());
-    setDraftFormats(["DOUBLES"]);
+    setDraftFormats([]);
     setDraftGenders(["Men"]);
     setIsCategoryModalOpen(false);
   };
 
+  // Only keep categories with valid names for API submission + preview.
   const signupCategories = React.useMemo(
     () =>
       savedCategories
@@ -628,6 +439,7 @@ export default function AddTournamentPage() {
     return formatCategoryFormatLabel(first.format);
   }, [signupCategories]);
 
+  // Final save: create or update tournament, then sync categories.
   const handleSubmit = async () => {
     const token = getToken();
     setErrorMessage(null);
@@ -892,6 +704,7 @@ export default function AddTournamentPage() {
     }
   };
 
+  // Invite link helpers (preview step).
   const handleGenerateInviteLink = () => {
     if (!createdTournamentId) return;
     const link = `${window.location.origin}/signup?inviteTournamentId=${createdTournamentId}`;
@@ -973,7 +786,7 @@ export default function AddTournamentPage() {
           <CardContent sx={{ p: { xs: 3, sm: 4 }, pt: { xs: 4, sm: 5 } }}>
             <Stack spacing={4}>
               {/* Alerts */}
-              {errorMessage ? (
+              {!isCategoryModalOpen && errorMessage ? (
                 <Alert
                   severity="error"
                   sx={{
@@ -985,7 +798,7 @@ export default function AddTournamentPage() {
                   {errorMessage}
                 </Alert>
               ) : null}
-              {statusMessage ? (
+              {!isCategoryModalOpen && !errorMessage && statusMessage ? (
                 <Alert
                   severity="success"
                   sx={{
@@ -1320,1448 +1133,63 @@ export default function AddTournamentPage() {
           </CardContent>
         </Card>
 
+        {/* Step content is split into focused components to keep this page readable. */}
         {step === 1 ? (
-          <Stack
-            direction={{ xs: "column", lg: "row" }}
-            spacing={2}
-            alignItems="flex-start"
-          >
-            <Box sx={{ width: "100%", flex: 1 }}>
-              <SoftCard>
-                <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
-                  <SectionTitle>Basics</SectionTitle>
-                  <Divider sx={{ mb: 2 }} />
-
-                  <Stack spacing={2}>
-                    <TextField
-                      label="Tournament Name"
-                      value={form.name}
-                      onChange={setField("name")}
-                      fullWidth
-                    />
-
-                    <FormControl fullWidth>
-                      <InputLabel>Sport</InputLabel>
-                      <Select
-                        label="Sport"
-                        value={form.sport}
-                        onChange={setField("sport")}
-                      >
-                        <MenuItem value="">
-                          <em>Select sport</em>
-                        </MenuItem>
-                        <MenuItem value="Tennis">Tennis</MenuItem>
-                        <MenuItem value="Beach Tennis">Beach Tennis</MenuItem>
-                        <MenuItem value="Padel">Padel</MenuItem>
-                        <MenuItem value="Pickleball">Pickleball</MenuItem>
-                        <MenuItem value="Other">Other</MenuItem>
-                      </Select>
-                    </FormControl>
-
-                    <FormControl fullWidth>
-                      <InputLabel>Timezone</InputLabel>
-                      <Select
-                        label="Timezone"
-                        value={form.timezone}
-                        onChange={setField("timezone")}
-                      >
-                        <MenuItem value="">
-                          <em>Select timezone</em>
-                        </MenuItem>
-                        <MenuItem value="Australia/Sydney">
-                          Australia/Sydney
-                        </MenuItem>
-                        <MenuItem value="Australia/Melbourne">
-                          Australia/Melbourne
-                        </MenuItem>
-                        <MenuItem value="Australia/Brisbane">
-                          Australia/Brisbane
-                        </MenuItem>
-                        <MenuItem value="UTC">UTC</MenuItem>
-                      </Select>
-                    </FormControl>
-                  </Stack>
-
-                  <SectionTitle>Location</SectionTitle>
-                  <Divider sx={{ mb: 2 }} />
-
-                  <Stack spacing={2}>
-                    <TextField
-                      label="Venue / Club Name"
-                      value={form.locationName}
-                      onChange={setField("locationName")}
-                      fullWidth
-                    />
-                    <TextField
-                      label="Address"
-                      value={form.address}
-                      onChange={setField("address")}
-                      fullWidth
-                    />
-                  </Stack>
-
-                  <SectionTitle>Date & Time</SectionTitle>
-                  <Divider sx={{ mb: 2 }} />
-
-                  <Stack spacing={2}>
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                      <TextField
-                        label="Start Date"
-                        type="date"
-                        value={form.startDate}
-                        onChange={setField("startDate")}
-                        InputLabelProps={{ shrink: true }}
-                        inputProps={{ min: todayIsoDate }}
-                        error={
-                          Boolean(form.startDate) &&
-                          form.startDate < todayIsoDate
-                        }
-                        helperText={
-                          form.startDate && form.startDate < todayIsoDate
-                            ? "Start date cannot be before today."
-                            : " "
-                        }
-                        fullWidth
-                      />
-                      <TextField
-                        label="End Date"
-                        type="date"
-                        value={form.endDate}
-                        onChange={setField("endDate")}
-                        InputLabelProps={{ shrink: true }}
-                        inputProps={{ min: form.startDate || todayIsoDate }}
-                        error={
-                          Boolean(form.endDate) &&
-                          Boolean(form.startDate) &&
-                          form.endDate < form.startDate
-                        }
-                        helperText={
-                          form.endDate &&
-                          form.startDate &&
-                          form.endDate < form.startDate
-                            ? "End date must be on or after start date."
-                            : " "
-                        }
-                        fullWidth
-                      />
-                    </Stack>
-
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                      <TextField
-                        label="Start Time"
-                        type="time"
-                        value={form.startTime}
-                        onChange={setField("startTime")}
-                        InputLabelProps={{ shrink: true }}
-                        fullWidth
-                      />
-                      <TextField
-                        label="End Time"
-                        type="time"
-                        value={form.endTime}
-                        onChange={setField("endTime")}
-                        InputLabelProps={{ shrink: true }}
-                        fullWidth
-                      />
-                    </Stack>
-
-                    <TextField
-                      label="Registration Deadline"
-                      type="date"
-                      value={form.registrationDeadline}
-                      onChange={setField("registrationDeadline")}
-                      InputLabelProps={{ shrink: true }}
-                      inputProps={{
-                        min: todayIsoDate,
-                        max: form.startDate || undefined,
-                      }}
-                      fullWidth
-                    />
-                  </Stack>
-
-                  <SectionTitle>Capacity</SectionTitle>
-                  <Divider sx={{ mb: 2 }} />
-
-                  <TextField
-                    label="Capacity"
-                    type="number"
-                    value={form.capacity}
-                    onChange={(e) =>
-                      setForm((p) => ({
-                        ...p,
-                        capacity: Math.max(0, Number(e.target.value || 0)),
-                      }))
-                    }
-                    fullWidth
-                  />
-
-                  <SectionTitle>Description</SectionTitle>
-                  <Divider sx={{ mb: 2 }} />
-                  <TextField
-                    label="Details"
-                    value={form.description}
-                    onChange={setField("description")}
-                    multiline
-                    minRows={4}
-                    fullWidth
-                  />
-                </CardContent>
-              </SoftCard>
-            </Box>
-
-            <Stack
-              spacing={2}
-              sx={{ width: "100%", maxWidth: 360, flexShrink: 0 }}
-            >
-              <SoftCard>
-                <CardContent sx={{ p: { xs: 2.5, sm: 3 } }}>
-                  <SectionTitle>Settings</SectionTitle>
-                  <Divider sx={{ mb: 2 }} />
-
-                  <Stack spacing={1}>
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={form.isPublic}
-                          onChange={setSwitch("isPublic")}
-                        />
-                      }
-                      label="Public tournament (visible to everyone)"
-                    />
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={form.allowWaitlist}
-                          onChange={setSwitch("allowWaitlist")}
-                        />
-                      }
-                      label="Allow waitlist when full"
-                    />
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={form.requireApproval}
-                          onChange={setSwitch("requireApproval")}
-                        />
-                      }
-                      label="Require approval to join"
-                    />
-                  </Stack>
-                </CardContent>
-              </SoftCard>
-            </Stack>
-          </Stack>
+          <DetailsStep
+            form={form}
+            setField={setField}
+            setForm={setForm}
+            setSwitch={setSwitch}
+            todayIsoDate={todayIsoDate}
+          />
         ) : step === 2 ? (
-          <Card
-            sx={{
-              borderRadius: 3,
-              border: "1px solid #E5E7EB",
-              boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-            }}
-          >
-            <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
-              <Stack spacing={3}>
-                <Box>
-                  <Typography
-                    variant="h2"
-                    sx={{
-                      fontWeight: 700,
-                      fontSize: "1.5rem",
-                      color: "#111827",
-                      mb: 0.5,
-                    }}
-                  >
-                    Categories
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    sx={{ color: "#6B7280", fontSize: "0.9375rem" }}
-                  >
-                    Add categories and pricing for each one. You can create as
-                    many combinations as needed.
-                  </Typography>
-                </Box>
-
-                <Alert
-                  severity="info"
-                  sx={{
-                    borderRadius: 2,
-                    border: "1px solid #BFDBFE",
-                    bgcolor: "#EFF6FF",
-                  }}
-                >
-                  Category pricing rules are persisted. If enabled, special
-                  price is applied per category when a player subscribes to 2+
-                  categories.
-                </Alert>
-
-                <Card
-                  sx={{
-                    borderRadius: 2,
-                    border: "1px solid #E9D5FF",
-                    background:
-                      "linear-gradient(135deg, #FAF5FF 0%, #FDF2F8 100%)",
-                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-                  }}
-                >
-                  <CardContent sx={{ p: 2.5 }}>
-                    <Stack spacing={0.5}>
-                      <Typography
-                        sx={{
-                          fontWeight: 700,
-                          fontSize: "1rem",
-                          color: "#111827",
-                        }}
-                      >
-                        {form.name || "Untitled Tournament"}
-                      </Typography>
-                      <Typography
-                        variant="body2"
-                        sx={{ color: "#6B7280", fontSize: "0.875rem" }}
-                      >
-                        {form.sport} • {form.startDate || "TBD"}
-                      </Typography>
-                    </Stack>
-                  </CardContent>
-                </Card>
-
-                <Card
-                  sx={{
-                    borderRadius: 3,
-                    border: "1px solid #E5E7EB",
-                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-                  }}
-                >
-                  <CardContent sx={{ p: 3 }}>
-                    <Stack spacing={3}>
-                      <Stack
-                        direction={{ xs: "column", sm: "row" }}
-                        spacing={2}
-                        alignItems={{ xs: "flex-start", sm: "center" }}
-                        justifyContent="space-between"
-                      >
-                        <Typography
-                          variant="h2"
-                          sx={{
-                            fontWeight: 700,
-                            fontSize: "1.5rem",
-                            color: "#111827",
-                          }}
-                        >
-                          Categories List
-                        </Typography>
-                        <Stack direction="row" spacing={1.5} useFlexGap>
-                          <Chip
-                            size="small"
-                            label={`${savedCategories.length} categor${savedCategories.length === 1 ? "y" : "ies"}`}
-                            sx={{
-                              bgcolor: "#F9FAFB",
-                              color: "#6B7280",
-                              fontWeight: 600,
-                              fontSize: "0.8125rem",
-                              border: "1px solid #E5E7EB",
-                            }}
-                          />
-                          <Button
-                            variant="outlined"
-                            onClick={() => {
-                              setDraftCategory(newCategory());
-                              setDraftFormats(["DOUBLES"]);
-                              setDraftGenders(["Men"]);
-                              setEditingCategoryId(null);
-                              setIsCategoryModalOpen(true);
-                            }}
-                            sx={{
-                              borderRadius: 2,
-                              borderColor: "#8B5CF6",
-                              color: "#8B5CF6",
-                              fontWeight: 600,
-                              textTransform: "none",
-                              "&:hover": { borderColor: "#7C3AED", bgcolor: "#FAF5FF" },
-                            }}
-                          >
-                            Add Category
-                          </Button>
-                        </Stack>
-                      </Stack>
-
-                      <TableContainer
-                        sx={{
-                          border: "1px solid #E5E7EB",
-                          borderRadius: 2,
-                          backgroundColor: "#FFFFFF",
-                        }}
-                      >
-                        <Table size="small">
-                          <TableHead>
-                            <TableRow sx={{ bgcolor: "#F9FAFB" }}>
-                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
-                                Category
-                              </TableCell>
-                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
-                                Gender
-                              </TableCell>
-                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
-                                Level
-                              </TableCell>
-                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
-                                Format
-                              </TableCell>
-                              <TableCell sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
-                                Price
-                              </TableCell>
-                              <TableCell align="right" sx={{ fontWeight: 700, color: "#374151", fontSize: "0.875rem" }}>
-                                Actions
-                              </TableCell>
-                            </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {savedCategories.length > 0 ? (
-                              savedCategories.map((category) => (
-                                <TableRow key={category.id} hover sx={{ "&:hover": { bgcolor: "#F9FAFB" } }}>
-                                  <TableCell sx={{ fontWeight: 600, color: "#111827" }}>
-                                    {category.name.trim()}
-                                  </TableCell>
-                                  <TableCell sx={{ color: "#6B7280" }}>{category.gender}</TableCell>
-                                  <TableCell sx={{ color: "#6B7280" }}>
-                                    {formatCategoryLevelLabel(category.level)}
-                                  </TableCell>
-                                  <TableCell sx={{ color: "#6B7280" }}>
-                                    {formatCategoryFormatLabel(category.format)}
-                                  </TableCell>
-                                  <TableCell sx={{ color: "#6B7280" }}>
-                                    {categoryPricingRule.currency} {Number(category.price || 0)}
-                                  </TableCell>
-                                  <TableCell align="right">
-                                    <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                      <Button
-                                        size="small"
-                                        onClick={() => editCategory(category.id)}
-                                        sx={{
-                                          borderRadius: 1.5,
-                                          color: "#8B5CF6",
-                                          fontWeight: 600,
-                                          textTransform: "none",
-                                          px: 2,
-                                          "&:hover": { bgcolor: "#F3E8FF" },
-                                        }}
-                                      >
-                                        Edit
-                                      </Button>
-                                      <Button
-                                        size="small"
-                                        onClick={() => void removeCategory(category.id)}
-                                        disabled={deletingCategoryIds.includes(category.id)}
-                                        sx={{
-                                          borderRadius: 1.5,
-                                          color: "#DC2626",
-                                          fontWeight: 600,
-                                          textTransform: "none",
-                                          px: 2,
-                                          "&:hover": { bgcolor: "#FEF2F2" },
-                                          "&:disabled": { color: "#9CA3AF" },
-                                        }}
-                                      >
-                                        {deletingCategoryIds.includes(category.id) ? "Deleting..." : "Remove"}
-                                      </Button>
-                                    </Stack>
-                                  </TableCell>
-                                </TableRow>
-                              ))
-                            ) : (
-                              <TableRow>
-                                <TableCell colSpan={6} sx={{ textAlign: "center", py: 4 }}>
-                                  <Stack spacing={1.5} alignItems="center">
-                                    <Typography variant="body2" sx={{ color: "#6B7280", fontSize: "0.9375rem" }}>
-                                      You currently don&apos;t have any category.
-                                    </Typography>
-                                    <Button
-                                      variant="contained"
-                                      onClick={() => {
-                                        setDraftCategory(newCategory());
-                                        setDraftFormats(["DOUBLES"]);
-                                        setDraftGenders(["Men"]);
-                                        setEditingCategoryId(null);
-                                        setIsCategoryModalOpen(true);
-                                      }}
-                                      sx={{
-                                        borderRadius: 2,
-                                        background:
-                                          "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
-                                        fontWeight: 600,
-                                        textTransform: "none",
-                                      }}
-                                    >
-                                      Add Category
-                                    </Button>
-                                  </Stack>
-                                </TableCell>
-                              </TableRow>
-                            )}
-                          </TableBody>
-                        </Table>
-                      </TableContainer>
-                    </Stack>
-                  </CardContent>
-                </Card>
-
-                <Card
-                  sx={{
-                    borderRadius: 3,
-                    border: "1px solid #E5E7EB",
-                    boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-                  }}
-                >
-                  <CardContent sx={{ p: 3 }}>
-                    <Stack spacing={2}>
-                      <Typography sx={{ fontWeight: 700, fontSize: "1.125rem", color: "#111827" }}>
-                        Category Pricing Rules
-                      </Typography>
-
-                      <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                        <FormControl fullWidth>
-                          <InputLabel>Currency</InputLabel>
-                          <Select
-                            label="Currency"
-                            value={categoryPricingRule.currency}
-                            onChange={(e) =>
-                              setCategoryPricingRule((prev) => ({
-                                ...prev,
-                                currency: e.target.value as CategoryPricingRule["currency"],
-                              }))
-                            }
-                          >
-                            <MenuItem value="AUD">AUD</MenuItem>
-                            <MenuItem value="USD">USD</MenuItem>
-                            <MenuItem value="EUR">EUR</MenuItem>
-                            <MenuItem value="BRL">BRL</MenuItem>
-                          </Select>
-                        </FormControl>
-                        <FormControlLabel
-                          sx={{ m: 0, px: 1 }}
-                          control={
-                            <Switch
-                              checked={categoryPricingRule.enabled}
-                              onChange={(_, checked) =>
-                                setCategoryPricingRule((prev) => ({
-                                  ...prev,
-                                  enabled: checked,
-                                }))
-                              }
-                            />
-                          }
-                          label="Special price for 2+ categories"
-                        />
-                      </Stack>
-
-                      {categoryPricingRule.enabled ? (
-                        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                          <TextField
-                            label="Applies when player registers at least"
-                            value="2 categories"
-                            InputProps={{ readOnly: true }}
-                            fullWidth
-                          />
-                          <TextField
-                            label="Price per category"
-                            type="number"
-                            value={categoryPricingRule.specialPricePerCategory}
-                            onChange={(e) =>
-                              setCategoryPricingRule((prev) => ({
-                                ...prev,
-                                specialPricePerCategory: Math.max(
-                                  0,
-                                  Number(e.target.value || 0),
-                                ),
-                              }))
-                            }
-                            fullWidth
-                          />
-                        </Stack>
-                      ) : null}
-                    </Stack>
-                  </CardContent>
-                </Card>
-
-              </Stack>
-            </CardContent>
-          </Card>
+          <CategoriesStep
+            form={form}
+            savedCategories={savedCategories}
+            categoryPricingRule={categoryPricingRule}
+            setCategoryPricingRule={setCategoryPricingRule}
+            setDraftCategory={setDraftCategory}
+            setDraftFormats={setDraftFormats}
+            setDraftGenders={setDraftGenders}
+            setEditingCategoryId={setEditingCategoryId}
+            setIsCategoryModalOpen={setIsCategoryModalOpen}
+            editCategory={editCategory}
+            removeCategory={removeCategory}
+            deletingCategoryIds={deletingCategoryIds}
+          />
         ) : (
-          <Card
-            sx={{
-              borderRadius: 3,
-              border: "1px solid #E5E7EB",
-              boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-            }}
-          >
-            <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
-              <Stack spacing={4}>
-                {/* Header */}
-                <Box>
-                  <Typography
-                    sx={{
-                      fontWeight: 600,
-                      fontSize: "0.875rem",
-                      color: "#6A7282",
-                      mb: 2,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.2px",
-                    }}
-                  >
-                    Tournament Preview
-                  </Typography>
-
-                  {/* Tournament Name */}
-                  <Typography
-                    variant="h3"
-                    sx={{
-                      fontWeight: 700,
-                      fontSize: "2.25rem",
-                      color: "#0A0A0A",
-                      mb: 2,
-                    }}
-                  >
-                    {form.name || "Untitled Tournament"}
-                  </Typography>
-
-                  {/* Chips Row */}
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    <Chip
-                      size="small"
-                      label={form.sport}
-                      sx={{
-                        bgcolor: "#F3E8FF",
-                        color: "#8200DB",
-                        fontWeight: 500,
-                        fontSize: "0.875rem",
-                        border: "none",
-                        height: 32,
-                        borderRadius: "999px",
-                        px: 0.5,
-                      }}
-                    />
-                    <Chip
-                      size="small"
-                      label={formatTournamentLevelLabel(form.level)}
-                      sx={{
-                        bgcolor: "#F3F4F6",
-                        color: "#364153",
-                        fontWeight: 500,
-                        fontSize: "0.875rem",
-                        border: "none",
-                        height: 32,
-                        borderRadius: "999px",
-                        px: 0.5,
-                      }}
-                    />
-                    <Chip
-                      size="small"
-                      label={form.tournamentStage}
-                      sx={{
-                        bgcolor: "#DCFCE7",
-                        color: "#008236",
-                        fontWeight: 500,
-                        fontSize: "0.875rem",
-                        border: "none",
-                        height: 32,
-                        borderRadius: "999px",
-                        px: 0.5,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.2px",
-                      }}
-                    />
-                    <Chip
-                      size="small"
-                      label={form.isPublic ? "Public" : "Private"}
-                      sx={{
-                        bgcolor: form.isPublic ? "#DBEAFE" : "#FEF2F2",
-                        color: form.isPublic ? "#1447E6" : "#DC2626",
-                        fontWeight: 500,
-                        fontSize: "0.875rem",
-                        border: "none",
-                        height: 32,
-                        borderRadius: "999px",
-                        px: 0.5,
-                      }}
-                    />
-                  </Stack>
-                </Box>
-
-                {/* Location */}
-                <Stack
-                  direction="row"
-                  spacing={2}
-                  sx={{
-                    pb: 2,
-                    borderBottom: "1px solid #E5E7EB",
-                  }}
-                >
-                  <Box
-                    sx={{
-                      width: 20,
-                      height: 20,
-                      color: "#9810FA",
-                      mt: 0.25,
-                    }}
-                  >
-                    📍
-                  </Box>
-                  <Box>
-                    <Typography
-                      sx={{
-                        fontWeight: 500,
-                        fontSize: "1rem",
-                        color: "#364153",
-                        mb: 0.25,
-                      }}
-                    >
-                      {form.locationName || "Venue not set"}
-                    </Typography>
-                    <Typography sx={{ fontSize: "0.875rem", color: "#6A7282" }}>
-                      {form.address || "Address not set"}
-                    </Typography>
-                  </Box>
-                </Stack>
-
-                {/* Tournament Details Grid */}
-                <Box
-                  sx={{
-                    display: "grid",
-                    gridTemplateColumns: {
-                      xs: "1fr",
-                      sm: "repeat(2, 1fr)",
-                    },
-                    gap: 3,
-                  }}
-                >
-                  {/* When */}
-                  <Stack direction="row" spacing={1.5}>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "10px",
-                        bgcolor: "#F3E8FF",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Box sx={{ fontSize: "1.25rem" }}>🗓️</Box>
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography
-                        sx={{
-                          fontWeight: 600,
-                          fontSize: "1.125rem",
-                          color: "#101828",
-                          mb: 0.5,
-                        }}
-                      >
-                        When
-                      </Typography>
-                      <Typography
-                        sx={{
-                          fontSize: "0.875rem",
-                          color: "#364153",
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        {whenText}
-                      </Typography>
-                    </Box>
-                  </Stack>
-
-                  {/* Registration */}
-                  <Stack direction="row" spacing={1.5}>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "10px",
-                        bgcolor: "#F3E8FF",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Box sx={{ fontSize: "1.25rem" }}>⏰</Box>
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography
-                        sx={{
-                          fontWeight: 600,
-                          fontSize: "1.125rem",
-                          color: "#101828",
-                          mb: 0.5,
-                        }}
-                      >
-                        Registration
-                      </Typography>
-                      <Typography
-                        sx={{ fontSize: "0.875rem", color: "#6A7282" }}
-                      >
-                        Deadline: {form.registrationDeadline || "—"}
-                      </Typography>
-                    </Box>
-                  </Stack>
-
-                  {/* Capacity */}
-                  <Stack direction="row" spacing={1.5}>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "10px",
-                        bgcolor: "#F3E8FF",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Box sx={{ fontSize: "1.25rem" }}>👥</Box>
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography
-                        sx={{
-                          fontWeight: 600,
-                          fontSize: "1.125rem",
-                          color: "#101828",
-                          mb: 0.5,
-                        }}
-                      >
-                        Capacity
-                      </Typography>
-                      <Typography
-                        sx={{
-                          fontSize: "0.875rem",
-                          color: "#364153",
-                          mb: 0.25,
-                        }}
-                      >
-                        {form.capacity} players
-                      </Typography>
-                      <Typography
-                        sx={{ fontSize: "0.875rem", color: "#6A7282" }}
-                      >
-                        Waitlist {form.allowWaitlist ? "enabled" : "disabled"}
-                      </Typography>
-                    </Box>
-                  </Stack>
-
-                  {/* Category Total */}
-                  <Stack direction="row" spacing={1.5}>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "10px",
-                        bgcolor: "#F3E8FF",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Box sx={{ fontSize: "1.25rem" }}>💰</Box>
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography
-                        sx={{
-                          fontWeight: 600,
-                          fontSize: "1.125rem",
-                          color: "#101828",
-                          mb: 0.5,
-                        }}
-                      >
-                        Category Base Total
-                      </Typography>
-                      <Typography
-                        sx={{ fontSize: "0.875rem", color: "#364153" }}
-                      >
-                        {feeText}
-                      </Typography>
-                      {categoryPricingRule.enabled ? (
-                        <Typography
-                          sx={{ fontSize: "0.8125rem", color: "#6A7282", mt: 0.25 }}
-                        >
-                          Special price per category (2+ categories):{" "}
-                          {categoryPricingRule.currency}{" "}
-                          {categoryPricingRule.specialPricePerCategory}
-                        </Typography>
-                      ) : null}
-                    </Box>
-                  </Stack>
-                </Box>
-
-                {/* Categories Section */}
-                <Box>
-                  <Stack direction="row" spacing={1.5} sx={{ mb: 2 }}>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "10px",
-                        bgcolor: "#F3E8FF",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Box sx={{ fontSize: "1.25rem" }}>🏆</Box>
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography
-                        sx={{
-                          fontWeight: 600,
-                          fontSize: "1.125rem",
-                          color: "#101828",
-                          mb: 0.5,
-                        }}
-                      >
-                        Categories
-                      </Typography>
-                      <Typography
-                        sx={{ fontSize: "0.875rem", color: "#364153" }}
-                      >
-                        {signupCategories.length} signup option
-                        {signupCategories.length === 1 ? "" : "s"}
-                      </Typography>
-                    </Box>
-                  </Stack>
-
-                  {/* Category Cards Grid */}
-                  {signupCategories.length > 0 && (
-                    <Box
-                      sx={{
-                        display: "grid",
-                        gridTemplateColumns: {
-                          xs: "1fr",
-                          sm: "repeat(2, 1fr)",
-                        },
-                        gap: 2,
-                      }}
-                    >
-                      {signupCategories.map((category, index) => {
-                        const getGenderColor = (gender: string) => {
-                          if (gender === "Men") {
-                            return {
-                              bg: "linear-gradient(169.355deg, #FAF5FF 0%, #F3E8FF 100%)",
-                              border: "#E9D4FF",
-                              textColor: "#59168B",
-                              badgeBg: "#9810FA",
-                              metaColor: "#8200DB",
-                            };
-                          } else if (gender === "Women") {
-                            return {
-                              bg: "linear-gradient(169.355deg, #FDF2F8 0%, #FCE7F3 100%)",
-                              border: "#FCCEE8",
-                              textColor: "#861043",
-                              badgeBg: "#E60076",
-                              metaColor: "#C6005C",
-                            };
-                          } else {
-                            return {
-                              bg: "linear-gradient(169.355deg, #EFF6FF 0%, #DBEAFE 100%)",
-                              border: "#BEDBFF",
-                              textColor: "#1C398E",
-                              badgeBg: "#155DFC",
-                              metaColor: "#1447E6",
-                            };
-                          }
-                        };
-
-                        const colors = getGenderColor(category.gender);
-
-                        return (
-                          <Box
-                            key={index}
-                            sx={{
-                              p: 2,
-                              borderRadius: "10px",
-                              background: colors.bg,
-                              border: `1px solid ${colors.border}`,
-                            }}
-                          >
-                            <Stack spacing={1}>
-                              <Stack
-                                direction="row"
-                                justifyContent="space-between"
-                                alignItems="center"
-                              >
-                                <Typography
-                                  sx={{
-                                    fontWeight: 600,
-                                    fontSize: "0.875rem",
-                                    color: colors.textColor,
-                                  }}
-                                >
-                                  {category.name}
-                                </Typography>
-                                <Chip
-                                  size="small"
-                                  label={category.gender}
-                                  sx={{
-                                    bgcolor: colors.badgeBg,
-                                    color: "#FFFFFF",
-                                    fontWeight: 400,
-                                    fontSize: "0.75rem",
-                                    height: 20,
-                                    borderRadius: "999px",
-                                    "& .MuiChip-label": {
-                                      px: 1,
-                                      py: 0.25,
-                                    },
-                                  }}
-                                />
-                              </Stack>
-                              <Typography
-                                sx={{
-                                  fontSize: "0.75rem",
-                                  color: colors.metaColor,
-                                }}
-                              >
-                                {formatCategoryLevelLabel(category.level)} •{" "}
-                                {formatCategoryFormatLabel(category.format)} •{" "}
-                                {categoryPricingRule.currency}{" "}
-                                {Number(category.price || 0)}
-                              </Typography>
-                            </Stack>
-                          </Box>
-                        );
-                      })}
-                    </Box>
-                  )}
-                </Box>
-
-                {/* Description */}
-                {form.description && (
-                  <Box
-                    sx={{
-                      pt: 3,
-                      borderTop: "1px solid #E5E7EB",
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        fontWeight: 600,
-                        fontSize: "1.125rem",
-                        color: "#101828",
-                        mb: 1,
-                      }}
-                    >
-                      Description
-                    </Typography>
-                    <Typography
-                      sx={{
-                        fontSize: "0.875rem",
-                        color: "#6A7282",
-                        fontStyle: form.description ? "normal" : "italic",
-                      }}
-                    >
-                      {form.description ||
-                        "Add a short description for players…"}
-                    </Typography>
-                  </Box>
-                )}
-
-                {/* Invite Link Section */}
-                <Box
-                  sx={{
-                    pt: 3,
-                    borderTop: "1px solid #E5E7EB",
-                  }}
-                >
-                  <Stack direction="row" spacing={1.5} sx={{ mb: 2.5 }}>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: "10px",
-                        bgcolor: "#F3E8FF",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Box sx={{ fontSize: "1.25rem" }}>🔗</Box>
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography
-                        sx={{
-                          fontWeight: 600,
-                          fontSize: "1.125rem",
-                          color: "#101828",
-                          mb: 0.5,
-                        }}
-                      >
-                        Invite Link
-                      </Typography>
-                      <Typography
-                        sx={{ fontSize: "0.875rem", color: "#6A7282" }}
-                      >
-                        {createdTournamentId
-                          ? "Create the tournament first, then generate a shareable invite link."
-                          : "Create the tournament first, then generate a shareable invite link."}
-                      </Typography>
-                    </Box>
-                  </Stack>
-
-                  <Button
-                    variant="outlined"
-                    onClick={handleGenerateInviteLink}
-                    disabled={!createdTournamentId}
-                    sx={{
-                      borderRadius: "10px",
-                      border: "1px solid #9810FA",
-                      color: "#9810FA",
-                      fontWeight: 500,
-                      px: 3,
-                      py: 1.25,
-                      textTransform: "none",
-                      mb: 2,
-                      "&:hover": {
-                        border: "1px solid #8200DB",
-                        bgcolor: "#FAF5FF",
-                      },
-                      "&:disabled": {
-                        border: "1px solid #D1D5DC",
-                        color: "#9CA3AF",
-                      },
-                    }}
-                  >
-                    Generate Invite Link
-                  </Button>
-
-                  {inviteLink && (
-                    <Stack spacing={2}>
-                      <TextField
-                        value={inviteLink}
-                        size="small"
-                        fullWidth
-                        InputProps={{
-                          readOnly: true,
-                          sx: {
-                            borderRadius: "10px",
-                            bgcolor: "#F9FAFB",
-                            fontFamily: "monospace",
-                            fontSize: "0.875rem",
-                          },
-                        }}
-                      />
-                      <Stack
-                        direction={{ xs: "column", sm: "row" }}
-                        spacing={2}
-                      >
-                        <Button
-                          variant="contained"
-                          onClick={handleCopyInviteLink}
-                          sx={{
-                            borderRadius: "10px",
-                            background: "#9810FA",
-                            fontWeight: 500,
-                            px: 3,
-                            py: 1.25,
-                            textTransform: "none",
-                            flex: 1,
-                            "&:hover": {
-                              background: "#8200DB",
-                            },
-                          }}
-                        >
-                          Copy Link
-                        </Button>
-                        {canUseNativeShare && (
-                          <Button
-                            variant="outlined"
-                            onClick={handleShareInviteLink}
-                            sx={{
-                              borderRadius: "10px",
-                              border: "1px solid #D1D5DC",
-                              color: "#364153",
-                              fontWeight: 500,
-                              px: 3,
-                              py: 1.25,
-                              textTransform: "none",
-                              flex: 1,
-                              "&:hover": {
-                                border: "1px solid #D1D5DC",
-                                bgcolor: "#F9FAFB",
-                              },
-                            }}
-                          >
-                            Share
-                          </Button>
-                        )}
-                      </Stack>
-                    </Stack>
-                  )}
-                </Box>
-              </Stack>
-            </CardContent>
-          </Card>
+          <PreviewStep
+            form={form}
+            signupCategories={signupCategories}
+            categoryPricingRule={categoryPricingRule}
+            whenText={whenText}
+            feeText={feeText}
+            createdTournamentId={createdTournamentId}
+            inviteLink={inviteLink}
+            canUseNativeShare={canUseNativeShare}
+            handleGenerateInviteLink={handleGenerateInviteLink}
+            handleCopyInviteLink={handleCopyInviteLink}
+            handleShareInviteLink={handleShareInviteLink}
+          />
         )}
 
-        <Dialog
+        {/* Category modal lives here so it can access the page-level draft state. */}
+        <CategoryModal
           open={isCategoryModalOpen}
           onClose={cancelEditCategory}
-          fullWidth
-          maxWidth="md"
-        >
-          <DialogTitle sx={{ fontWeight: 700 }}>
-            {editingCategoryId ? "Edit Category" : "New Category"}
-          </DialogTitle>
-          <DialogContent dividers>
-            <Stack spacing={3} sx={{ pt: 1 }}>
-              <TextField
-                label="Category Name (optional)"
-                value={draftCategory.name}
-                onChange={(e) =>
-                  setDraftCategory((prev) => ({
-                    ...prev,
-                    name: e.target.value,
-                  }))
-                }
-                placeholder="Auto-generated if left empty"
-                fullWidth
-              />
-
-              {editingCategoryId ? (
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                  <TextField
-                    select
-                    label="Level"
-                    value={draftCategory.level}
-                    onChange={(e) =>
-                      setDraftCategory((prev) => ({
-                        ...prev,
-                        level: e.target
-                          .value as TournamentCategoryForm["level"],
-                      }))
-                    }
-                    fullWidth
-                  >
-                    <MenuItem value="BEGINNER">Beginner</MenuItem>
-                    <MenuItem value="INTERMEDIATE">Intermediate</MenuItem>
-                    <MenuItem value="ADVANCED">Advanced</MenuItem>
-                    <MenuItem value="ALL_LEVELS">Open</MenuItem>
-                  </TextField>
-                  <TextField
-                    select
-                    label="Gender"
-                    value={draftCategory.gender}
-                    onChange={(e) =>
-                      setDraftCategory((prev) => ({
-                        ...prev,
-                        gender: e.target
-                          .value as TournamentCategoryForm["gender"],
-                      }))
-                    }
-                    fullWidth
-                  >
-                    <MenuItem value="Men">Men</MenuItem>
-                    <MenuItem value="Women">Women</MenuItem>
-                  </TextField>
-                </Stack>
-              ) : (
-                <TextField
-                  select
-                  label="Level"
-                  value={draftCategory.level}
-                  onChange={(e) =>
-                    setDraftCategory((prev) => ({
-                      ...prev,
-                      level: e.target.value as TournamentCategoryForm["level"],
-                    }))
-                  }
-                  fullWidth
-                >
-                  <MenuItem value="BEGINNER">Beginner</MenuItem>
-                  <MenuItem value="INTERMEDIATE">Intermediate</MenuItem>
-                  <MenuItem value="ADVANCED">Advanced</MenuItem>
-                  <MenuItem value="ALL_LEVELS">Open</MenuItem>
-                </TextField>
-              )}
-
-              {!editingCategoryId ? (
-                <Box
-                  sx={{
-                    p: 2,
-                    borderRadius: 2,
-                    bgcolor: "#F9FAFB",
-                    border: "1px solid #E5E7EB",
-                  }}
-                >
-                  <Typography
-                    sx={{
-                      fontSize: "0.875rem",
-                      fontWeight: 600,
-                      color: "#374151",
-                      mb: 1,
-                    }}
-                  >
-                    Genders
-                  </Typography>
-                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
-                    {(["Men", "Women"] as const).map((gender) => (
-                      <FormControlLabel
-                        key={gender}
-                        sx={{ m: 0 }}
-                        control={
-                          <Checkbox
-                            checked={draftGenders.includes(gender)}
-                            onChange={(_, checked) => {
-                              setDraftGenders((prev) => {
-                                if (checked) {
-                                  return prev.includes(gender)
-                                    ? prev
-                                    : [...prev, gender];
-                                }
-                                return prev.filter((item) => item !== gender);
-                              });
-                            }}
-                          />
-                        }
-                        label={gender}
-                      />
-                    ))}
-                  </Stack>
-                  <Typography sx={{ mt: 1, fontSize: "0.75rem", color: "#6B7280" }}>
-                    Choose one or more genders to create all combinations in one
-                    go.
-                  </Typography>
-                </Box>
-              ) : null}
-
-              {editingCategoryId ? (
-                <TextField
-                  select
-                  label="Format"
-                  value={draftCategory.format}
-                  onChange={(e) =>
-                    setDraftCategory((prev) => ({
-                      ...prev,
-                      format: e.target.value as TournamentCategoryForm["format"],
-                    }))
-                  }
-                  fullWidth
-                >
-                  <MenuItem value="SINGLES">Singles</MenuItem>
-                  <MenuItem value="DOUBLES">Doubles</MenuItem>
-                  <MenuItem value="MIXED">Mixed</MenuItem>
-                </TextField>
-              ) : (
-                <Box
-                  sx={{
-                    p: 2,
-                    borderRadius: 2,
-                    bgcolor: "#F9FAFB",
-                    border: "1px solid #E5E7EB",
-                  }}
-                >
-                  <Typography
-                    sx={{
-                      fontSize: "0.875rem",
-                      fontWeight: 600,
-                      color: "#374151",
-                      mb: 1,
-                    }}
-                  >
-                    Formats
-                  </Typography>
-                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
-                    {(["SINGLES", "DOUBLES", "MIXED"] as const).map((format) => (
-                      <FormControlLabel
-                        key={format}
-                        sx={{ m: 0 }}
-                        control={
-                          <Checkbox
-                            checked={draftFormats.includes(format)}
-                            onChange={(_, checked) => {
-                              setDraftFormats((prev) => {
-                                if (checked) {
-                                  return prev.includes(format)
-                                    ? prev
-                                    : [...prev, format];
-                                }
-                                return prev.filter((item) => item !== format);
-                              });
-                            }}
-                          />
-                        }
-                        label={formatCategoryFormatLabel(format)}
-                      />
-                    ))}
-                  </Stack>
-                  <Typography sx={{ mt: 1, fontSize: "0.75rem", color: "#6B7280" }}>
-                    Choose one or more formats to create multiple categories at
-                    once.
-                  </Typography>
-                </Box>
-              )}
-
-              <TextField
-                label={`Category Price (${categoryPricingRule.currency || "AUD"})`}
-                type="number"
-                value={draftCategory.price}
-                onChange={(e) =>
-                  setDraftCategory((prev) => ({
-                    ...prev,
-                    price: Math.max(0, Number(e.target.value || 0)),
-                  }))
-                }
-                fullWidth
-              />
-            </Stack>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, py: 2 }}>
-            <Button
-              variant="outlined"
-              onClick={cancelEditCategory}
-              sx={{
-                borderRadius: 2,
-                borderWidth: "1.5px",
-                borderColor: "#E5E7EB",
-                color: "#374151",
-                fontWeight: 600,
-                textTransform: "none",
-                "&:hover": {
-                  borderWidth: "1.5px",
-                  borderColor: "#D1D5DB",
-                  bgcolor: "#F9FAFB",
-                },
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="contained"
-              onClick={addCategory}
-              sx={{
-                borderRadius: 2,
-                background: "linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)",
-                fontWeight: 600,
-                textTransform: "none",
-              }}
-            >
-              {editingCategoryId
-                ? "Save Category"
-                : `Add ${
-                    draftFormats.length * draftGenders.length > 1
-                      ? `${
-                          draftFormats.length *
-                          draftGenders.length
-                        } Categories`
-                      : "Category"
-                  }`}
-            </Button>
-          </DialogActions>
-        </Dialog>
+          editingCategoryId={editingCategoryId}
+          draftCategory={draftCategory}
+          setDraftCategory={setDraftCategory}
+          draftGenders={draftGenders}
+          setDraftGenders={setDraftGenders}
+          draftFormats={draftFormats}
+          setDraftFormats={setDraftFormats}
+          categoryPricingRule={categoryPricingRule}
+          errorMessage={errorMessage}
+          statusMessage={statusMessage}
+          onCancel={cancelEditCategory}
+          onSave={addCategory}
+        />
       </Box>
     </Box>
   );

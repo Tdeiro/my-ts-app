@@ -18,7 +18,7 @@ import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import LockIcon from "@mui/icons-material/Lock";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { api } from "../shared/api/client";
 
 const UPCOMING_SUBSCRIBED_EVENTS_KEY = "upcoming.subscribedEventIds";
 

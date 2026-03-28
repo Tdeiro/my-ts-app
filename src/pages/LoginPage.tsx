@@ -1,18 +1,10 @@
 import * as React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  Container,
-  Divider,
-  TextField,
-  Typography,
-} from "@mui/material";
-import Logo from "../assets/onora.png";
-import { setToken } from "../auth/tokens";
+import { Box, Button, Divider, TextField } from "@mui/material";
+import { setToken } from "../features/auth/services/tokens";
+import AuthPage from "../features/auth/components/AuthPage";
+import AuthFooterLink from "../features/auth/components/AuthFooterLink";
+import AuthAlertStack from "../features/auth/components/AuthAlertStack";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 
@@ -77,106 +69,67 @@ export default function LoginPage() {
   };
 
   return (
-    <Box
-      sx={{
-        minHeight: "100vh",
-        backgroundColor: "background.default",
-        display: "flex",
-        alignItems: "center",
-      }}
+    <AuthPage
+      subtitle="Sign in with Onora"
+      footer={
+        <AuthFooterLink
+          prompt="Don’t have an account?"
+          actionLabel="Sign up"
+          onAction={() =>
+            navigate(
+              inviteTournamentId
+                ? `/signup?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
+                : "/signup"
+            )
+          }
+        />
+      }
     >
-      <Container maxWidth="sm">
-        <Card>
-          <CardContent sx={{ p: 4 }}>
-            {/* Logo / App name */}
-            <Box sx={{ textAlign: "center", mb: 3 }}>
-              <Box
-                component="img"
-                src={Logo}
-                alt="Onora logo"
-                sx={{
-                  height: 60,
-                  display: "block",
-                  mx: "auto",
-                  mb: 1,
-                }}
-              />
-              <Typography color="text.secondary">Sign in with Onora</Typography>
-            </Box>
+      <AuthAlertStack error={error} />
 
-            {/* Form */}
-            {error ? (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {error}
-              </Alert>
-            ) : null}
+      <Box
+        component="form"
+        noValidate
+        onSubmit={handleSubmit}
+        sx={{ display: "flex", flexDirection: "column", gap: 2 }}
+      >
+        <TextField
+          label="Email address"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          fullWidth
+          autoComplete="email"
+        />
 
-            <Box
-              component="form"
-              noValidate
-              onSubmit={handleSubmit}
-              sx={{ display: "flex", flexDirection: "column", gap: 2 }}
-            >
-              <TextField
-                label="Email address"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                fullWidth
-                autoComplete="email"
-              />
+        <TextField
+          label="Password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          fullWidth
+          autoComplete="current-password"
+        />
 
-              <TextField
-                label="Password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                fullWidth
-                autoComplete="current-password"
-              />
+        <Box sx={{ textAlign: "right" }}>
+          <Button variant="text" size="small">
+            Forgot password?
+          </Button>
+        </Box>
 
-              <Box sx={{ textAlign: "right" }}>
-                <Button variant="text" size="small">
-                  Forgot password?
-                </Button>
-              </Box>
+        <Button
+          variant="contained"
+          color="primary"
+          size="large"
+          fullWidth
+          type="submit"
+          disabled={loading || !email.trim() || !password}
+        >
+          {loading ? "Signing in..." : "Sign In"}
+        </Button>
 
-              <Button
-                variant="contained"
-                color="primary"
-                size="large"
-                fullWidth
-                type="submit"
-                disabled={loading || !email.trim() || !password}
-              >
-                {loading ? "Signing in..." : "Sign In"}
-              </Button>
-
-              <Divider sx={{ my: 2 }}></Divider>
-            </Box>
-
-            {/* Footer */}
-            <Box sx={{ mt: 3, textAlign: "center" }}>
-              <Typography variant="body2" color="text.secondary">
-                Don’t have an account?{" "}
-                <Button
-                  variant="text"
-                  size="small"
-                  onClick={() =>
-                    navigate(
-                      inviteTournamentId
-                        ? `/signup?inviteTournamentId=${encodeURIComponent(inviteTournamentId)}`
-                        : "/signup"
-                    )
-                  }
-                >
-                  Sign up
-                </Button>
-              </Typography>
-            </Box>
-          </CardContent>
-        </Card>
-      </Container>
-    </Box>
+        <Divider sx={{ my: 2 }}></Divider>
+      </Box>
+    </AuthPage>
   );
 }
