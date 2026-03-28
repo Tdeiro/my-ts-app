@@ -361,9 +361,11 @@ export function StructureTab({
         ) : null}
 
         {hasInsufficientCapacity ? (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            Total capacity is too small for the number of teams in this category. Increase groups or teams per group before continuing.
-          </Alert>
+          // Temporarily disabled: capacity warning validation UI.
+          // <Alert severity="warning" sx={{ mb: 2 }}>
+          //   Total capacity is too small for the number of teams in this category. Increase groups or teams per group before continuing.
+          // </Alert>
+          null
         ) : null}
 
         <Typography variant="body1" sx={{ fontWeight: 900, mb: 1 }}>
@@ -467,16 +469,17 @@ export function StructureTab({
               sx={{
                 mt: 1,
                 display: "block",
-                color: hasInsufficientCapacity ? "#B42318" : "#475467",
-                fontWeight: hasInsufficientCapacity ? 700 : 500,
+                color: "#475467",
+                fontWeight: 500,
               }}
             >
-              Capacity: {selectedTargetTeamsForStructure} team slots for {selectedCategoryTeamsCount} registered teams.
+              {/* Capacity validation message temporarily disabled. */}
+              {/* Capacity: {selectedTargetTeamsForStructure} team slots for {selectedCategoryTeamsCount} registered teams.
               {hasInsufficientCapacity
                 ? ` Add ${Math.abs(remainingCapacity)} more slot${Math.abs(remainingCapacity) === 1 ? "" : "s"} to continue.`
                 : remainingCapacity > 0
                   ? ` ${remainingCapacity} slot${remainingCapacity === 1 ? "" : "s"} remaining.`
-                  : " Capacity is exactly full."}
+                  : " Capacity is exactly full."} */}
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
               Groups and bracket will be prepared in the Groups & Brackets tab.
@@ -503,8 +506,7 @@ export function StructureTab({
             disabled={
               submitting ||
               !canSaveSelectedCategorySetup ||
-              (config.structureMode === "groups_knockout" &&
-                (!hasGroupStructureConfig || hasInsufficientCapacity))
+              (config.structureMode === "groups_knockout" && !hasGroupStructureConfig)
             }
             sx={{ borderRadius: 999 }}
           >

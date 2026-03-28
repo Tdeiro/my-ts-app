@@ -100,6 +100,7 @@ export function GroupsTab({
   const autoBootstrapKeyRef = React.useRef<string | null>(null);
   const latestBracketMatchesRef = React.useRef(bracketMatches);
   const latestGroupCountRef = React.useRef(groupCount);
+  const onGroupsSavedRef = React.useRef(onGroupsSaved);
 
   React.useEffect(() => {
     latestBracketMatchesRef.current = bracketMatches;
@@ -108,6 +109,10 @@ export function GroupsTab({
   React.useEffect(() => {
     latestGroupCountRef.current = groupCount;
   }, [groupCount]);
+
+  React.useEffect(() => {
+    onGroupsSavedRef.current = onGroupsSaved;
+  }, [onGroupsSaved]);
 
   React.useEffect(() => {
     setGroups(initialGroups);
@@ -171,7 +176,7 @@ export function GroupsTab({
           setGroupCount(serverGroups.length);
         }
         setError(null);
-        onGroupsSaved({
+        onGroupsSavedRef.current({
           groups: serverGroups,
           bracketMatches: latestBracketMatchesRef.current,
           groupCount: serverGroups.length > 0 ? serverGroups.length : latestGroupCountRef.current,
@@ -191,7 +196,7 @@ export function GroupsTab({
     return () => {
       cancelled = true;
     };
-  }, [onGroupsSaved, selectedCategoryId]);
+  }, [selectedCategoryId]);
 
   const availableEntries = React.useMemo<EntryOption[]>(
     () =>
@@ -574,7 +579,31 @@ export function GroupsTab({
               ...group,
               name: group.name || `Group ${index + 1}`,
             }));
+            const isOnlyEmptySlotExpansion = normalizedGroups.every((nextGroup) => {
+              const prevGroup = groups.find((g) => g.id === nextGroup.id);
+              if (!prevGroup) return false;
+              if (nextGroup.participants.length < prevGroup.participants.length) return false;
+              for (let i = 0; i < prevGroup.participants.length; i += 1) {
+                const prevValue = String(prevGroup.participants[i] ?? "").trim();
+                const nextValue = String(nextGroup.participants[i] ?? "").trim();
+                if (prevValue !== nextValue) return false;
+              }
+              return nextGroup.participants
+                .slice(prevGroup.participants.length)
+                .every((value) => !String(value ?? "").trim());
+            });
+
             setGroups(normalizedGroups);
+
+            if (isOnlyEmptySlotExpansion) {
+              onGroupsSaved({
+                groups: normalizedGroups,
+                bracketMatches: latestBracketMatchesRef.current,
+                groupCount: latestGroupCountRef.current,
+              });
+              return;
+            }
+
             void syncTournamentGroups(normalizedGroups).then((savedGroups) => {
               setGroups(savedGroups);
               onGroupsSaved({

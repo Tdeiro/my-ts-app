@@ -315,11 +315,17 @@ export default function TournamentPhaseBuilder({
   };
 
   const addTeamToGroup = (groupId: string) => {
+    const targetGroup = groups.find((g) => g.id === groupId);
+    const nextIndex = targetGroup ? targetGroup.participants.length : 0;
     onGroupsChange(
       groups.map((g) =>
         g.id === groupId ? { ...g, participants: [...g.participants, ""] } : g,
       ),
     );
+    // Open the slot picker immediately for the newly added slot.
+    if (targetGroup) {
+      openSlotEditor({ kind: "group", id: groupId, index: nextIndex }, "");
+    }
   };
 
   const clearGroupSlot = (groupId: string, slotIndex: number) => {
