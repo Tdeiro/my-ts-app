@@ -1,0 +1,24 @@
+export type EventDto = {
+  id?: number;
+  userId?: number;
+  name: string;
+  eventType: string;
+  sport?: string;
+  format?: string;
+  level?: string;
+  timezone: string;
+  locationName?: string;
+  address?: string;
+  startDate: string;
+  endDate?: string;
+  startTime?: string;
+  endTime?: string;
+  registrationDeadline?: string;
+  capacity?: number;
+  entryFee?: number;
+  currency?: string;
+  description?: string;
+  isPublic?: boolean;
+  allowWaitlist?: boolean;
+  requireApproval?: boolean;
+};
