@@ -1,0 +1,173 @@
+.cardContent {
+  padding: 24px !important;
+}
+
+.categoryMeta {
+  margin-bottom: 20px;
+}
+
+.categoryLevel {
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  color: #6A7282 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  margin-bottom: 8px;
+}
+
+.categoryHeader {
+  padding: 12px !important;
+  border-radius: 14px;
+  border: 1.5px solid #8B5CF6 !important;
+  background: #FFFFFF !important;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.categoryIconBox {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background: #FFEDD4 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.categoryIcon {
+  font-size: 24px !important;
+  color: #F54900 !important;
+}
+
+.categoryTitle {
+  font-size: 1.6rem !important;
+  font-weight: 700 !important;
+  color: #101828 !important;
+  line-height: 1.2 !important;
+}
+
+.cardSection {
+  margin-bottom: 16px;
+  padding: 12px !important;
+  border-radius: 10px;
+  background: #F9FAFB !important;
+  border: 1px solid #E5E7EB !important;
+}
+
+.sectionHeading {
+  font-weight: 700 !important;
+  color: #101828 !important;
+  font-size: 0.95rem !important;
+  margin-bottom: 4px;
+}
+
+.sectionText {
+  color: #4A5565 !important;
+  font-size: 0.85rem !important;
+}
+
+.teamsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.teamsCountChip {
+  font-weight: 700 !important;
+}
+
+.capacityNote {
+  color: #4A5565 !important;
+  font-size: 0.8125rem !important;
+  margin-top: 6px;
+}
+
+.errorAlert {
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  font-weight: 900 !important;
+  margin-bottom: 8px;
+}
+
+.sectionSubtitle {
+  margin-bottom: 16px;
+}
+
+.subsectionTitle {
+  font-weight: 800 !important;
+  margin-bottom: 8px;
+}
+
+.optionsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.optionCard {
+  cursor: pointer;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.10) !important;
+  background: #FFFFFF !important;
+}
+
+.optionCardSelected {
+  border-color: rgba(139, 92, 246, 0.45) !important;
+  background: rgba(139, 92, 246, 0.08) !important;
+}
+
+.optionContent {
+  padding: 12px;
+}
+
+.groupInputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.caption {
+  margin-top: 8px;
+  display: block;
+  color: #475467 !important;
+  font-weight: 500 !important;
+}
+
+.secondaryCaption {
+  margin-top: 8px;
+  display: block;
+}
+
+.divider {
+  margin-bottom: 16px;
+}
+
+.dividerSpaced {
+  margin: 16px 0;
+}
+
+.actions {
+  margin-top: 16px;
+}
+
+.backButton,
+.nextButton {
+  border-radius: 999px !important;
+}
+
+@media (min-width: 900px) {
+  .optionCard {
+    width: calc(50% - 5px);
+  }
+
+  .groupInputs > * {
+    flex: 1 1 0;
+  }
+}
